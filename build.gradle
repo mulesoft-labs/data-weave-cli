@@ -1,0 +1,143 @@
+buildscript {
+    repositories{
+        mavenLocal()
+    }
+    dependencies {
+        classpath "com.palantir.graal:gradle-graal:0.2.0-31-ga2506ad"
+        classpath group: 'commons-io', name: 'commons-io', version: '2.5'
+    }
+}
+
+repositories{
+    mavenLocal()
+}
+
+apply plugin: 'com.palantir.graal'
+apply plugin: "java"
+apply plugin: "scala"
+
+
+graal {
+    outputName 'libDw'
+    graalVersion '1.0.0-rc11'
+    option "-H:Kind=SHARED_LIBRARY"
+}
+
+configurations {
+    resourceDeps
+}
+
+sourceSets {
+    main {
+        scala {
+            srcDirs = ['src/main/scala', 'build/genSources']
+        }
+    }
+}
+
+dependencies {
+    compile group: 'org.mule.weave', name: 'runtime', version: weaveVersion
+    compile group: 'org.graalvm.sdk', name: 'graal-sdk', version: '1.0.0-rc12'
+    compile group: 'org.mule.weave', name: 'core-modules', version: weaveVersion
+    resourceDeps(group: 'org.mule.weave', name: 'wlang', version: weaveVersion){
+        transitive = false
+    }
+}
+
+
+
+task downloadWlang(type: Copy) {
+    from zipTree(configurations.resourceDeps.singleFile)
+    into "$buildDir/wlang"
+}
+
+
+task genWlangSource {
+    def wlangResources = new File("$buildDir/wlang")
+    def genDirectory = new File("$project.buildDir/genSources")
+    def outputFile = new File(genDirectory, "org/mule/weave/v2/resources/JSResourceLoader.scala")
+    new ResourceBuilder().run(outputFile, wlangResources);
+}
+
+genWlangSource.dependsOn(downloadWlang)
+
+
+import org.apache.commons.io.FilenameUtils
+import org.apache.commons.io.IOUtils
+
+public class ResourceBuilder {
+
+    public void run(File outputScalaFile, File... resourceDir ) throws Exception {
+        def parentFile = outputScalaFile.getParentFile()
+        if (!parentFile.exists()) {
+            parentFile.mkdirs()
+        }
+        final PrintWriter outputPrinter = new PrintWriter(new FileWriter(outputScalaFile));
+        try {
+            outputPrinter.println("package org.mule.weave.v2.resources\n" +
+                    "\n" +
+                    "object " + FilenameUtils.getBaseName(outputScalaFile.getName()) + " {");
+
+            final HashMap<String, String> resourcesMap = new HashMap<>();
+            for (File resource : resourceDir) {
+                generate("", resource, outputPrinter, resourcesMap);
+            }
+            outputPrinter.print("\n\tval _resources = Map(");
+            boolean first = true;
+            for (Map.Entry<String, String> resourcesEntry : resourcesMap.entrySet()) {
+                if (!first) {
+                    outputPrinter.print(",\n \t\t")
+                }
+                outputPrinter.print("(\"" + resourcesEntry.getKey() + "\", " + resourcesEntry.getValue() + ")");
+                first = false;
+            }
+            outputPrinter.println(")");
+            outputPrinter.println("  def getResource(name: String): String = {\n" +
+                    "    _resources.get(name).orNull\n" +
+                    "  }\n" +
+                    "}");
+        }
+        finally {
+            outputPrinter.close();
+        }
+
+    }
+
+    private void generate(String basePath, File resourceDir, PrintWriter outputPrinter, HashMap<String, String> resources) throws IOException {
+        final File[] files = resourceDir.listFiles(new FileFilter() {
+            @Override
+            boolean accept(File pathname) {
+                return pathname.isDirectory() || pathname.getName().endsWith(".dwl")
+            }
+        } );
+        for (File file : files) {
+            final String resourcePath = basePath.isEmpty() ? file.getName().replace("/", "::") : basePath + "::" + file.getName().replace(".dwl", "");
+            if (file.isDirectory()) {
+                generate(resourcePath, file, outputPrinter, resources);
+            } else {
+                final String variableName = FilenameUtils.getBaseName(file.getName());
+                resources.put(resourcePath, variableName);
+                final List<String> lines = IOUtils.readLines(new FileInputStream(file), "UTF-8");
+                outputPrinter.println("  def " + variableName + " =");
+                outputPrinter.println("    Array(");
+                for (String line : lines) {
+                    outputPrinter.println("\"\"\"" + line + "\"\"\", ");
+                }
+                outputPrinter.println("\"\").mkString(\"\\n\").stripMargin");
+            }
+        }
+    }
+}
+
+group 'org.mule.weave'
+version '1.0-SNAPSHOT'
+
+//sourceCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testCompile group: 'junit', name: 'junit', version: '4.12'
+}
