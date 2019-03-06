@@ -1,0 +1,10 @@
+
+graal {
+    outputName 'libDw'
+    graalVersion '1.0.0-rc12'
+    option "-H:-UseServiceLoaderFeature"
+}
+
+dependencies{
+    compile project(':native-common')
+}

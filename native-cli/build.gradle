@@ -1,0 +1,63 @@
+buildscript {
+    repositories {
+        maven {
+            url "https://plugins.gradle.org/m2/"
+        }
+    }
+    dependencies {
+        classpath "com.monochromeroad.gradle-plugins:gradle-aws-s3-sync:0.10"
+    }
+}
+
+dependencies{
+    compile project(':native-common')
+}
+
+
+ext {
+    aws = [accessKey: System.getenv("AWS_ACCESS_KEY_ID"), secretKey: System.getenv("AWS_SECRET_KEY")]
+}
+
+import org.apache.tools.ant.taskdefs.condition.Os
+
+task distro(dependsOn: nativeImage, type: Zip) {
+    classifier = "native-distro-" + getOsName()
+    into("sdk") {
+        from { configurations.runtime.filter {it.getName().contains("wlang") || it.getName().contains("ndjson-module")} }
+    }
+    into("bin") {
+        from 'build/graal/dw'
+    }
+}
+
+private static String getOsName() {
+    String prefix = ""
+    if (Os.isFamily(Os.FAMILY_MAC))
+        prefix = "osx"
+    else if (Os.isFamily(Os.FAMILY_UNIX))
+        prefix = "linux"
+    else
+        prefix = "windows"
+    prefix
+}
+
+graal {
+    mainClass 'org.mule.weave.dwnative.cli.DataWeaveCli'
+    outputName 'dw'
+    graalVersion '1.0.0-rc12'
+    option "-H:-UseServiceLoaderFeature"
+}
+
+import com.monochromeroad.gradle.plugin.aws.s3.S3Sync
+
+task uploadDistro(type: S3Sync) {
+    description = "Deploy native-distro-" + getOsName()
+    accessKey aws.accessKey
+    secretKey aws.secretKey
+    noDelete true
+    acl com.monochromeroad.gradle.plugin.aws.s3.ACL.PublicRead
+    from "build/distributions/"
+    into "weave-cli"
+}
+
+

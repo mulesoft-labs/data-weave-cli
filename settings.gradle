@@ -1,2 +1,4 @@
-rootProject.name = 'weave-native-library'
+include 'native-common'
+include 'native-lib'
+include 'native-cli'
 

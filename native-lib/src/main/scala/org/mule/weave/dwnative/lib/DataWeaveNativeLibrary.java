@@ -1,24 +1,27 @@
-package org.mule.weave;
+package org.mule.weave.dwnative.lib;
 
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
+import org.mule.weave.dwnative.DataWeaveUtils;
+import org.mule.weave.dwnative.NativeRuntime;
+import org.mule.weave.dwnative.WeaveExecutionResult;
+import org.mule.weave.dwnative.WeaveInput;
+import org.mule.weave.v2.module.reader.SourceProvider$;
 
-public class DataWeaveNative {
+import java.io.File;
 
-    private static NativeRuntime runtime = new NativeRuntime();
+
+public class DataWeaveNativeLibrary {
+
+    private static NativeRuntime runtime = new NativeRuntime(DataWeaveUtils.getLibPathHome(), new File[0]);
 
     @CEntryPoint(name = "runDW")
     public static CCharPointer runDW(IsolateThread thread, CCharPointer transform) {
         final String script = CTypeConversion.toJavaString(transform);
-        try {
-            final WeaveResult run = runtime.run(script, new WeaveInput[0]);
-            return CTypeConversion.toCString(run.result()).get();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        return CTypeConversion.toCString("No").get();
+        final WeaveExecutionResult run = runtime.run(script, new WeaveInput[0]);
+        return CTypeConversion.toCString(run.result()).get();
     }
 
     @CEntryPoint(name = "runDW1")
@@ -26,7 +29,7 @@ public class DataWeaveNative {
         final String script = CTypeConversion.toJavaString(transform);
         final String inputNameStr = CTypeConversion.toJavaString(inputName);
         final String inputContentStr = CTypeConversion.toJavaString(input);
-        final WeaveResult run = runtime.run(script, new WeaveInput[]{new WeaveInput(inputNameStr, inputContentStr)});
+        final WeaveExecutionResult run = runtime.run(script, new WeaveInput[]{new WeaveInput(inputNameStr, SourceProvider$.MODULE$.apply(inputContentStr))});
         return CTypeConversion.toCString(run.result()).get();
     }
 
@@ -40,9 +43,9 @@ public class DataWeaveNative {
         final String inputContentStr2 = CTypeConversion.toJavaString(input2);
 
 
-        final WeaveResult run = runtime.run(script, new WeaveInput[]{
-                new WeaveInput(inputNameStr, inputContentStr),
-                new WeaveInput(inputNameStr2, inputContentStr2)
+        final WeaveExecutionResult run = runtime.run(script, new WeaveInput[]{
+                new WeaveInput(inputNameStr, SourceProvider$.MODULE$.apply(inputContentStr)),
+                new WeaveInput(inputNameStr2, SourceProvider$.MODULE$.apply(inputContentStr))
         });
 
         return CTypeConversion.toCString(run.result()).get();

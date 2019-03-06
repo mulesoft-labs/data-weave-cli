@@ -1,0 +1,52 @@
+# we test at Ubuntu Trusty (Ubuntu 14.04 LTS)
+# see https://docs.travis-ci.com/user/trusty-ci-environment/
+dist: trusty
+language: java
+services:
+  - docker
+
+before_cache:
+  - rm -f  $HOME/.gradle/caches/modules-2/modules-2.lock
+  - rm -fr $HOME/.gradle/caches/*/plugin-resolution/
+
+cache:
+  directories:
+    - $HOME/.gradle/caches/
+    - $HOME/.gradle/wrapper/
+    - $HOME/parser-js/build-assets/node_modules
+
+jobs:
+  include:
+    - stage: deploy-native
+      os: osx
+      osx_image: xcode9.3
+      before_install:
+        - "git clone -b travis `git config --get remote.origin.url` build/travis"
+        - mkdir -p ~/.m2/ && cp build/travis/settings.xml ~/.m2/settings.xml
+      script:
+      - ./gradlew native-cli:distro
+      deploy:
+        - provider: script
+          skip_cleanup: true
+          script: ./gradlew native-cli:uploadDistro
+          on:
+            branch: master #publish
+
+    - stage: deploy-native
+      os: linux
+      before_install:
+        - "git clone -b travis `git config --get remote.origin.url` build/travis"
+        - cp build/travis/settings.xml ~/.m2/settings.xml
+      jdk: oraclejdk8
+      script:
+        - ./gradlew native-cli:distro
+      deploy:
+        - provider: script
+          skip_cleanup: true
+          script: ./gradlew native-cli:uploadDistro
+          on:
+            branch: master #publish
+
+
+notifications:
+  slack: mulesoft:IqbP7oSC8usH82K9o2p5TOjT
