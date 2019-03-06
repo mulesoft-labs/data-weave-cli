@@ -33,9 +33,6 @@ dependencies {
     resourceDeps(group: 'org.mule.weave', name: 'wlang', version: weaveVersion){
         transitive = false
     }
-    resourceDeps(group: 'org.mule.weave', name: 'dependecy-manager', version: weaveVersion){
-        transitive = false
-    }
 }
 
 
