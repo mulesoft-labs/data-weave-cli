@@ -20,7 +20,7 @@
 ## How to install it 
 
 
-1. Download the zip [Mac](http://weave-cli.s3.amazonaws.com/weave-native-2.2.0-SNAPSHOT-native-distro-osx.zip) | [Linux](http://weave-cli.s3.amazonaws.com/weave-native-2.2.0-SNAPSHOT-native-distro-linux.zip)
+1. Download the zip [Mac](http://weave-cli.s3.amazonaws.com/native-cli-1.0.0-SNAPSHOT-native-distro-osx.zip) | [Linux](http://weave-cli.s3.amazonaws.com/native-cli-1.0.0-SNAPSHOT-native-distro-linux.zip)
 2. Unzip the file on your `<home_directory>/.dw`
 3. Add `<home_directory>/.dw/bin` to your PATH
 
