@@ -20,9 +20,6 @@ jobs:
     - stage: deploy-native
       os: osx
       osx_image: xcode9.3
-      before_install:
-        - "git clone -b travis `git config --get remote.origin.url` build/travis"
-        - mkdir -p ~/.m2/ && cp build/travis/settings.xml ~/.m2/settings.xml
       script:
       - ./gradlew native-cli:distro
       deploy:
