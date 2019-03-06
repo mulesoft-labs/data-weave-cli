@@ -22,8 +22,8 @@ import org.apache.tools.ant.taskdefs.condition.Os
 
 task distro(dependsOn: nativeImage, type: Zip) {
     classifier = "native-distro-" + getOsName()
-    into("sdk") {
-        from { configurations.runtime.filter {it.getName().contains("wlang") || it.getName().contains("ndjson-module")} }
+    into("libs") {
+        from { configurations.runtime.filter {it.getName().contains("ndjson-module")} }
     }
     into("bin") {
         from 'build/graal/dw'

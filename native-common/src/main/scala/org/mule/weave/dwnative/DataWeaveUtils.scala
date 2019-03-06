@@ -45,7 +45,7 @@ object DataWeaveUtils {
   }
 
   def getLibPathHome(): File = {
-    new File(getDWHome(), "path")
+    new File(getDWHome(), "libs")
   }
 
   def setupServices(moduleLoaderManager: ModuleLoaderManager): Unit = {
