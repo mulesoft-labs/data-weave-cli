@@ -31,9 +31,6 @@ jobs:
 
     - stage: deploy-native
       os: linux
-      before_install:
-        - "git clone -b travis `git config --get remote.origin.url` build/travis"
-        - cp build/travis/settings.xml ~/.m2/settings.xml
       jdk: oraclejdk8
       script:
         - ./gradlew native-cli:distro
