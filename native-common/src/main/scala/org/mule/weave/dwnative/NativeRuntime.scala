@@ -66,7 +66,7 @@ class NativeRuntime(libDir: File, path: Array[File]) {
         parsingContext.addImplicitInput(input.name, None)
       })
 
-      //      parsingContext.registerParsingPhaseAnnotationProcessor(DependencyAnnotationProcessor.ANNOTATION_NAME, new DependencyAnnotationProcessor(weavePath))
+//      parsingContext.registerParsingPhaseAnnotationProcessor(DependencyAnnotationProcessor.ANNOTATION_NAME, new DependencyAnnotationProcessor(DataWeaveUtils.getLibPathHome()))
 
       val typeCheckResult = MappingParser.parse(MappingParser.typeCheckPhase(), WeaveResource("", script), parsingContext)
 
@@ -139,7 +139,7 @@ case class WeaveSuccessResult(outputStream: OutputStream, charset: String) exten
   override def result(): String = {
     outputStream match {
       case ap: AutoPersistedOutputStream => {
-        new String(BinaryValue.getBytesFromSeekableStream(ap.getInputStream, true), charset)
+        new String(BinaryValue.getBytesFromSeekableStream(ap.toInputStream, true), charset)
       }
     }
   }

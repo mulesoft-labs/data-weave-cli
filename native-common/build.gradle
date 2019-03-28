@@ -26,6 +26,7 @@ sourceSets {
 }
 
 dependencies {
+    compile project(":dependency-manager")
     compile group: 'org.mule.weave', name: 'runtime', version: weaveVersion
     compile group: 'org.graalvm.sdk', name: 'graal-sdk', version: '1.0.0-rc12'
     compile group: 'org.mule.weave', name: 'core-modules', version: weaveVersion
