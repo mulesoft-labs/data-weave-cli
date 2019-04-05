@@ -44,18 +44,22 @@ task downloadWlang(type: Copy) {
         from zipTree(it)
         into "$buildDir/wlang"
     })
-
 }
 
 
 task genWlangSource {
-    def wlangResources = new File("$buildDir/wlang")
-    def genDirectory = new File("$project.buildDir/genSources")
-    def outputFile = new File(genDirectory, "org/mule/weave/v2/resources/JSResourceLoader.scala")
-    new ResourceBuilder().run(outputFile, wlangResources);
+    doLast {
+        def wlangResources = new File("$buildDir/wlang")
+        def genDirectory = new File("$project.buildDir/genSources")
+        def outputFile = new File(genDirectory, "org/mule/weave/v2/resources/NativeResourceLoader.scala")
+        new ResourceBuilder().run(outputFile, wlangResources);
+    }
 }
 
+genWlangSource.mustRunAfter(downloadWlang)
+
 genWlangSource.dependsOn(downloadWlang)
+compileScala.dependsOn(genWlangSource)
 compileJava.dependsOn(genWlangSource)
 
 

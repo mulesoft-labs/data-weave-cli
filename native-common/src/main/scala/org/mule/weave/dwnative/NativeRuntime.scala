@@ -34,7 +34,7 @@ import org.mule.weave.v2.parser.phase.ModuleParserManager
 import org.mule.weave.v2.parser.phase.ParsingContext
 import org.mule.weave.v2.parser.phase.PhaseResult
 import org.mule.weave.v2.parser.phase.TypeCheckingResult
-import org.mule.weave.v2.resources.JSResourceLoader
+import org.mule.weave.v2.resources.NativeResourceLoader
 import org.mule.weave.v2.sdk.WeaveResource
 import org.mule.weave.v2.sdk.WeaveResourceResolver
 
@@ -159,7 +159,7 @@ object NativeResourceProvider extends WeaveResourceResolver {
 
   def resolve(name: NameIdentifier): Option[WeaveResource] = {
     val resourceName = name.name
-    Option(JSResourceLoader.getResource(resourceName)).map((resource) => WeaveResource(resourceName, resource))
+    Option(NativeResourceLoader.getResource(resourceName)).map((resource) => WeaveResource(resourceName, resource))
   }
 }
 

@@ -44,7 +44,7 @@ private static String getOsName() {
 graal {
     mainClass 'org.mule.weave.dwnative.cli.DataWeaveCli'
     outputName 'dw'
-    graalVersion '1.0.0-rc12'
+    graalVersion '1.0.0-rc14'
     option "-H:-UseServiceLoaderFeature"
 }
 
