@@ -10,8 +10,6 @@ import org.mule.weave.v2.interpreted.InterpreterMappingCompilerPhase
 import org.mule.weave.v2.interpreted.extension.ParsingContextCreator
 import org.mule.weave.v2.interpreted.extension.WeaveBasedDataFormatExtensionLoaderService
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
-import org.mule.weave.v2.interpreted.module.WeaveWriter
-import org.mule.weave.v2.interpreted.module.WeaveWriterSettings
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
 import org.mule.weave.v2.model.service.StdOutputLoggingService
@@ -48,7 +46,8 @@ class NativeRuntime(libDir: File, path: Array[File]) {
   private val pathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
   private val pathBasedParserManager = ModuleParserManager(ModuleLoaderManager(ModuleLoader(pathBasedResourceResolver)))
 
-  DataWeaveUtils.setupServices(ModuleLoaderManager(ModuleLoader(pathBasedResourceResolver)))
+  private val defaultModuleManager = ModuleLoaderManager(ModuleLoader(pathBasedResourceResolver))
+  DataWeaveUtils.setupServices(defaultModuleManager)
 
   def getResourceContent(ni: NameIdentifier): Option[String] = {
     pathBasedResourceResolver.resolve(ni).map(_.content())
@@ -66,7 +65,7 @@ class NativeRuntime(libDir: File, path: Array[File]) {
         parsingContext.addImplicitInput(input.name, None)
       })
 
-//      parsingContext.registerParsingPhaseAnnotationProcessor(DependencyAnnotationProcessor.ANNOTATION_NAME, new DependencyAnnotationProcessor(DataWeaveUtils.getLibPathHome()))
+      //      parsingContext.registerParsingPhaseAnnotationProcessor(DependencyAnnotationProcessor.ANNOTATION_NAME, new DependencyAnnotationProcessor(DataWeaveUtils.getLibPathHome()))
 
       val typeCheckResult = MappingParser.parse(MappingParser.typeCheckPhase(), WeaveResource("", script), parsingContext)
 
@@ -92,7 +91,8 @@ class NativeRuntime(libDir: File, path: Array[File]) {
         val executable = result.getResult().executable
 
         val readers: Map[String, Reader] = inputs.map((input) => {
-          executable.declaredInputs().get(input.name)
+          executable.declaredInputs()
+            .get(input.name)
             .map((declaredInput) => {
               (input.name, declaredInput.reader(input.content))
             }).getOrElse({
@@ -100,7 +100,10 @@ class NativeRuntime(libDir: File, path: Array[File]) {
             (input.name, DefaultJsonDataFormat.reader(SourceProvider(input.content)))
           })
         }).toMap
-        val writer = executable.declaredOutput().map(_.writer(Some(out))).getOrElse(WeaveWriter(out, new WeaveWriterSettings()))
+        val writer = executable
+          .declaredOutput()
+          .map(_.writer(Some(out)))
+          .getOrElse(new CustomWeaveDataFormat(defaultModuleManager).writer(Some(out)))
         val tuple = executable.write(writer, readers)
         contentResult = WeaveSuccessResult(out, tuple._2.name())
       }
