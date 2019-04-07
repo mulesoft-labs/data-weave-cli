@@ -11,6 +11,8 @@ buildscript {
 
 dependencies{
     compile project(':native-common')
+    
+    testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: '3.0.1'
 }
 
 
@@ -42,7 +44,7 @@ private static String getOsName() {
 }
 
 graal {
-    mainClass 'org.mule.weave.dwnative.cli.DataWeaveCli'
+    mainClass 'org.mule.weave.dwnative.cli.DataWeaveCLI'
     outputName 'dw'
     graalVersion '1.0.0-rc14'
     option "-H:-UseServiceLoaderFeature"

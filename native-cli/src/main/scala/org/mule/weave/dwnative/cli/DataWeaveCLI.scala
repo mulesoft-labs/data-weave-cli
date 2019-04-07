@@ -17,7 +17,29 @@ import org.mule.weave.v2.runtime.utils.AnsiColor.red
 
 import scala.collection.mutable
 
-object DataWeaveCli extends App {
+object DataWeaveCLI extends App {
+
+  {
+    val i = new DataWeaveCLIRunner().run(args)
+    System.exit(i)
+  }
+
+}
+
+class DataWeaveCLIRunner {
+  def run(args: Array[String]): Int = {
+    val scriptToRun = parse(args)
+    scriptToRun match {
+      case Right(message) => {
+        println(AnsiColor.red(message))
+        println(usages())
+        -1
+      }
+      case Left(config) => {
+        run(config)
+      }
+    }
+  }
 
   def parse(args: Array[String]): Either[WeaveRunnerConfig, String] = {
     var i = 0
@@ -124,20 +146,8 @@ object DataWeaveCli extends App {
     """.stripMargin
   }
 
-  {
-    val scriptToRun = parse(args)
-    scriptToRun match {
-      case Right(message) => {
-        println(AnsiColor.red(message))
-        println(usages())
-      }
-      case Left(config) => {
-        run(config)
-      }
-    }
-  }
 
-  def run(config: WeaveRunnerConfig): Unit = {
+  def run(config: WeaveRunnerConfig): Int = {
     val path = config.path.map(new File(_))
     val nativeRuntime = new NativeRuntime(DataWeaveUtils.getLibPathHome(), path)
     val script: String = if (config.main.isDefined) {
@@ -147,21 +157,24 @@ object DataWeaveCli extends App {
         maybeString.get
       } else {
         println(AnsiColor.red(s"[ERROR] Unable to resolve `${mainScriptName}` in the specified classpath."))
-        System.exit(-1) //ERROR
-        throw new RuntimeException("")
+        return -1; //ERROR
       }
     } else {
       config.scriptToRun.get
     }
 
     val out = if (config.outputPath.isDefined) new FileOutputStream(config.outputPath.get) else System.out
-    val result = nativeRuntime.run(script, config.inputs.map((input) => WeaveInput(input._1, input._2)).toArray, out)
+
+    val inputs = if (config.inputs.isEmpty) Array(WeaveInput("payload", SourceProvider(System.in))) else config.inputs.map((input) => WeaveInput(input._1, input._2)).toArray
+    val result = nativeRuntime.run(script, inputs, out)
     //load inputs from
     if (result.success()) {
-      System.exit(0)
+
+      return 0
+
     } else {
       println(AnsiColor.red(result.result()))
-      System.exit(-1) //ERROR
+      -1
     }
   }
 }
