@@ -41,12 +41,14 @@ import org.mule.weave.v2.sdk.WeaveResourceResolver
 class NativeRuntime(libDir: File, path: Array[File]) {
 
   private val systemParserManager = ModuleParserManager(ModuleLoaderManager(ModuleLoader(NativeResourceProvider)))
-  private val nodeLoader = new DefaultModuleNodeLoader
 
   private val pathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
   private val pathBasedParserManager = ModuleParserManager(ModuleLoaderManager(ModuleLoader(pathBasedResourceResolver)))
 
   private val defaultModuleManager = ModuleLoaderManager(ModuleLoader(pathBasedResourceResolver))
+
+  private val runtimeModuleLoader = new DefaultModuleNodeLoader
+
   DataWeaveUtils.setupServices(defaultModuleManager)
 
   def getResourceContent(ni: NameIdentifier): Option[String] = {
@@ -58,15 +60,14 @@ class NativeRuntime(libDir: File, path: Array[File]) {
   }
 
   def run(script: String, inputs: Array[WeaveInput], out: OutputStream): WeaveExecutionResult = {
+    val parserManager = new CompositeModuleParserManager(systemParserManager, pathBasedParserManager)
     var contentResult: WeaveExecutionResult = null
     try {
-      val parsingContext = new ParsingContext(NameIdentifier.ANONYMOUS_NAME, new MessageCollector(), new CompositeModuleParserManager(systemParserManager, pathBasedParserManager), errorTrace = 0, attachDocumentation = false)
+      val parsingContext = new ParsingContext(NameIdentifier.ANONYMOUS_NAME, new MessageCollector(), parserManager, errorTrace = 0, attachDocumentation = false)
       inputs.foreach((input) => {
         parsingContext.addImplicitInput(input.name, None)
       })
-
       //      parsingContext.registerParsingPhaseAnnotationProcessor(DependencyAnnotationProcessor.ANNOTATION_NAME, new DependencyAnnotationProcessor(DataWeaveUtils.getLibPathHome()))
-
       val typeCheckResult = MappingParser.parse(MappingParser.typeCheckPhase(), WeaveResource("", script), parsingContext)
 
       if (typeCheckResult.hasErrors()) {
@@ -76,7 +77,7 @@ class NativeRuntime(libDir: File, path: Array[File]) {
         }).mkString("\n")
         contentResult = WeaveFailureResult(errorMessage)
       } else {
-        val weaveBasedDataFormatManager = WeaveBasedDataFormatExtensionLoaderService(ParsingContextCreator(pathBasedParserManager), pathBasedResourceResolver, nodeLoader)
+        val weaveBasedDataFormatManager = WeaveBasedDataFormatExtensionLoaderService(ParsingContextCreator(parserManager), pathBasedResourceResolver, runtimeModuleLoader)
         val serviceManager = ServiceManager(
           StdOutputLoggingService,
           Map(
@@ -86,7 +87,7 @@ class NativeRuntime(libDir: File, path: Array[File]) {
         )
         implicit val ctx: EvaluationContext = EvaluationContext(serviceManager)
         val value = typeCheckResult.asInstanceOf[PhaseResult[TypeCheckingResult[DocumentNode]]].getResult()
-        val result = new InterpreterMappingCompilerPhase(nodeLoader).call(value, parsingContext)
+        val result = new InterpreterMappingCompilerPhase(runtimeModuleLoader).call(value, parsingContext)
 
         val executable = result.getResult().executable
 

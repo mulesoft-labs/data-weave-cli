@@ -12,8 +12,23 @@ import scala.io.Source
 class DataWeaveCLITest extends FreeSpec with Matchers {
 
 
-  "should work with simple script and not output" in {
+  "should work with output application/json" in {
     val out = System.out
+    try {
+      val stream = new ByteArrayOutputStream()
+      System.setOut(new PrintStream(stream, true))
+      new DataWeaveCLIRunner().run(Array("output application/json --- (1 to 3)[0]"))
+      val source = Source.fromBytes(stream.toByteArray, "UTF-8")
+      val result = source.mkString
+      result.trim shouldBe "1"
+    } finally {
+      System.setOut(out)
+      println("Finish OK 3")
+    }
+  }
+
+  "should work with simple script and not output" in {
+    val defaultOut = System.out
     try {
       val stream = new ByteArrayOutputStream()
       System.setOut(new PrintStream(stream, true))
@@ -22,11 +37,12 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
       val result = source.mkString
       result.trim shouldBe "1"
     } finally {
-      System.setOut(out)
-      println("Finish OK 1")
+      System.setOut(defaultOut)
     }
-
   }
+
+
+
 
   "should work ok when sending payload from stdin" in {
     val out = System.out
@@ -53,5 +69,7 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
       println("Finish OK 2")
     }
   }
+
+
 
 }
