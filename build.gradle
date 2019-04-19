@@ -5,7 +5,7 @@ subprojects {
     apply plugin: 'com.palantir.graal'
 
     group 'org.mule.weave.native'
-    version '1.0.0-SNAPSHOT'
+    version nativeVersion
     
 
     repositories {
