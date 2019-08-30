@@ -119,5 +119,5 @@ Or we can get the message by doing
 
 This example will create an really big csv and it will stream it to the http server on localhost.
 
-`> dw "output application/csv --- (1 to 10000000000000000000000) map (item) -> {name: 'User \${item}'}" | curl -X POST  -T "/dev/stdin" http://localhost:8081/`
+`> dw "output application/csv --- (1 to 10000000000000000000000) map (item) -> {name: 'User \$(item)'}" | curl -X POST  -T "/dev/stdin" http://localhost:8081/`
 
