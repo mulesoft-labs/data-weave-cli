@@ -20,31 +20,31 @@ jobs:
     deploy:
     - provider: script
       skip_cleanup: true
-      script: "travis_wait 30 ./gradlew native-cli:uploadDistro"
+      script: "travis_wait 40 ./gradlew native-cli:uploadDistro"
       on:
         branch: master
   - stage: deploy-native
     os: linux
     jdk: oraclejdk8
     script:
-    - "travis_wait 30 ./gradlew native-cli:distro"
+    - "./gradlew native-cli:distro"
     deploy:
     - provider: script
       skip_cleanup: true
-      script: "travis_wait 30 ./gradlew native-cli:uploadDistro"
+      script: "./gradlew native-cli:uploadDistro"
       on:
         branch: master
-  - stage: deploy-native
-    os: windows
-    jdk: oraclejdk8
-    script:
-      - "travis_wait 30 ./gradlew native-cli:distro"
-    deploy:
-      - provider: script
-        skip_cleanup: true
-        script: "travis_wait 30 ./gradlew native-cli:uploadDistro"
-        on:
-          branch: master
+#  - stage: deploy-native
+#    os: windows
+#    jdk: oraclejdk8
+#    script:
+#      - "travis_wait 30 ./gradlew native-cli:distro"
+#    deploy:
+#      - provider: script
+#        skip_cleanup: true
+#        script: "travis_wait 30 ./gradlew native-cli:uploadDistro"
+#        on:
+#          branch: master
 notifications:
   slack:
       secure: zS2O6GpJNiM8rcEcp/YapWDV8liRG3DLpVHvpH3gKD5y0wL7LnBQvQk3ychvShKFeNesXXt1PNwuw93sWGPc3IEvn3Y74qDELQR8nRq6SUjOE7TSTMBY6upkpoxjZHIMinllF77W3ob0OcBgmpxvFzIeu4aDd0xkgbmuHzAGM/m/+rVTthnVR9+bUmp/5dJFQbxyPq+7M+is+GY/3MKh0sw5ltBjnGuGO/MO4TNnlXoys+HqHwhXBO6B09N2+oK/vfpIPl2ShqDwTNlh20lbpxKarJhbn3YxlNuRgco4NVSNHkrYt+C4xlUSnvydw6tKiv9JRN0fRdJe7gkTTIEE6pT8zTLabYkU1cTMIJC3tnHtmmGYdtp3O0nEibFMQx53NH4lOrO1eYhawvAjxwZpC4asroaSRDg08j2lr2ApW1uebhUiKRLwy6TcXXwSSvIO0f2nZIX/KBV3uGvty1ccfohTxrrT9v5YLw7NvQ1dcZuL9jouQr8c69uWPjtYB37JG4A3sr9O5/uwXHJBBry5uQSxYdUbvoWtLP6sV5DGsKnXLAV73GOeMJIPhx4m1kcoCuOlw6hh42K+k9Ucft4x884wNvDgsTagdALXSQXIZnDSxc5AiEfCRVeDPlQ2KJcwTEu8UvpuOab5A0k03HVv/9lm324FOq42am90j6zVto0=
