@@ -45,15 +45,24 @@ In order to execute just go to the bin directory and execute the `dw` script
 
 Usage:
 
-dw [-path <weavePath>]? [-input <name> <path>]* [-verbose]? [-output <outputPath>]? [[-main <nameIdentifier>] | <scriptContent>]
+dw [-p <weavePath>]? [-i <name> <path>]* [-v]? [-o <outputPath>]? [[-f <filePath>] | [-m <nameIdentifier>] | <scriptContent>]
 
 Arguments Detail:
 
- -path    | Path of jars or directories where weave files are being searched
- -input   | Declares a new input
- -verbose | Enable Verbose Mode
- -output  | Specifies output file for the transformation if not standard output will be used
- -main    | The full qualified name of the mapping to execute
+ --path or -p    | Path of jars or directories where weave files are being searched.
+ --input or -i   | Declares a new input.
+ --verbose or -v | Enable Verbose Mode.
+ --output or -o  | Specifies output file for the transformation if not standard output will be used.
+ --main or -m    | The full qualified name of the mapping to be execute.
+
+ Examples
+
+ dw -i payload <fullpathToUser.json> "output application/json --- payload filter (item) -> item.age > 17"
+
+ Documentation reference:
+
+ https://docs.mulesoft.com/mule-runtime/4.2/dataweave
+
 ```
 
 ### Query content from a file
@@ -87,7 +96,7 @@ Input file `users.json`
  
 Lets query users old enough to drink alcohol.
 
-`> dw -input payload <fullpathToUser.json> "output application/json --- payload filter (item) -> item.age > 17"`
+`> dw -i payload <fullpathToUser.json> "output application/json --- payload filter (item) -> item.age > 17"`
 
 
 ### Query content from standard input

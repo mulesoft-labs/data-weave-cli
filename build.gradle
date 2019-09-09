@@ -1,12 +1,25 @@
+buildscript {
+    repositories {
+        maven {
+            url "https://plugins.gradle.org/m2/"
+        }
+    }
+}
+
+plugins {
+    id "com.palantir.graal" version "0.4.0"
+}
+
+
 subprojects {
-    
+
     apply plugin: "java"
     apply plugin: "scala"
     apply plugin: 'com.palantir.graal'
 
     group 'org.mule.weave.native'
     version nativeVersion
-    
+
 
     repositories {
         mavenCentral()
@@ -23,16 +36,5 @@ subprojects {
 
     dependencies {
         compile group: 'org.scala-lang', name: 'scala-library', version: scalaVersion
-    }
-}
-
-buildscript {
-    repositories {
-        maven {
-            url "https://plugins.gradle.org/m2/"
-        }
-    }
-    dependencies {
-        classpath "com.palantir.graal:gradle-graal:0.3.0"
     }
 }

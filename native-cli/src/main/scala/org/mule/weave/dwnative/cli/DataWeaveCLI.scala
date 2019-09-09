@@ -16,6 +16,7 @@ import org.mule.weave.v2.parser.phase.ModuleLoaderManager
 import org.mule.weave.v2.runtime.utils.AnsiColor.red
 
 import scala.collection.mutable
+import scala.io.Source
 
 object DataWeaveCLI extends App {
 
@@ -30,13 +31,17 @@ class DataWeaveCLIRunner {
   def run(args: Array[String]): Int = {
     val scriptToRun = parse(args)
     scriptToRun match {
-      case Right(message) => {
+      case Right(message) if (message.nonEmpty) => {
+        println(AnsiColor.red("Parameters configuration error:"))
         println(AnsiColor.red(message))
         println(usages())
         -1
       }
       case Left(config) => {
         run(config)
+      }
+      case _ => {
+        0
       }
     }
   }
@@ -53,7 +58,7 @@ class DataWeaveCLIRunner {
 
     while (i < args.length) {
       args(i) match {
-        case "-path" => {
+        case "-p" | "--path" => {
           path = if (i + 1 < args.length) {
             i = i + 1
             args(i)
@@ -61,10 +66,14 @@ class DataWeaveCLIRunner {
             return Right("Missing path expression")
           }
         }
-        case "-verbose" => {
+        case "-v" | "--verbose" => {
           WeaveProperties.verbose = true
         }
-        case "-input" => {
+        case "-h" | "--help" => {
+          println(usages())
+          return Right("")
+        }
+        case "-i" | "--input" => {
           if (i + 2 < args.length) {
             val input: File = new File(args(i + 2))
             val inputName: String = args(i + 1)
@@ -78,7 +87,7 @@ class DataWeaveCLIRunner {
           }
           i = i + 2
         }
-        case "-output" => {
+        case "-o" | "--output" => {
           output = if (i + 1 < args.length) {
             i = i + 1
             Some(args(i))
@@ -86,7 +95,7 @@ class DataWeaveCLIRunner {
             return Right("Missing <outputPath>")
           }
         }
-        case "-main" => {
+        case "-main" | "-m" => {
           main = if (i + 1 < args.length) {
             i = i + 1
             Some(args(i))
@@ -94,7 +103,25 @@ class DataWeaveCLIRunner {
             return Right("Missing main name identifier")
           }
         }
-        case "-debug" => {
+        case "-f" | "--file" => {
+          if (i + 1 < args.length) {
+            i = i + 1
+            val scriptFile = new File(args(i))
+            if (scriptFile.exists()) {
+              val source = Source.fromFile(scriptFile, "UTF-8")
+              try {
+                scriptToRun = Some(source.mkString)
+              } finally {
+                source.close()
+              }
+            } else {
+              return Right(s"File `${args(i)}` was not found.")
+            }
+          } else {
+            return Right("Missing script file path.")
+          }
+        }
+        case "-d" | "--debug" => {
           debug = true
         }
         case scriptPath if (i + 1 == args.length) => {
@@ -109,7 +136,7 @@ class DataWeaveCLIRunner {
 
     val paths = if (path.isEmpty) Array[String]() else path.split(File.pathSeparatorChar)
     if (scriptToRun.isEmpty && main.isEmpty) {
-      Right(s"Missing <scriptContent> or -main <nameIdentifier>")
+      Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath>")
     } else {
       Left(WeaveRunnerConfig(paths, debug, scriptToRun, main, inputs.toMap, output))
     }
@@ -129,20 +156,23 @@ class DataWeaveCLIRunner {
       |
       |Usage:
       |
-      |dw [-path <weavePath>]? [-input <name> <path>]* [-verbose]? [-output <outputPath>]? [[-main <nameIdentifier>] | <scriptContent>]
+      |dw [-p <weavePath>]? [-i <name> <path>]* [-v]? [-o <outputPath>]? [[-f <filePath>] | [-m <nameIdentifier>] | <scriptContent>]
       |
       |Arguments Detail:
       |
-      | -path    | Path of jars or directories where weave files are being searched
-      | -input   | Declares a new input
-      | -verbose | Enable Verbose Mode
-      | -output  | Specifies output file for the transformation if not standard output will be used
-      | -main    | The full qualified name of the mapping to execute
+      | --path or -p    | Path of jars or directories where weave files are being searched.
+      | --input or -i   | Declares a new input.
+      | --verbose or -v | Enable Verbose Mode.
+      | --output or -o  | Specifies output file for the transformation if not standard output will be used.
+      | --main or -m    | The full qualified name of the mapping to be execute.
       |
+      | Examples
+      |
+      | dw -i payload <fullpathToUser.json> "output application/json --- payload filter (item) -> item.age > 17"
       |
       | Documentation reference:
       |
-      | https://docs.mulesoft.com/mule-runtime/4.1/dataweave
+      | https://docs.mulesoft.com/mule-runtime/4.2/dataweave
     """.stripMargin
   }
 
@@ -169,10 +199,9 @@ class DataWeaveCLIRunner {
     val result = nativeRuntime.run(script, inputs, out)
     //load inputs from
     if (result.success()) {
-
-      return 0
-
+      0
     } else {
+      println(AnsiColor.red("Error while executing the script:"))
       println(AnsiColor.red(result.result()))
       -1
     }

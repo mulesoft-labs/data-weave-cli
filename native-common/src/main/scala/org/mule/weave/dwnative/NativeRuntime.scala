@@ -49,7 +49,7 @@ class NativeRuntime(libDir: File, path: Array[File]) {
 
   private val runtimeModuleLoader = new DefaultModuleNodeLoader
 
-  DataWeaveUtils.setupServices(defaultModuleManager)
+//  DataWeaveUtils.setupServices(defaultModuleManager)
 
   def getResourceContent(ni: NameIdentifier): Option[String] = {
     pathBasedResourceResolver.resolve(ni).map(_.content())
