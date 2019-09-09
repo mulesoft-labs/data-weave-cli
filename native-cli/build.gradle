@@ -48,7 +48,7 @@ graal {
     outputName 'dw'
 //    graalVersion '1.0.0-rc14'
     option "-H:+ReportExceptionStackTraces"
-    option "-Xmx1024M"
+    option "-J-Xmx1024M"
 }
 
 import com.monochromeroad.gradle.plugin.aws.s3.S3Sync
