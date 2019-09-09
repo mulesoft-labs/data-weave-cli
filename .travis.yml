@@ -20,14 +20,14 @@ jobs:
     deploy:
     - provider: script
       skip_cleanup: true
-      script: "travis_wait 40 ./gradlew native-cli:uploadDistro"
+      script: "./gradlew native-cli:uploadDistro"
       on:
         branch: master
   - stage: deploy-native
     os: linux
     jdk: oraclejdk8
     script:
-    - "./gradlew native-cli:distro"
+    - "travis_wait 40 ./gradlew native-cli:distro"
     deploy:
     - provider: script
       skip_cleanup: true
