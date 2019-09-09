@@ -47,7 +47,7 @@ graal {
     mainClass 'org.mule.weave.dwnative.cli.DataWeaveCLI'
     outputName 'dw'
 //    graalVersion '1.0.0-rc14'
-//    option "-H:-UseServiceLoaderFeature"
+    option "-H:+ReportExceptionStackTraces"
 }
 
 import com.monochromeroad.gradle.plugin.aws.s3.S3Sync
