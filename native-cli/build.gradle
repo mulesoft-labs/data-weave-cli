@@ -46,7 +46,7 @@ private static String getOsName() {
 graal {
     mainClass 'org.mule.weave.dwnative.cli.DataWeaveCLI'
     outputName 'dw'
-//    graalVersion '1.0.0-rc14'
+    graalVersion '19.2.0'
     option "-H:+ReportExceptionStackTraces"
     option "-J-Xmx1024M"
 }
