@@ -45,6 +45,7 @@ jobs:
 #        script: "travis_wait 30 ./gradlew native-cli:uploadDistro"
 #        on:
 #          branch: master
+#Token is encrypted
 notifications:
   slack:
     rooms:
