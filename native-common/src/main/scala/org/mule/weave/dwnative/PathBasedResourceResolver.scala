@@ -60,13 +60,14 @@ class PathBasedResourceResolver(paths: Seq[File]) extends WeaveResourceResolver 
 
   def recursiveListFiles[T](f: File, callback: (File) => Unit): Unit = {
     val files = f.listFiles
-    files.foreach((f) =>
-      if (f.isFile && f.getName.endsWith(WeaveFile.fileExtension)) {
-        callback(f)
-      } else if (f.isDirectory) {
-        recursiveListFiles(f, callback)
-      })
-
+    if (files != null) {
+      files.foreach((f) =>
+        if (f.isFile && f.getName.endsWith(WeaveFile.fileExtension)) {
+          callback(f)
+        } else if (f.isDirectory) {
+          recursiveListFiles(f, callback)
+        })
+    }
   }
 
   lazy val entries: Map[NameIdentifier, Seq[WeaveResource]] = loadResources()
@@ -83,7 +84,12 @@ class PathBasedResourceResolver(paths: Seq[File]) extends WeaveResourceResolver 
 object PathBasedResourceResolver {
   def apply(libDir: File): PathBasedResourceResolver = {
     if (libDir.exists()) {
-      new PathBasedResourceResolver(libDir.listFiles())
+      val files = libDir.listFiles()
+      if (files != null) {
+        new PathBasedResourceResolver(files)
+      } else {
+        new PathBasedResourceResolver(Seq())
+      }
     } else {
       new PathBasedResourceResolver(Seq())
     }
