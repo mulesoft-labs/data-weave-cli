@@ -5,126 +5,60 @@ import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 
-import org.mule.weave.v2.interpreted.DefaultModuleNodeLoader
-import org.mule.weave.v2.interpreted.InterpreterMappingCompilerPhase
-import org.mule.weave.v2.interpreted.extension.ParsingContextCreator
-import org.mule.weave.v2.interpreted.extension.WeaveBasedDataFormatExtensionLoaderService
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
-import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
 import org.mule.weave.v2.model.service.StdOutputLoggingService
 import org.mule.weave.v2.model.values.BinaryValue
-import org.mule.weave.v2.module.CompositeDataFormatExtensionsLoaderService
-import org.mule.weave.v2.module.DataFormatExtensionsLoaderService
-import org.mule.weave.v2.module.DefaultDataFormatExtensionsLoaderService
-import org.mule.weave.v2.module.json.DefaultJsonDataFormat
 import org.mule.weave.v2.module.reader.AutoPersistedOutputStream
 import org.mule.weave.v2.module.reader.DefaultAutoPersistedOutputStream
-import org.mule.weave.v2.module.reader.Reader
 import org.mule.weave.v2.module.reader.SourceProvider
-import org.mule.weave.v2.parser.MappingParser
-import org.mule.weave.v2.parser.MessageCollector
-import org.mule.weave.v2.parser.ast.structure.DocumentNode
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.exception.LocatableException
-import org.mule.weave.v2.parser.phase.CompositeModuleParserManager
-import org.mule.weave.v2.parser.phase.ModuleLoader
+import org.mule.weave.v2.parser.phase.CompilationException
 import org.mule.weave.v2.parser.phase.ModuleLoaderManager
-import org.mule.weave.v2.parser.phase.ModuleParserManager
-import org.mule.weave.v2.parser.phase.ParsingContext
-import org.mule.weave.v2.parser.phase.PhaseResult
-import org.mule.weave.v2.parser.phase.TypeCheckingResult
 import org.mule.weave.v2.resources.NativeResourceLoader
+import org.mule.weave.v2.runtime.DataWeaveScriptingEngine
+import org.mule.weave.v2.runtime.DynamicModuleComponentFactory
+import org.mule.weave.v2.runtime.InputType
+import org.mule.weave.v2.runtime.ScriptingBindings
 import org.mule.weave.v2.sdk.WeaveResource
 import org.mule.weave.v2.sdk.WeaveResourceResolver
 
 class NativeRuntime(libDir: File, path: Array[File]) {
 
-  private val systemParserManager = ModuleParserManager(ModuleLoaderManager(ModuleLoader(NativeResourceProvider)))
-
   private val pathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
-  private val pathBasedParserManager = ModuleParserManager(ModuleLoaderManager(ModuleLoader(pathBasedResourceResolver)))
 
-  private val defaultModuleManager = ModuleLoaderManager(ModuleLoader(pathBasedResourceResolver))
-
-  private val runtimeModuleLoader = new DefaultModuleNodeLoader
-
-//  DataWeaveUtils.setupServices(defaultModuleManager)
+  private val weaveScriptingEngine = DataWeaveScriptingEngine(DynamicModuleComponentFactory(NativeResourceProvider, () => pathBasedResourceResolver, systemFirst = true))
 
   def getResourceContent(ni: NameIdentifier): Option[String] = {
     pathBasedResourceResolver.resolve(ni).map(_.content())
   }
 
-  def run(script: String, inputs: Array[WeaveInput]): WeaveExecutionResult = {
+  def run(script: String, inputs: ScriptingBindings): WeaveExecutionResult = {
     run(script, inputs, new DefaultAutoPersistedOutputStream())
   }
 
-  def run(script: String, inputs: Array[WeaveInput], out: OutputStream): WeaveExecutionResult = {
-    val parserManager = new CompositeModuleParserManager(systemParserManager, pathBasedParserManager)
-    var contentResult: WeaveExecutionResult = null
+  def run(script: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json"): WeaveExecutionResult = {
     try {
-      val parsingContext = new ParsingContext(NameIdentifier.ANONYMOUS_NAME, new MessageCollector(), parserManager, errorTrace = 0, attachDocumentation = false)
-      inputs.foreach((input) => {
-        parsingContext.addImplicitInput(input.name, None)
-      })
-      //      parsingContext.registerParsingPhaseAnnotationProcessor(DependencyAnnotationProcessor.ANNOTATION_NAME, new DependencyAnnotationProcessor(DataWeaveUtils.getLibPathHome()))
-      val typeCheckResult = MappingParser.parse(MappingParser.typeCheckPhase(), WeaveResource("", script), parsingContext)
-
-      if (typeCheckResult.hasErrors()) {
-        val messages = typeCheckResult.errorMessages()
-        val errorMessage = messages.map((message) => {
-          "[Error] " + message._2.message + "\n" + message._1.locationString
-        }).mkString("\n")
-        contentResult = WeaveFailureResult(errorMessage)
-      } else {
-        val weaveBasedDataFormatManager = WeaveBasedDataFormatExtensionLoaderService(ParsingContextCreator(parserManager), pathBasedResourceResolver, runtimeModuleLoader)
-        val serviceManager = ServiceManager(
-          StdOutputLoggingService,
-          Map(
-            //Services
-            classOf[DataFormatExtensionsLoaderService] -> CompositeDataFormatExtensionsLoaderService(DefaultDataFormatExtensionsLoaderService, weaveBasedDataFormatManager)
-          )
-        )
-        implicit val ctx: EvaluationContext = EvaluationContext(serviceManager)
-        val value = typeCheckResult.asInstanceOf[PhaseResult[TypeCheckingResult[DocumentNode]]].getResult()
-        val result = new InterpreterMappingCompilerPhase(runtimeModuleLoader).call(value, parsingContext)
-
-        val executable = result.getResult().executable
-
-        val readers: Map[String, Reader] = inputs.map((input) => {
-          executable.declaredInputs()
-            .get(input.name)
-            .map((declaredInput) => {
-              (input.name, declaredInput.reader(input.content))
-            }).getOrElse({
-            //Default to JSON
-            (input.name, DefaultJsonDataFormat.reader(SourceProvider(input.content)))
-          })
-        }).toMap
-        val writer = executable
-          .declaredOutput()
-          .map(_.writer(Some(out)))
-          .getOrElse(new CustomWeaveDataFormat(defaultModuleManager).writer(Some(out)))
-        val tuple = executable.write(writer, readers)
-        contentResult = WeaveSuccessResult(out, tuple._2.name())
+      val dataWeaveScript = weaveScriptingEngine.compile(script, NameIdentifier.ANONYMOUS_NAME, inputs.entries().map((wi) => new InputType(wi, None)).toArray)
+      val serviceManager = ServiceManager(StdOutputLoggingService)
+      val result = dataWeaveScript.write(inputs, serviceManager, dataWeaveScript.declaredOutput().getOrElse(defaultOutputMimeType), Some(out))
+      WeaveSuccessResult(out, result.getCharset().name())
+    } catch {
+      case cr: CompilationException => {
+        WeaveFailureResult(cr.getMessage())
       }
-    }
-    catch {
       case le: LocatableException => {
-        contentResult = WeaveFailureResult(le.getMessage() + " at:\n" + le.location.locationString)
+        WeaveFailureResult(le.getMessage() + " at:\n" + le.location.locationString)
       }
       case le: Exception => {
         val writer = new StringWriter()
         le.printStackTrace()
         le.printStackTrace(new PrintWriter(writer))
-        contentResult = WeaveFailureResult("Internal error : " + le.getClass.getName + " : " + le.getMessage + "\n" + writer.toString)
+        WeaveFailureResult("Internal error : " + le.getClass.getName + " : " + le.getMessage + "\n" + writer.toString)
       }
-
     }
-    contentResult
   }
-
-
 }
 
 case class WeaveInput(name: String, content: SourceProvider)

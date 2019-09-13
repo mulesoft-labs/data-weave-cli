@@ -3,7 +3,6 @@ package org.mule.weave.dwnative
 import java.io.File
 import java.util.zip.ZipFile
 
-import org.mule.weave.v2.interpreted.extension.MultiWeaveResourceResolver
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.sdk.WeaveResource
 import org.mule.weave.v2.sdk.WeaveResourceResolver
@@ -13,7 +12,7 @@ import org.mule.weave.v2.utils.WeaveFile
 import scala.collection.mutable
 import scala.io.Source
 
-class PathBasedResourceResolver(paths: Seq[File]) extends WeaveResourceResolver with MultiWeaveResourceResolver {
+class PathBasedResourceResolver(paths: Seq[File]) extends WeaveResourceResolver {
 
   def loadResources(): Map[NameIdentifier, Seq[WeaveResource]] = {
 

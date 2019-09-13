@@ -2,23 +2,24 @@ package org.mule.weave.dwnative.cli
 
 import java.io.File
 import java.io.FileOutputStream
-import java.nio.charset.Charset
 
 import org.mule.weave.dwnative.AnsiColor
 import org.mule.weave.dwnative.DataWeaveUtils
 import org.mule.weave.dwnative.NativeRuntime
-import org.mule.weave.dwnative.WeaveInput
 import org.mule.weave.dwnative.WeaveProperties
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
-import org.mule.weave.v2.module.reader.SourceProvider
+import org.mule.weave.v2.model.EvaluationContext
+import org.mule.weave.v2.module.DataFormatManager
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.phase.ModuleLoaderManager
+import org.mule.weave.v2.runtime.ScriptingBindings
 import org.mule.weave.v2.runtime.utils.AnsiColor.red
 
 import scala.collection.mutable
 import scala.io.Source
 
 object DataWeaveCLI extends App {
+
 
   {
     val i = new DataWeaveCLIRunner().run(args)
@@ -28,6 +29,14 @@ object DataWeaveCLI extends App {
 }
 
 class DataWeaveCLIRunner {
+  val DW_DEFAULT_INPUT_MIMETYPE_VAR = "DW_DEFAULT_INPUT_MIMETYPE"
+
+  val DW_DEFAULT_OUTPUT_MIMETYPE_VAR = "DW_DEFAULT_OUTPUT_MIMETYPE"
+
+  val DW_CLI_VERSION = "1.0.0"
+
+  val DW_RUNTIME_VERSION = "2.2.3"
+
   def run(args: Array[String]): Int = {
     val scriptToRun = parse(args)
     scriptToRun match {
@@ -54,7 +63,7 @@ class DataWeaveCLIRunner {
     var output: Option[String] = None
     var debug = false
     var main: Option[String] = None
-    val inputs: mutable.Map[String, SourceProvider] = mutable.Map()
+    val inputs: mutable.Map[String, File] = mutable.Map()
 
     while (i < args.length) {
       args(i) match {
@@ -73,12 +82,17 @@ class DataWeaveCLIRunner {
           println(usages())
           return Right("")
         }
+        case "--version" => {
+          println(" - DataWeave Command Line : V" + DW_CLI_VERSION)
+          println(" - DataWeave Runtime: V" + DW_RUNTIME_VERSION)
+          return Right("")
+        }
         case "-i" | "--input" => {
           if (i + 2 < args.length) {
             val input: File = new File(args(i + 2))
             val inputName: String = args(i + 1)
             if (input.exists()) {
-              inputs.put(inputName, SourceProvider(input, Charset.defaultCharset(), None))
+              inputs.put(inputName, input)
             } else {
               return Right(red(s"Invalid input file $inputName ${input.getAbsolutePath}."))
             }
@@ -165,6 +179,8 @@ class DataWeaveCLIRunner {
       | --verbose or -v | Enable Verbose Mode.
       | --output or -o  | Specifies output file for the transformation if not standard output will be used.
       | --main or -m    | The full qualified name of the mapping to be execute.
+      | --file or -f    | Path to the file
+      | --version       | The version of the CLI and Runtime
       |
       | Examples
       |
@@ -195,8 +211,17 @@ class DataWeaveCLIRunner {
 
     val out = if (config.outputPath.isDefined) new FileOutputStream(config.outputPath.get) else System.out
 
-    val inputs = if (config.inputs.isEmpty) Array(WeaveInput("payload", SourceProvider(System.in))) else config.inputs.map((input) => WeaveInput(input._1, input._2)).toArray
-    val result = nativeRuntime.run(script, inputs, out)
+    val defaultInputType = Option(System.getenv(DW_DEFAULT_INPUT_MIMETYPE_VAR)).getOrElse("application/json");
+    val defaultOutputType = Option(System.getenv(DW_DEFAULT_OUTPUT_MIMETYPE_VAR)).getOrElse("application/json");
+    val scriptingBindings = new ScriptingBindings
+    if (config.inputs.isEmpty) {
+      scriptingBindings.addBinding("payload", System.in, defaultInputType)
+    } else {
+      config.inputs.foreach((input) => {
+        scriptingBindings.addBinding(input._1, input._2, getMimeTypeByFileExtension(input._2))
+      })
+    }
+    val result = nativeRuntime.run(script, scriptingBindings, out, defaultOutputType)
     //load inputs from
     if (result.success()) {
       0
@@ -206,10 +231,21 @@ class DataWeaveCLIRunner {
       -1
     }
   }
+
+  def getMimeTypeByFileExtension(file: File): Option[String] = {
+    val extension = file.getName.lastIndexOf('.')
+    if (extension > 0) {
+      val ext = file.getName.substring(extension)
+      DataFormatManager.byExtension(ext)(EvaluationContext()).map(_.defaultMimeType.toString())
+    } else {
+      None
+    }
+  }
 }
 
 class CustomWeaveDataFormat(moduleManager: ModuleLoaderManager) extends WeaveDataFormat {
   override def createModuleLoader(): ModuleLoaderManager = moduleManager
 }
 
-case class WeaveRunnerConfig(path: Array[String], debug: Boolean, scriptToRun: Option[String], main: Option[String], inputs: Map[String, SourceProvider], outputPath: Option[String])
+case class WeaveRunnerConfig(path: Array[String], debug: Boolean, scriptToRun: Option[String], main: Option[String], inputs: Map[String, File], outputPath: Option[String])
+

@@ -20,6 +20,7 @@ import org.mule.weave.v2.runtime.core.functions.ReadFunctionProtocolHandler
 import org.mule.weave.v2.runtime.core.functions.UrlProtocolHandler
 
 object DataWeaveUtils {
+
   def getDWHome(): File = {
     //TODO we need a way to determine the script path directory
     val homeUser = new File(System.getProperty("user.home"))

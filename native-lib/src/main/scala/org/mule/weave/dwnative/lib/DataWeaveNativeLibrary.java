@@ -9,6 +9,7 @@ import org.mule.weave.dwnative.NativeRuntime;
 import org.mule.weave.dwnative.WeaveExecutionResult;
 import org.mule.weave.dwnative.WeaveInput;
 import org.mule.weave.v2.module.reader.SourceProvider$;
+import org.mule.weave.v2.runtime.ScriptingBindings;
 
 import java.io.File;
 
@@ -20,7 +21,7 @@ public class DataWeaveNativeLibrary {
     @CEntryPoint(name = "runDW")
     public static CCharPointer runDW(IsolateThread thread, CCharPointer transform) {
         final String script = CTypeConversion.toJavaString(transform);
-        final WeaveExecutionResult run = runtime.run(script, new WeaveInput[0]);
+        final WeaveExecutionResult run = runtime.run(script, new ScriptingBindings());
         return CTypeConversion.toCString(run.result()).get();
     }
 
@@ -29,7 +30,11 @@ public class DataWeaveNativeLibrary {
         final String script = CTypeConversion.toJavaString(transform);
         final String inputNameStr = CTypeConversion.toJavaString(inputName);
         final String inputContentStr = CTypeConversion.toJavaString(input);
-        final WeaveExecutionResult run = runtime.run(script, new WeaveInput[]{new WeaveInput(inputNameStr, SourceProvider$.MODULE$.apply(inputContentStr))});
+
+        final ScriptingBindings scriptingBindings = new ScriptingBindings();
+        scriptingBindings.addBinding(inputNameStr, inputContentStr);
+
+        final WeaveExecutionResult run = runtime.run(script, scriptingBindings);
         return CTypeConversion.toCString(run.result()).get();
     }
 
@@ -41,13 +46,10 @@ public class DataWeaveNativeLibrary {
 
         final String inputNameStr2 = CTypeConversion.toJavaString(inputName2);
         final String inputContentStr2 = CTypeConversion.toJavaString(input2);
-
-
-        final WeaveExecutionResult run = runtime.run(script, new WeaveInput[]{
-                new WeaveInput(inputNameStr, SourceProvider$.MODULE$.apply(inputContentStr)),
-                new WeaveInput(inputNameStr2, SourceProvider$.MODULE$.apply(inputContentStr))
-        });
-
+        final ScriptingBindings scriptingBindings = new ScriptingBindings();
+        scriptingBindings.addBinding(inputNameStr, inputContentStr);
+        scriptingBindings.addBinding(inputNameStr2, inputContentStr2);
+        final WeaveExecutionResult run = runtime.run(script, scriptingBindings);
         return CTypeConversion.toCString(run.result()).get();
     }
 
