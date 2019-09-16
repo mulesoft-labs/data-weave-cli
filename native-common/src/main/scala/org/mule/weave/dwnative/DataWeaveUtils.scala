@@ -22,9 +22,8 @@ import org.mule.weave.v2.runtime.core.functions.UrlProtocolHandler
 object DataWeaveUtils {
 
   def getDWHome(): File = {
-    //TODO we need a way to determine the script path directory
     val homeUser = new File(System.getProperty("user.home"))
-    val weavehome = System.getenv("WEAVE_HOME")
+    val weavehome = System.getenv("DW_HOME")
     if (weavehome != null) {
       val home = new File(weavehome)
       if (!home.exists()) {
@@ -46,7 +45,16 @@ object DataWeaveUtils {
   }
 
   def getLibPathHome(): File = {
-    new File(getDWHome(), "libs")
+    val weavehome = System.getenv("DW_LIB_PATH")
+    if (weavehome != null) {
+      val home = new File(weavehome)
+      if (!home.exists()) {
+        println(AnsiColor.red(s"[error] Weave Library Home Directory `${weavehome}` declared on environment variable `DW_LIB_PATH` does not exists."))
+      }
+      home
+    } else {
+      new File(getDWHome(), "libs")
+    }
   }
 
   def setupServices(moduleLoaderManager: ModuleLoaderManager): Unit = {
