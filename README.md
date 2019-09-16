@@ -158,4 +158,4 @@ This example will create a really big csv and it will stream it to the HTTP serv
 `dw "output application/csv --- (1 to 10000000000000000000000) map (item) -> {name: 'User \$(item)'}" | curl -X POST  -T "/dev/stdin" http://localhost:8081/`
 
 ### Documentation
-For more info see the [docs site](https://docs.mulesoft.com/mule-runtime/4.2/dataweave)
+For more info about the language see the [docs site](https://docs.mulesoft.com/mule-runtime/4.2/dataweave)
