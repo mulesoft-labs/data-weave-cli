@@ -15,7 +15,7 @@ jobs:
   - stage: deploy-native-linux
     os: linux
     language: java
-    jdk: oraclejdk8
+    jdk: openjdk8
     script:
     - "travis_wait 40 ./gradlew native-cli:distro"
     deploy:
@@ -43,4 +43,5 @@ jobs:
 #Token is encrypted
 notifications:
   slack:
-      secure: zS2O6GpJNiM8rcEcp/YapWDV8liRG3DLpVHvpH3gKD5y0wL7LnBQvQk3ychvShKFeNesXXt1PNwuw93sWGPc3IEvn3Y74qDELQR8nRq6SUjOE7TSTMBY6upkpoxjZHIMinllF77W3ob0OcBgmpxvFzIeu4aDd0xkgbmuHzAGM/m/+rVTthnVR9+bUmp/5dJFQbxyPq+7M+is+GY/3MKh0sw5ltBjnGuGO/MO4TNnlXoys+HqHwhXBO6B09N2+oK/vfpIPl2ShqDwTNlh20lbpxKarJhbn3YxlNuRgco4NVSNHkrYt+C4xlUSnvydw6tKiv9JRN0fRdJe7gkTTIEE6pT8zTLabYkU1cTMIJC3tnHtmmGYdtp3O0nEibFMQx53NH4lOrO1eYhawvAjxwZpC4asroaSRDg08j2lr2ApW1uebhUiKRLwy6TcXXwSSvIO0f2nZIX/KBV3uGvty1ccfohTxrrT9v5YLw7NvQ1dcZuL9jouQr8c69uWPjtYB37JG4A3sr9O5/uwXHJBBry5uQSxYdUbvoWtLP6sV5DGsKnXLAV73GOeMJIPhx4m1kcoCuOlw6hh42K+k9Ucft4x884wNvDgsTagdALXSQXIZnDSxc5AiEfCRVeDPlQ2KJcwTEu8UvpuOab5A0k03HVv/9lm324FOq42am90j6zVto0=
+    rooms:
+      secure: viupY4F9IIcJhOrNE7u2j+vv553GdFLHUPk2CFxJ8SqiGR8oHHzkBzwJ/sUOmjzZ4kct3xvwpBq6RkuuyMPRmVF+paSl5L5jIUBjMsTs07UtaJLYrA6i2s1yvLV7ILI0302Atu2wEb65rgMJIDU3Q/HAGGe4P1y2HK7DEXJ3dHBtG0pzjSD8XoRtSwMDD/e6sjBeWduDkhUkC6vwyjXmh7oyzMQ3MtjzRyjLAYo361zKMHmbfey9CwGZZLrrPO0jU2Bz6NTLV6iEvy0tC8qf/dTd65bw5J3uNhN3CfQ2C29mYZybNF0Jfs1tce4UT10whfDbudEGHU+J95m8ED3bMuqBFN0CvJiNJEUuzxK/6lyS12mHJtOnzNWsRymAc6+yC4AKZi0UpOpYK+bMTHHt3zjixBttzHySme29FEVevV8gZOgygn3w95tIcRA4CPjotSBCReelFBILbILRyYJ6tAM/pqUqBukJPdU6Gyuj1PsIMCPoR6HmRBgZ+EOQl3CJp1RPkjaZQA0x42qSwnJO/pOb8X4MR+n7iZxCylxw98dQUX7+hJ4SiEQhw3pANg0E89qS36G+JOzoGpCR6IZWA0HLUOaa/Me5LLJZeffyUSqOEj/lDQsfCYBHXwJQgzqRQ7t6vdEad14YYOlgpT6w4mOpe1NNELTH3FxqHWHD7Vs=
