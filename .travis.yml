@@ -34,17 +34,21 @@ jobs:
       script: "./gradlew native-cli:uploadDistro"
       on:
         branch: master
-#  - stage: deploy-native
-#    os: windows
-#    jdk: oraclejdk8
-#    script:
-#      - "travis_wait 30 ./gradlew native-cli:distro"
-#    deploy:
-#      - provider: script
-#        skip_cleanup: true
-#        script: "travis_wait 30 ./gradlew native-cli:uploadDistro"
-#        on:
-#          branch: master
+  - stage: deploy-native
+    os: windows
+    language: shell
+    before_install:
+      - git clone https://github.com/portapps/portapps ${TRAVIS_BUILD_DIR}/../portapps
+      - source ${TRAVIS_BUILD_DIR}/../portapps/.travis/prepare.sh
+      - bash ${TRAVIS_BUILD_DIR}/../portapps/.travis/java.sh
+    script:
+      - "travis_wait 30 ./gradlew native-cli:distro"
+    deploy:
+      - provider: script
+        skip_cleanup: true
+        script: "travis_wait 30 ./gradlew native-cli:uploadDistro"
+        on:
+          branch: master
 #Token is encrypted
 notifications:
   slack:
