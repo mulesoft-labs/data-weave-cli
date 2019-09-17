@@ -1,6 +1,6 @@
 jobs:
   include:
-  - stage: deploy-native
+  - stage: deploy-native-mac
     os: osx
     language: java
     osx_image: xcode9.3
@@ -12,7 +12,7 @@ jobs:
       script: "./gradlew native-cli:uploadDistro"
       on:
         branch: master
-  - stage: deploy-native
+  - stage: deploy-native-linux
     os: linux
     language: java
     jdk: oraclejdk8
@@ -24,7 +24,7 @@ jobs:
       script: "./gradlew native-cli:uploadDistro"
       on:
         branch: master
-  - stage: deploy-native
+  - stage: deploy-native-windows
     os: windows
     language: shell
     before_install:
