@@ -1,19 +1,8 @@
-dist: trusty
-language: java
-services:
-- docker
-before_cache:
-- rm -f  $HOME/.gradle/caches/modules-2/modules-2.lock
-- rm -fr $HOME/.gradle/caches/*/plugin-resolution/
-cache:
-  directories:
-  - "$HOME/.gradle/caches/"
-  - "$HOME/.gradle/wrapper/"
-  - "$HOME/parser-js/build-assets/node_modules"
 jobs:
   include:
   - stage: deploy-native
     os: osx
+    language: java
     osx_image: xcode9.3
     script:
     - "travis_wait 40 ./gradlew native-cli:distro"
@@ -25,6 +14,7 @@ jobs:
         branch: master
   - stage: deploy-native
     os: linux
+    language: java
     jdk: oraclejdk8
     script:
     - "travis_wait 40 ./gradlew native-cli:distro"
@@ -38,15 +28,16 @@ jobs:
     os: windows
     language: shell
     before_install:
+      - powershell -command 'Set-MpPreference -DisableRealtimeMonitoring $true'
       - git clone https://github.com/portapps/portapps ${TRAVIS_BUILD_DIR}/../portapps
       - source ${TRAVIS_BUILD_DIR}/../portapps/.travis/prepare.sh
       - bash ${TRAVIS_BUILD_DIR}/../portapps/.travis/java.sh
     script:
-      - "travis_wait 30 ./gradlew native-cli:distro"
+      - "./gradlew native-cli:distro"
     deploy:
       - provider: script
         skip_cleanup: true
-        script: "travis_wait 30 ./gradlew native-cli:uploadDistro"
+        script: "./gradlew native-cli:uploadDistro"
         on:
           branch: master
 #Token is encrypted
