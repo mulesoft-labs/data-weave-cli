@@ -48,7 +48,7 @@ graal {
     outputName 'dw'
     graalVersion graalvmVersion
     option "-H:+ReportExceptionStackTraces"
-    option "-J-Xmx1024M"
+    option "-J-Xmx2048M"
     option "--no-fallback"
     option "--allow-incomplete-classpath"
     option "-H:EnableURLProtocols=http,https"
