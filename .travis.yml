@@ -5,7 +5,7 @@ jobs:
     language: java
     osx_image: xcode9.3
     script:
-    - "travis_wait 40 ./gradlew native-cli:distro"
+    - travis_wait 40 ./gradlew native-cli:distro
     deploy:
     - provider: script
       skip_cleanup: true
@@ -17,31 +17,14 @@ jobs:
     language: java
     jdk: openjdk8
     script:
-    - "travis_wait 40 ./gradlew native-cli:distro"
+    - travis_wait 40 ./gradlew native-cli:distro
     deploy:
     - provider: script
       skip_cleanup: true
       script: "./gradlew native-cli:uploadDistro"
       on:
         branch: master
-#  - stage: deploy-native-windows
-#    os: windows
-#    language: shell
-#    before_install:
-#      - powershell -command 'Set-MpPreference -DisableRealtimeMonitoring $true'
-#      - git clone https://github.com/portapps/portapps ${TRAVIS_BUILD_DIR}/../portapps
-#      - source ${TRAVIS_BUILD_DIR}/../portapps/.travis/prepare.sh
-#      - bash ${TRAVIS_BUILD_DIR}/../portapps/.travis/java.sh
-#    script:
-#      - "./gradlew native-cli:distro"
-#    deploy:
-#      - provider: script
-#        skip_cleanup: true
-#        script: "./gradlew native-cli:uploadDistro"
-#        on:
-#          branch: master
-#Token is encrypted
 notifications:
   slack:
     rooms:
-      secure: viupY4F9IIcJhOrNE7u2j+vv553GdFLHUPk2CFxJ8SqiGR8oHHzkBzwJ/sUOmjzZ4kct3xvwpBq6RkuuyMPRmVF+paSl5L5jIUBjMsTs07UtaJLYrA6i2s1yvLV7ILI0302Atu2wEb65rgMJIDU3Q/HAGGe4P1y2HK7DEXJ3dHBtG0pzjSD8XoRtSwMDD/e6sjBeWduDkhUkC6vwyjXmh7oyzMQ3MtjzRyjLAYo361zKMHmbfey9CwGZZLrrPO0jU2Bz6NTLV6iEvy0tC8qf/dTd65bw5J3uNhN3CfQ2C29mYZybNF0Jfs1tce4UT10whfDbudEGHU+J95m8ED3bMuqBFN0CvJiNJEUuzxK/6lyS12mHJtOnzNWsRymAc6+yC4AKZi0UpOpYK+bMTHHt3zjixBttzHySme29FEVevV8gZOgygn3w95tIcRA4CPjotSBCReelFBILbILRyYJ6tAM/pqUqBukJPdU6Gyuj1PsIMCPoR6HmRBgZ+EOQl3CJp1RPkjaZQA0x42qSwnJO/pOb8X4MR+n7iZxCylxw98dQUX7+hJ4SiEQhw3pANg0E89qS36G+JOzoGpCR6IZWA0HLUOaa/Me5LLJZeffyUSqOEj/lDQsfCYBHXwJQgzqRQ7t6vdEad14YYOlgpT6w4mOpe1NNELTH3FxqHWHD7Vs=
+      secure: drSh4Et3zGIIi7S7x8bUl+r0CZzV/7mTW6qbnzFmDBq5Lii73C0W86HWS8LD9mdmX8hFl/n5ySMH6P1t+9dXzmSOBNg3gnVm4F4iLCMPMb5bzIjFA3S9PKVONCHNvYfINurFhT8drVsBYcrkTcg0+FkxzJcNsbUe5IGz+xtV5jI+XUN2xmVP5/Fphshv87c86btB7shbOUzAZBCZ+LWl9SGNCsXz3lqnOmLQEKBDRN/CxpDmEQ/q5KMbV0uoXBRF1+Ab/NxY1ZeUC8qugEUoxHr2KkrWYoDWhjEty2nP8kxKy9e7i6uVu1VLKhX4TaLy9J/eWD+Vr22ByFyfFVmANgg0/zUNP9uEiPUpoo3Xdvx2cgQESYbI9rZoWo2QDDEwSFoF3YNZ7nBIrMQLJlJ8aNF/dN2QZxyMbrXlVdPw95MxAhOTroYQbMSdTnctA7iCkJqPkF67ECF21hIJQ3/oTHjcH7QWUn2aTUo4Y7UQq9gvjabDzipMfUmGmAkai+WVoDBNWQMUeRzyYuKIB6ZVWM+Hi9hn+udj/Tl6+TJSADxk1HyFHKFdTOh9QWKEd2IHdgqlM+WMLy+SdjA28xro2h5Z2VWrUcDEm/pWEetooysBoXFrc2nm9/vG5QzDxCA8Fpd86QEbu8uMP9SquXW+snVyVjSfo/yltkkGqsIYDBI=
