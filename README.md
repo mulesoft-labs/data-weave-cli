@@ -110,6 +110,7 @@ Let's query users old enough to drink alcohol:
 
 `dw "output application/xml --- users: {( 1 to 100 map (item) -> {user: "User" ++ item} )}" >> out.xml` 
 
+
 ### DW Important ENV variables
 
 * *DW_HOME* = The directory where the home will be found if not defined `~/.dw` will be used
@@ -117,7 +118,8 @@ Let's query users old enough to drink alcohol:
 * *DW_DEFAULT_INPUT_MIMETYPE* = The default mimeType that is going to be used for the standar input. If not defined `application/json` will be used
 * *DW_DEFAULT_OUTPUT_MIMETYPE* = The default output mimeType that is going to be if not defined. If not defined `application/json` will be used
 
-### Using external DW Modules with -path
+
+### Using external DW Modules with --path
 
 This specifies the path where to search it will also search on the `DW_LIB_PATH` env directory path.
 
@@ -129,7 +131,7 @@ cd $DIRECTORY
 echo '%dw 2.0
 fun addUnderscore(s: String): String = s ++ "_"' > utils.dwl
 
-dw -path $DIRECTORY 'output application/json import * from utils --- {underscored: addUnderscore("hello")}'
+dw --path $DIRECTORY 'output application/json import * from utils --- {underscored: addUnderscore("hello")}'
 ```
 
 
@@ -156,6 +158,7 @@ or we can get the message by doing:
 This example will create a really big csv and it will stream it to the HTTP server on localhost.
 
 `dw "output application/csv --- (1 to 10000000000000000000000) map (item) -> {name: 'User \$(item)'}" | curl -X POST  -T "/dev/stdin" http://localhost:8081/`
+
 
 ### Documentation
 For more info about the language see the [docs site](https://docs.mulesoft.com/mule-runtime/4.2/dataweave)
