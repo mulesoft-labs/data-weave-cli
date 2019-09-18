@@ -118,7 +118,8 @@ Let's query users old enough to drink alcohol:
 * *DW_DEFAULT_INPUT_MIMETYPE* = The default mimeType that is going to be used for the standar input. If not defined `application/json` will be used
 * *DW_DEFAULT_OUTPUT_MIMETYPE* = The default output mimeType that is going to be if not defined. If not defined `application/json` will be used
 
-### Using external DW Modules with -path
+
+### Using external DW Modules with --path
 
 This specifies the path where to search it will also search on the `DW_LIB_PATH` env directory path.
 
@@ -130,7 +131,7 @@ cd $DIRECTORY
 echo '%dw 2.0
 fun addUnderscore(s: String): String = s ++ "_"' > utils.dwl
 
-dw -path $DIRECTORY 'output application/json import * from utils --- {underscored: addUnderscore("hello")}'
+dw --path $DIRECTORY 'output application/json import * from utils --- {underscored: addUnderscore("hello")}'
 ```
 
 
