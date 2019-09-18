@@ -46,9 +46,13 @@ private static String getOsName() {
 graal {
     mainClass 'org.mule.weave.dwnative.cli.DataWeaveCLI'
     outputName 'dw'
-    graalVersion '19.2.0'
+    graalVersion graalvmVersion
     option "-H:+ReportExceptionStackTraces"
-    option "-J-Xmx1024M"
+    option "-J-Xmx3G"
+    option "--no-fallback"
+    option "--allow-incomplete-classpath"
+    option "-H:EnableURLProtocols=http,https"
+    option "--no-server"
 }
 
 import com.monochromeroad.gradle.plugin.aws.s3.S3Sync

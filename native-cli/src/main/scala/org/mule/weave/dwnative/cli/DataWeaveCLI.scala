@@ -11,6 +11,8 @@ import org.mule.weave.v2.interpreted.module.WeaveDataFormat
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.module.DataFormatManager
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
+import org.mule.weave.v2.parser.exception.LocatableException
+import org.mule.weave.v2.parser.phase.CompilationException
 import org.mule.weave.v2.parser.phase.ModuleLoaderManager
 import org.mule.weave.v2.runtime.ScriptingBindings
 import org.mule.weave.v2.runtime.utils.AnsiColor.red
@@ -62,6 +64,7 @@ class DataWeaveCLIRunner {
     var scriptToRun: Option[String] = None
     var output: Option[String] = None
     var debug = false
+    var eval = false
     var main: Option[String] = None
     val inputs: mutable.Map[String, File] = mutable.Map()
 
@@ -138,6 +141,9 @@ class DataWeaveCLIRunner {
         case "-d" | "--debug" => {
           debug = true
         }
+        case "--eval" => {
+          eval = true
+        }
         case scriptPath if (i + 1 == args.length) => {
           scriptToRun = Some(scriptPath)
         }
@@ -152,7 +158,7 @@ class DataWeaveCLIRunner {
     if (scriptToRun.isEmpty && main.isEmpty) {
       Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath>")
     } else {
-      Left(WeaveRunnerConfig(paths, debug, scriptToRun, main, inputs.toMap, output))
+      Left(WeaveRunnerConfig(paths, debug, eval, scriptToRun, main, inputs.toMap, output))
     }
   }
 
@@ -180,6 +186,7 @@ class DataWeaveCLIRunner {
       | --output or -o  | Specifies output file for the transformation if not standard output will be used.
       | --main or -m    | The full qualified name of the mapping to be execute.
       | --file or -f    | Path to the file
+      | --eval          | Evaluates the script instead of writing it
       | --version       | The version of the CLI and Runtime
       |
       | Examples
@@ -209,10 +216,7 @@ class DataWeaveCLIRunner {
       config.scriptToRun.get
     }
 
-    val out = if (config.outputPath.isDefined) new FileOutputStream(config.outputPath.get) else System.out
-
     val defaultInputType = Option(System.getenv(DW_DEFAULT_INPUT_MIMETYPE_VAR)).getOrElse("application/json");
-    val defaultOutputType = Option(System.getenv(DW_DEFAULT_OUTPUT_MIMETYPE_VAR)).getOrElse("application/json");
     val scriptingBindings = new ScriptingBindings
     if (config.inputs.isEmpty) {
       scriptingBindings.addBinding("payload", System.in, defaultInputType)
@@ -221,14 +225,35 @@ class DataWeaveCLIRunner {
         scriptingBindings.addBinding(input._1, input._2, getMimeTypeByFileExtension(input._2))
       })
     }
-    val result = nativeRuntime.run(script, scriptingBindings, out, defaultOutputType)
-    //load inputs from
-    if (result.success()) {
-      0
+
+    if (config.eval) {
+      try {
+        nativeRuntime.eval(script, scriptingBindings)
+        0
+      } catch {
+        case le: Exception => {
+          println(AnsiColor.red("Error while executing the script:"))
+          println(AnsiColor.red(le.getMessage))
+          -1
+        }
+      }
+
     } else {
-      println(AnsiColor.red("Error while executing the script:"))
-      println(AnsiColor.red(result.result()))
-      -1
+
+      val out = if (config.outputPath.isDefined) new FileOutputStream(config.outputPath.get) else System.out
+
+
+      val defaultOutputType = Option(System.getenv(DW_DEFAULT_OUTPUT_MIMETYPE_VAR)).getOrElse("application/json");
+
+      val result = nativeRuntime.run(script, scriptingBindings, out, defaultOutputType)
+      //load inputs from
+      if (result.success()) {
+        0
+      } else {
+        println(AnsiColor.red("Error while executing the script:"))
+        println(AnsiColor.red(result.result()))
+        -1
+      }
     }
   }
 
@@ -247,5 +272,5 @@ class CustomWeaveDataFormat(moduleManager: ModuleLoaderManager) extends WeaveDat
   override def createModuleLoader(): ModuleLoaderManager = moduleManager
 }
 
-case class WeaveRunnerConfig(path: Array[String], debug: Boolean, scriptToRun: Option[String], main: Option[String], inputs: Map[String, File], outputPath: Option[String])
+case class WeaveRunnerConfig(path: Array[String], debug: Boolean, eval: Boolean, scriptToRun: Option[String], main: Option[String], inputs: Map[String, File], outputPath: Option[String])
 

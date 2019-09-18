@@ -1,52 +1,30 @@
-dist: trusty
-language: java
-services:
-- docker
-before_cache:
-- rm -f  $HOME/.gradle/caches/modules-2/modules-2.lock
-- rm -fr $HOME/.gradle/caches/*/plugin-resolution/
-cache:
-  directories:
-  - "$HOME/.gradle/caches/"
-  - "$HOME/.gradle/wrapper/"
-  - "$HOME/parser-js/build-assets/node_modules"
 jobs:
   include:
-  - stage: deploy-native
+  - stage: deploy-native-mac
     os: osx
-    osx_image: xcode9.3
+    language: java
+    osx_image: xcode11
     script:
-    - "travis_wait 40 ./gradlew native-cli:distro"
+    - travis_wait 40 ./gradlew native-cli:distro
     deploy:
     - provider: script
       skip_cleanup: true
       script: "./gradlew native-cli:uploadDistro"
       on:
         branch: master
-  - stage: deploy-native
+  - stage: deploy-native-linux
     os: linux
-    jdk: oraclejdk8
+    language: java
+    jdk: openjdk8
     script:
-    - "travis_wait 40 ./gradlew native-cli:distro"
+    - travis_wait 40 ./gradlew native-cli:distro
     deploy:
     - provider: script
       skip_cleanup: true
       script: "./gradlew native-cli:uploadDistro"
       on:
         branch: master
-#  - stage: deploy-native
-#    os: windows
-#    jdk: oraclejdk8
-#    script:
-#      - "travis_wait 30 ./gradlew native-cli:distro"
-#    deploy:
-#      - provider: script
-#        skip_cleanup: true
-#        script: "travis_wait 30 ./gradlew native-cli:uploadDistro"
-#        on:
-#          branch: master
-#Token is encrypted
 notifications:
   slack:
     rooms:
-      secure: zS2O6GpJNiM8rcEcp/YapWDV8liRG3DLpVHvpH3gKD5y0wL7LnBQvQk3ychvShKFeNesXXt1PNwuw93sWGPc3IEvn3Y74qDELQR8nRq6SUjOE7TSTMBY6upkpoxjZHIMinllF77W3ob0OcBgmpxvFzIeu4aDd0xkgbmuHzAGM/m/+rVTthnVR9+bUmp/5dJFQbxyPq+7M+is+GY/3MKh0sw5ltBjnGuGO/MO4TNnlXoys+HqHwhXBO6B09N2+oK/vfpIPl2ShqDwTNlh20lbpxKarJhbn3YxlNuRgco4NVSNHkrYt+C4xlUSnvydw6tKiv9JRN0fRdJe7gkTTIEE6pT8zTLabYkU1cTMIJC3tnHtmmGYdtp3O0nEibFMQx53NH4lOrO1eYhawvAjxwZpC4asroaSRDg08j2lr2ApW1uebhUiKRLwy6TcXXwSSvIO0f2nZIX/KBV3uGvty1ccfohTxrrT9v5YLw7NvQ1dcZuL9jouQr8c69uWPjtYB37JG4A3sr9O5/uwXHJBBry5uQSxYdUbvoWtLP6sV5DGsKnXLAV73GOeMJIPhx4m1kcoCuOlw6hh42K+k9Ucft4x884wNvDgsTagdALXSQXIZnDSxc5AiEfCRVeDPlQ2KJcwTEu8UvpuOab5A0k03HVv/9lm324FOq42am90j6zVto0=
+      secure: drSh4Et3zGIIi7S7x8bUl+r0CZzV/7mTW6qbnzFmDBq5Lii73C0W86HWS8LD9mdmX8hFl/n5ySMH6P1t+9dXzmSOBNg3gnVm4F4iLCMPMb5bzIjFA3S9PKVONCHNvYfINurFhT8drVsBYcrkTcg0+FkxzJcNsbUe5IGz+xtV5jI+XUN2xmVP5/Fphshv87c86btB7shbOUzAZBCZ+LWl9SGNCsXz3lqnOmLQEKBDRN/CxpDmEQ/q5KMbV0uoXBRF1+Ab/NxY1ZeUC8qugEUoxHr2KkrWYoDWhjEty2nP8kxKy9e7i6uVu1VLKhX4TaLy9J/eWD+Vr22ByFyfFVmANgg0/zUNP9uEiPUpoo3Xdvx2cgQESYbI9rZoWo2QDDEwSFoF3YNZ7nBIrMQLJlJ8aNF/dN2QZxyMbrXlVdPw95MxAhOTroYQbMSdTnctA7iCkJqPkF67ECF21hIJQ3/oTHjcH7QWUn2aTUo4Y7UQq9gvjabDzipMfUmGmAkai+WVoDBNWQMUeRzyYuKIB6ZVWM+Hi9hn+udj/Tl6+TJSADxk1HyFHKFdTOh9QWKEd2IHdgqlM+WMLy+SdjA28xro2h5Z2VWrUcDEm/pWEetooysBoXFrc2nm9/vG5QzDxCA8Fpd86QEbu8uMP9SquXW+snVyVjSfo/yltkkGqsIYDBI=
