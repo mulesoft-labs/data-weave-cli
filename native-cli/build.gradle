@@ -48,10 +48,11 @@ graal {
     outputName 'dw'
     graalVersion graalvmVersion
     option "-H:+ReportExceptionStackTraces"
-    option "-J-Xmx2048M"
+    option "-J-Xmx3G"
     option "--no-fallback"
     option "--allow-incomplete-classpath"
     option "-H:EnableURLProtocols=http,https"
+    option "--no-server"
 }
 
 import com.monochromeroad.gradle.plugin.aws.s3.S3Sync
