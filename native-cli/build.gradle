@@ -49,6 +49,9 @@ graal {
     graalVersion graalvmVersion
     option "-H:+ReportExceptionStackTraces"
     option "-J-Xmx1024M"
+    option "--no-fallback"
+    option "--allow-incomplete-classpath"
+    option "-H:EnableURLProtocols=http,https"
 }
 
 import com.monochromeroad.gradle.plugin.aws.s3.S3Sync

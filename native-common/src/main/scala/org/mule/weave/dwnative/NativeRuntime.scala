@@ -16,19 +16,18 @@ import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.exception.LocatableException
 import org.mule.weave.v2.parser.phase.CompilationException
 import org.mule.weave.v2.parser.phase.ModuleLoaderManager
-import org.mule.weave.v2.resources.NativeResourceLoader
 import org.mule.weave.v2.runtime.DataWeaveScriptingEngine
 import org.mule.weave.v2.runtime.DynamicModuleComponentFactory
+import org.mule.weave.v2.runtime.ExecuteResult
 import org.mule.weave.v2.runtime.InputType
 import org.mule.weave.v2.runtime.ScriptingBindings
-import org.mule.weave.v2.sdk.WeaveResource
-import org.mule.weave.v2.sdk.WeaveResourceResolver
+import org.mule.weave.v2.sdk.ClassLoaderWeaveResourceResolver
 
 class NativeRuntime(libDir: File, path: Array[File]) {
 
   private val pathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
-  private val weaveScriptingEngine = DataWeaveScriptingEngine(DynamicModuleComponentFactory(NativeResourceProvider, () => pathBasedResourceResolver, systemFirst = true))
+  private val weaveScriptingEngine = DataWeaveScriptingEngine(DynamicModuleComponentFactory(ClassLoaderWeaveResourceResolver(), () => pathBasedResourceResolver, systemFirst = true))
 
   def getResourceContent(ni: NameIdentifier): Option[String] = {
     pathBasedResourceResolver.resolve(ni).map(_.content())
@@ -59,6 +58,12 @@ class NativeRuntime(libDir: File, path: Array[File]) {
       }
     }
   }
+
+  def eval(script: String, inputs: ScriptingBindings): ExecuteResult = {
+    val dataWeaveScript = weaveScriptingEngine.compile(script, NameIdentifier.ANONYMOUS_NAME, inputs.entries().map((wi) => new InputType(wi, None)).toArray)
+    val serviceManager = ServiceManager(StdOutputLoggingService)
+    dataWeaveScript.exec(inputs, serviceManager)
+  }
 }
 
 case class WeaveInput(name: String, content: SourceProvider)
@@ -87,15 +92,6 @@ case class WeaveFailureResult(message: String) extends WeaveExecutionResult {
   override def success(): Boolean = false
 
   override def result(): String = message
-}
-
-
-object NativeResourceProvider extends WeaveResourceResolver {
-
-  def resolve(name: NameIdentifier): Option[WeaveResource] = {
-    val resourceName = name.name
-    Option(NativeResourceLoader.getResource(resourceName)).map((resource) => WeaveResource(resourceName, resource))
-  }
 }
 
 
