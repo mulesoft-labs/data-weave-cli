@@ -7,7 +7,7 @@ buildscript {
 }
 
 plugins {
-    id "com.palantir.graal" version "0.4.0"
+    id "com.palantir.graal" version "0.6.0"
 }
 
 
