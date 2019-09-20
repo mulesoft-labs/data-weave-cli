@@ -4,7 +4,6 @@ jobs:
       os: windows
       language: shell
       before_install:
-        - echo ${TRAVIS_BUILD_DIR}
         - powershell -command 'Set-MpPreference -DisableRealtimeMonitoring $true'
         - powershell -Command 'Set-ExecutionPolicy -ExecutionPolicy RemoteSigned'
         - choco install windows-sdk-10-version-1809-all
@@ -12,7 +11,7 @@ jobs:
         - source ${TRAVIS_BUILD_DIR}/../portapps/.travis/prepare.sh
         - bash ${TRAVIS_BUILD_DIR}/../portapps/.travis/java.sh
       script:
-        - "powerShell -Command '${TRAVIS_BUILD_DIR}/gradlew.bat native-cli:uploadDistro'"
+        - "powerShell -Command 'c:\Users\travis\build\mulesoft-labs\data-weave-native\gradlew.bat native-cli:uploadDistro'"
       deploy:
         - provider: script
           skip_cleanup: true
