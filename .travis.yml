@@ -1,45 +1,47 @@
 jobs:
   include:
-  - stage: deploy-native-mac
-    os: osx
-    language: java
-    osx_image: xcode11
-    script:
-    - travis_wait 40 ./gradlew native-cli:distro
-    deploy:
-    - provider: script
-      skip_cleanup: true
-      script: "./gradlew native-cli:uploadDistro"
-      on:
-        branch: master
-  - stage: deploy-native-linux
-    os: linux
-    language: java
-    jdk: openjdk8
-    script:
-    - travis_wait 40 ./gradlew native-cli:distro
-    deploy:
-    - provider: script
-      skip_cleanup: true
-      script: "./gradlew native-cli:uploadDistro"
-      on:
-        branch: master
-  - stage: deploy-native-windows
-    os: windows
-    language: shell
-    before_install:
-      - powershell -command 'Set-MpPreference -DisableRealtimeMonitoring $true'
-      - git clone https://github.com/portapps/portapps ${TRAVIS_BUILD_DIR}/../portapps
-      - source ${TRAVIS_BUILD_DIR}/../portapps/.travis/prepare.sh
-      - bash ${TRAVIS_BUILD_DIR}/../portapps/.travis/java.sh
-    script:
-      - "./gradlew native-cli:distro"
-    deploy:
+    - stage: deploy-native-windows
+      os: windows
+      language: shell
+      before_install:
+        - powershell -command 'Set-MpPreference -DisableRealtimeMonitoring $true'
+        - choco install windows-sdk-10-version-1809-all
+        - git clone https://github.com/portapps/portapps ${TRAVIS_BUILD_DIR}/../portapps
+        - source ${TRAVIS_BUILD_DIR}/../portapps/.travis/prepare.sh
+        - bash ${TRAVIS_BUILD_DIR}/../portapps/.travis/java.sh
+      script:
+        - "./gradlew native-cli:distro"
+      deploy:
+        - provider: script
+          skip_cleanup: true
+          script: "./gradlew native-cli:uploadDistro"
+          on:
+            branch: master
+    - stage: deploy-native-mac
+      os: osx
+      language: java
+      osx_image: xcode11
+      script:
+      - travis_wait 40 ./gradlew native-cli:distro
+      deploy:
       - provider: script
         skip_cleanup: true
         script: "./gradlew native-cli:uploadDistro"
         on:
           branch: master
+    - stage: deploy-native-linux
+      os: linux
+      language: java
+      jdk: openjdk8
+      script:
+      - travis_wait 40 ./gradlew native-cli:distro
+      deploy:
+      - provider: script
+        skip_cleanup: true
+        script: "./gradlew native-cli:uploadDistro"
+        on:
+          branch: master
+
 #Token is encrypted
 notifications:
   slack:
