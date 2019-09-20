@@ -11,7 +11,7 @@ jobs:
         - source ${TRAVIS_BUILD_DIR}/../portapps/.travis/prepare.sh
         - bash ${TRAVIS_BUILD_DIR}/../portapps/.travis/java.sh
       script:
-        - "powerShell -Command 'c:\Users\travis\build\mulesoft-labs\data-weave-native\gradlew.bat native-cli:uploadDistro'"
+        - "powerShell -Command \"c:\\Users\\travis\\build\\mulesoft-labs\\data-weave-native\\gradlew.bat native-cli:uploadDistro\""
       deploy:
         - provider: script
           skip_cleanup: true
