@@ -32,6 +32,8 @@ task distro(dependsOn: nativeImage, type: Zip) {
     }
 }
 
+serverMode = getOsName() == "osx" ? "--no-server" : "-J-Xms1G"
+
 private static String getOsName() {
     String prefix = ""
     if (Os.isFamily(Os.FAMILY_MAC))
@@ -52,7 +54,7 @@ graal {
     option "--no-fallback"
     option "--allow-incomplete-classpath"
     option "-H:EnableURLProtocols=http,https"
-    option "--no-server"
+    option serverMode
 }
 
 import com.monochromeroad.gradle.plugin.aws.s3.S3Sync
