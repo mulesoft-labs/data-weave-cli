@@ -20,6 +20,17 @@ subprojects {
     group 'org.mule.weave.native'
     version nativeVersion
 
+    compileScala {
+        targetCompatibility = "1.8"
+        sourceCompatibility = "1.8"
+    }
+
+
+    compileJava   {
+        sourceCompatibility = '1.8'
+        targetCompatibility = '1.8'
+    }
+
 
     repositories {
         mavenCentral()
