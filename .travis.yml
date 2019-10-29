@@ -22,7 +22,14 @@ jobs:
       os: osx
       language: java
       osx_image: xcode11
-      jdk: openjdk8
+      before_install:
+        - curl -sL https://get.sdkman.io | bash
+        - echo sdkman_auto_answer=true > $HOME/.sdkman/etc/config
+        - source "$HOME/.sdkman/bin/sdkman-init.sh"
+      install:
+        - sdk install java $(sdk list java | grep -o "8\.[0-9\.]*hs-adpt" | head -1)
+        - java -Xmx32m -version
+        - javac -J-Xmx32m -version
       script:
       - travis_wait 40 ./gradlew native-cli:distro
       deploy:
