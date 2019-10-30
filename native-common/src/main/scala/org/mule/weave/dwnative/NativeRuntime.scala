@@ -6,6 +6,7 @@ import java.io.PrintWriter
 import java.io.StringWriter
 
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
+import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
 import org.mule.weave.v2.model.service.StdOutputLoggingService
 import org.mule.weave.v2.model.values.BinaryValue
@@ -82,7 +83,15 @@ case class WeaveSuccessResult(outputStream: OutputStream, charset: String) exten
   override def result(): String = {
     outputStream match {
       case ap: AutoPersistedOutputStream => {
-        new String(BinaryValue.getBytesFromSeekableStream(ap.toInputStream, true), charset)
+        implicit val context: EvaluationContext = EvaluationContext()
+        try {
+          new String(BinaryValue.getBytesFromSeekableStream(ap.toInputStream, close = true), charset)
+        } finally {
+          context.close()
+        }
+      }
+      case _ => {
+        outputStream.toString
       }
     }
   }
