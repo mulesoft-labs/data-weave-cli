@@ -53,6 +53,29 @@ graal {
     option "--no-fallback"
     option "--allow-incomplete-classpath"
     option "-H:EnableURLProtocols=http,https"
+    option "--initialize-at-build-time=org.mule.weave.dwnative.Startup," +
+            "scala.," +
+            "org.mule.weave.v2.parser.," +
+            "org.mule.weave.v2.codegen.StringCodeWriter," +
+            "org.mule.weave.v2.resources.WeaveResourceLoader\$," +
+            "org.mule.weave.v2.annotations.," +
+            "org.mule.weave.v2.ts.," +
+            "org.mule.weave.v2.scope.," +
+            "org.mule.weave.v2.scope.," +
+            "org.mule.weave.v2.grammar.,"+
+            "org.mule.weave.v2.sdk.," +
+            "org.mule.weave.v2.utils.," +
+            //Parboiled
+            "org.parboiled2.," +
+            "shapeless.syntax.," +
+            "shapeless.," +
+            "org.mule.weave.dwnative."
+            //For Runtime execution
+//            "org.mule.weave.v2.interpreted.,"+
+//            "org.mule.weave.v2.model.values.,"
+//            "org.mule.weave.v2.model.types.,"
+//            "org.mule.weave.v2.core.functions."
+//    option "-H:+TraceClassInitialization"
     option getOsName() == "osx" ? "--no-server" : "-J-Xms1G"
 }
 

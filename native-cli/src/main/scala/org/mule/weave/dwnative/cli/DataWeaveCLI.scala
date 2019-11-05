@@ -63,7 +63,7 @@ class DataWeaveCLIRunner {
     var path: String = ""
     var scriptToRun: Option[String] = None
     var output: Option[String] = None
-    var debug = false
+    var profile = false
     var eval = false
     var main: Option[String] = None
     val inputs: mutable.Map[String, File] = mutable.Map()
@@ -138,8 +138,8 @@ class DataWeaveCLIRunner {
             return Right("Missing script file path.")
           }
         }
-        case "-d" | "--debug" => {
-          debug = true
+        case "--profile" => {
+          profile = true
         }
         case "--eval" => {
           eval = true
@@ -158,7 +158,7 @@ class DataWeaveCLIRunner {
     if (scriptToRun.isEmpty && main.isEmpty) {
       Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath>")
     } else {
-      Left(WeaveRunnerConfig(paths, debug, eval, scriptToRun, main, inputs.toMap, output))
+      Left(WeaveRunnerConfig(paths, profile, eval, scriptToRun, main, inputs.toMap, output))
     }
   }
 
@@ -198,6 +198,7 @@ class DataWeaveCLIRunner {
       | https://docs.mulesoft.com/mule-runtime/4.2/dataweave
     """.stripMargin
   }
+
 
 
   def run(config: WeaveRunnerConfig): Int = {
@@ -245,7 +246,7 @@ class DataWeaveCLIRunner {
 
       val defaultOutputType = Option(System.getenv(DW_DEFAULT_OUTPUT_MIMETYPE_VAR)).getOrElse("application/json");
 
-      val result = nativeRuntime.run(script, scriptingBindings, out, defaultOutputType)
+      val result = nativeRuntime.run(script, scriptingBindings, out, defaultOutputType, config.profile)
       //load inputs from
       if (result.success()) {
         0
@@ -272,5 +273,5 @@ class CustomWeaveDataFormat(moduleManager: ModuleLoaderManager) extends WeaveDat
   override def createModuleLoader(): ModuleLoaderManager = moduleManager
 }
 
-case class WeaveRunnerConfig(path: Array[String], debug: Boolean, eval: Boolean, scriptToRun: Option[String], main: Option[String], inputs: Map[String, File], outputPath: Option[String])
+case class WeaveRunnerConfig(path: Array[String], profile: Boolean, eval: Boolean, scriptToRun: Option[String], main: Option[String], inputs: Map[String, File], outputPath: Option[String])
 

@@ -1,40 +1,5 @@
 {
   "resources":[
-    {"pattern":"META-INF/services/ch.qos.logback.classic.spi.Configurator"},
-    {"pattern":"META-INF/services/org.mule.weave.v2.model.ServiceRegistration"},
-    {"pattern":"META-INF/services/org.mule.weave.v2.module.DataFormat"},
-    {"pattern":"META-INF/services/org.mule.weave.v2.module.native.NativeValueProvider"},
-    {"pattern":"META-INF/services/org.mule.weave.v2.runtime.core.functions.ReadFunctionProtocolHandler"},
-    {"pattern":"javax/crypto/Cipher.class"}, 
-    {"pattern":"library.properties"},
-    {"pattern":"dw/core/Arrays.dwl"},
-    {"pattern":"dw/core/Binaries.dwl"},
-    {"pattern":"dw/core/Numbers.dwl"},
-    {"pattern":"dw/core/Objects.dwl"},
-    {"pattern":"dw/core/Strings.dwl"},
-    {"pattern":"dw/core/URL.dwl"},
-    {"pattern":"dw/extension/DataFormat.dwl"},
-    {"pattern":"dw/module/Multipart.dwl"},
-    {"pattern":"dw/util/Diff.dwl"},
-    {"pattern":"dw/util/Timer.dwl"},
-    {"pattern":"dw/util/Tree.dwl"},
-    {"pattern":"dw/util/Values.dwl"},
-    {"pattern":"dw/Core.dwl"},
-    {"pattern":"dw/Crypto.dwl"},
-    {"pattern":"dw/Runtime.dwl"},
-    {"pattern":"dw/System.dwl"},
 
-    {"pattern":"dw/http/BodyUtils.dwl"},
-    {"pattern":"dw/http/Client.dwl"},
-    {"pattern":"dw/http/Interceptors.dwl"},
-    {"pattern":"dw/http/Server.dwl"},
-    {"pattern":"dw/http/Types.dwl"},
-    {"pattern":"dw/io/IO.dwl"},
-
-    {"pattern":"META-INF/services/ch.qos.logback.classic.spi.Configurator"},
-    {"pattern":"META-INF/services/org.xnio.XnioProvider"},
-    {"pattern":"org/xnio/Version.properties"},
-    {"pattern":"sun/net/idn/uidna.spp"},
-    {"pattern":"sun/text/resources/unorm.icu"}
   ]
 }

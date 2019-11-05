@@ -1,47 +1,5 @@
 [
   {
-    "name": "io.undertow.UndertowLogger_$logger",
-    "methods": [
-      {
-        "name": "<init>",
-        "parameterTypes": [
-          "org.jboss.logging.Logger"
-        ]
-      }
-    ]
-  },
-  {
-    "name": "io.undertow.server.protocol.http.HttpRequestParser$$generated",
-    "methods": [
-      {
-        "name": "<init>",
-        "parameterTypes": [
-          "org.xnio.OptionMap"
-        ]
-      }
-    ]
-  },
-  {
-    "name": "io.undertow.util.Headers",
-    "allDeclaredFields": true
-  },
-  {
-    "name": "io.undertow.util.HttpString",
-    "fields": [
-      {
-        "name": "hashCode"
-      }
-    ]
-  },
-  {
-    "name": "io.undertow.util.Methods",
-    "allDeclaredFields": true
-  },
-  {
-    "name": "io.undertow.util.Protocols",
-    "allDeclaredFields": true
-  },
-  {
     "name": "java.net.HttpURLConnection",
     "methods": [
       {
@@ -49,38 +7,6 @@
         "parameterTypes": [
           "long"
         ]
-      }
-    ]
-  },
-  {
-    "name": "java.nio.DirectByteBuffer",
-    "methods": [
-      {
-        "name": "cleaner",
-        "parameterTypes": []
-      }
-    ]
-  },
-  {
-    "name": "java.nio.channels.MulticastChannel"
-  },
-  {
-    "name": "org.xnio._private.Messages_$logger",
-    "methods": [
-      {
-        "name": "<init>",
-        "parameterTypes": [
-          "org.jboss.logging.Logger"
-        ]
-      }
-    ]
-  },
-  {
-    "name": "sun.misc.Cleaner",
-    "methods": [
-      {
-        "name": "clean",
-        "parameterTypes": []
       }
     ]
   }
