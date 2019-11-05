@@ -13,7 +13,7 @@ buildscript {
 sourceSets {
     main {
         scala {
-            srcDirs = ['src/main/scala', 'build/generated']
+            srcDirs = ['src/main/scala', 'build/genresource']
         }
     }
 }
@@ -47,7 +47,7 @@ task downloadWlang(type: Copy) {
 
 task genWlangSource {
     def wlangResources = new File("$buildDir/wlang")
-    def genDirectory = new File("$project.buildDir/generated")
+    def genDirectory = new File("$project.buildDir/genresource")
     def outputFile = new File(genDirectory, "org/mule/weave/v2/resources/WeaveResourceLoader.scala")
     new ResourceBuilder().run(outputFile, wlangResources);
 }

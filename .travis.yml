@@ -31,6 +31,8 @@ jobs:
         - java -Xmx32m -version
         - javac -J-Xmx32m -version
       script:
+      - ./gradlew clean
+      - travis_wait 40 ./gradlew native-cli:nativeImage
       - travis_wait 40 ./gradlew native-cli:distro
       deploy:
       - provider: script
