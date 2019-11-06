@@ -1,4 +1,4 @@
-package org.mule.weave.dwnative
+package org.mule.weave.dwnative.utils
 
 object AnsiColor {
 

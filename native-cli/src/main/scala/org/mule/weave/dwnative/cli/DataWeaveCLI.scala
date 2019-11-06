@@ -3,16 +3,14 @@ package org.mule.weave.dwnative.cli
 import java.io.File
 import java.io.FileOutputStream
 
-import org.mule.weave.dwnative.AnsiColor
-import org.mule.weave.dwnative.DataWeaveUtils
 import org.mule.weave.dwnative.NativeRuntime
-import org.mule.weave.dwnative.WeaveProperties
+import org.mule.weave.dwnative.utils.AnsiColor
+import org.mule.weave.dwnative.utils.DataWeaveUtils
+import org.mule.weave.dwnative.utils.WeaveProperties
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.module.DataFormatManager
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
-import org.mule.weave.v2.parser.exception.LocatableException
-import org.mule.weave.v2.parser.phase.CompilationException
 import org.mule.weave.v2.parser.phase.ModuleLoaderManager
 import org.mule.weave.v2.runtime.ScriptingBindings
 import org.mule.weave.v2.runtime.utils.AnsiColor.red

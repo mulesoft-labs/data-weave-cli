@@ -4,11 +4,9 @@ import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
-import org.mule.weave.dwnative.DataWeaveUtils;
 import org.mule.weave.dwnative.NativeRuntime;
 import org.mule.weave.dwnative.WeaveExecutionResult;
-import org.mule.weave.dwnative.WeaveInput;
-import org.mule.weave.v2.module.reader.SourceProvider$;
+import org.mule.weave.dwnative.utils.DataWeaveUtils;
 import org.mule.weave.v2.runtime.ScriptingBindings;
 
 import java.io.File;
