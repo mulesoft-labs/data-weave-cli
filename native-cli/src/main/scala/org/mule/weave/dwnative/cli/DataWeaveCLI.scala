@@ -33,9 +33,9 @@ class DataWeaveCLIRunner {
 
   val DW_DEFAULT_OUTPUT_MIMETYPE_VAR = "DW_DEFAULT_OUTPUT_MIMETYPE"
 
-  val DW_CLI_VERSION = "1.0.0"
+  val DW_CLI_VERSION = "1.0.1"
 
-  val DW_RUNTIME_VERSION = "2.2.3"
+  val DW_RUNTIME_VERSION = "2.3.0"
 
   def run(args: Array[String]): Int = {
     val scriptToRun = parse(args)

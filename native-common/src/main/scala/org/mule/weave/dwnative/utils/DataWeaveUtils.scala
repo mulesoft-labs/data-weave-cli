@@ -43,7 +43,7 @@ object DataWeaveUtils {
         if(dwScriptPath != null) {
           val scriptPath = new File(dwScriptPath)
           if(scriptPath.isFile && scriptPath.getName == "dw"){
-            return scriptPath.getAbsoluteFile.getParentFile
+            return scriptPath.getCanonicalFile.getParentFile
           }
         }
         println(AnsiColor.yellow(s"[warning] Unable to detect Weave Home directory so local directory is going to be used. Please either define the env variable WEAVE_HOME or copy the weave distro into `${defaultDWHomeDir.getAbsolutePath}`."))
