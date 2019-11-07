@@ -28,6 +28,7 @@ import org.mule.weave.v2.runtime.InputType
 import org.mule.weave.v2.runtime.ModuleComponents
 import org.mule.weave.v2.runtime.ModuleComponentsFactory
 import org.mule.weave.v2.runtime.ScriptingBindings
+import org.mule.weave.v2.runtime.ScriptingEngineSetupException
 import org.mule.weave.v2.sdk.TwoLevelWeaveResourceResolver
 import org.mule.weave.v2.sdk.WeaveResourceResolver
 
@@ -72,9 +73,11 @@ class NativeRuntime(libDir: File, path: Array[File]) {
       case le: LocatableException => {
         WeaveFailureResult(le.getMessage() + " at:\n" + le.location.locationString)
       }
+      case se: ScriptingEngineSetupException => {
+        WeaveFailureResult(se.getMessage)
+      }
       case le: Exception => {
         val writer = new StringWriter()
-        le.printStackTrace()
         le.printStackTrace(new PrintWriter(writer))
         WeaveFailureResult("Internal error : " + le.getClass.getName + " : " + le.getMessage + "\n" + writer.toString)
       }

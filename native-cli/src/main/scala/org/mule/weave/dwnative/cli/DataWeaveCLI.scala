@@ -215,7 +215,7 @@ class DataWeaveCLIRunner {
       config.scriptToRun.get
     }
 
-    val defaultInputType = Option(System.getenv(DW_DEFAULT_INPUT_MIMETYPE_VAR)).getOrElse("application/json");
+    val defaultInputType = Option(System.getenv(DW_DEFAULT_INPUT_MIMETYPE_VAR)).getOrElse("application/json")
     val scriptingBindings = new ScriptingBindings
     if (config.inputs.isEmpty) {
       scriptingBindings.addBinding("payload", System.in, defaultInputType)
