@@ -18,7 +18,7 @@ sourceSets {
     }
 }
 
-repositories{
+repositories {
     mavenLocal()
 }
 
@@ -44,14 +44,37 @@ task downloadWlang(type: Copy) {
     into "$buildDir/wlang"
 }
 
+def genDirectory = new File("$project.buildDir/genresource")
 
 task genWlangSource {
     def wlangResources = new File("$buildDir/wlang")
-    def genDirectory = new File("$project.buildDir/genresource")
     def outputFile = new File(genDirectory, "org/mule/weave/v2/resources/WeaveResourceLoader.scala")
     new ResourceBuilder().run(outputFile, wlangResources);
 }
 
+task genVersions {
+    def componentVersion = new File(genDirectory, "org/mule/weave/v2/version/ComponentVersion.scala")
+    def parentFile = componentVersion.getParentFile()
+    if (!parentFile.exists()) {
+        parentFile.mkdirs()
+    }
+    final PrintWriter outputPrinter = new PrintWriter(new FileWriter(componentVersion))
+    def properties = new Properties()
+    def gradleProperties = new File(project.projectDir, "../gradle.properties")
+    println(gradleProperties)
+    properties.load(new FileInputStream(gradleProperties))
+    outputPrinter.println("package org.mule.weave.v2.version")
+    outputPrinter.println()
+    outputPrinter.println("object ComponentVersion {")
+    def entrySet = properties.entrySet()
+    for (Map.Entry entry : entrySet) {
+        outputPrinter.println("\tvar " + entry.getKey() + " = \"" + entry.getValue() + "\"")
+    }
+    outputPrinter.println("}")
+    outputPrinter.close()
+}
+
+genWlangSource.dependsOn(genVersions)
 genWlangSource.mustRunAfter(downloadWlang)
 genWlangSource.dependsOn(downloadWlang)
 compileScala.dependsOn(genWlangSource)
@@ -63,7 +86,7 @@ import org.apache.commons.io.IOUtils
 
 public class ResourceBuilder {
 
-    public void run(File outputScalaFile, File... resourceDir ) throws Exception {
+    public void run(File outputScalaFile, File... resourceDir) throws Exception {
         def parentFile = outputScalaFile.getParentFile()
         if (!parentFile.exists()) {
             parentFile.mkdirs()
@@ -105,7 +128,7 @@ public class ResourceBuilder {
             boolean accept(File pathname) {
                 return pathname.isDirectory() || pathname.getName().endsWith(".dwl")
             }
-        } );
+        });
         for (File file : files) {
             final String resourcePath = basePath.isEmpty() ? file.getName().replace("/", "::") : basePath + "::" + file.getName().replace(".dwl", "");
             if (file.isDirectory()) {
@@ -113,13 +136,15 @@ public class ResourceBuilder {
             } else {
                 final String variableName = FilenameUtils.getBaseName(file.getName());
                 resources.put(resourcePath, variableName);
-                final List<String> lines = IOUtils.readLines(new FileInputStream(file), "UTF-8");
+                def stream = new FileInputStream(file)
+                final List<String> lines = IOUtils.readLines(stream, "UTF-8");
                 outputPrinter.println("  def " + variableName + " =");
                 outputPrinter.println("    Array(");
                 for (String line : lines) {
                     outputPrinter.println("\"\"\"" + line + "\"\"\", ");
                 }
                 outputPrinter.println("\"\").mkString(\"\\n\").stripMargin");
+                stream.close()
             }
         }
     }

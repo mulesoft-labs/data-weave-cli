@@ -14,6 +14,7 @@ import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.phase.ModuleLoaderManager
 import org.mule.weave.v2.runtime.ScriptingBindings
 import org.mule.weave.v2.runtime.utils.AnsiColor.red
+import org.mule.weave.v2.version.ComponentVersion
 
 import scala.collection.mutable
 import scala.io.Source
@@ -33,9 +34,9 @@ class DataWeaveCLIRunner {
 
   val DW_DEFAULT_OUTPUT_MIMETYPE_VAR = "DW_DEFAULT_OUTPUT_MIMETYPE"
 
-  val DW_CLI_VERSION = "1.0.1"
+  val DW_CLI_VERSION = ComponentVersion.nativeVersion
 
-  val DW_RUNTIME_VERSION = "2.3.0"
+  val DW_RUNTIME_VERSION = ComponentVersion.weaveVersion
 
   def run(args: Array[String]): Int = {
     val scriptToRun = parse(args)

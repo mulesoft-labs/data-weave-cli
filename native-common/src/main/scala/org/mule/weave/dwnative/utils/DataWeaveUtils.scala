@@ -2,24 +2,6 @@ package org.mule.weave.dwnative.utils
 
 import java.io.File
 
-import org.mule.weave.dwnative.CustomWeaveDataFormat
-import org.mule.weave.v2.env.StaticServiceProvider
-import org.mule.weave.v2.env.WeaveRuntime
-import org.mule.weave.v2.model.ServiceRegistration
-import org.mule.weave.v2.module.DataFormat
-import org.mule.weave.v2.module.csv.CSVDataFormat
-import org.mule.weave.v2.module.json.JsonDataFormat
-import org.mule.weave.v2.module.multipart.MultiPartDataFormat
-import org.mule.weave.v2.module.native.NativeValueProvider
-import org.mule.weave.v2.module.octetstream.OctetStreamDataFormat
-import org.mule.weave.v2.module.properties.PropertiesDataFormat
-import org.mule.weave.v2.module.textplain.TextPlainDataFormat
-import org.mule.weave.v2.module.xml.XmlDataFormat
-import org.mule.weave.v2.parser.phase.ModuleLoaderManager
-import org.mule.weave.v2.runtime.core.SystemNativeValueProvider
-import org.mule.weave.v2.runtime.core.functions.ReadFunctionProtocolHandler
-import org.mule.weave.v2.runtime.core.functions.UrlProtocolHandler
-
 object DataWeaveUtils {
 
   def getDWHome(): File = {
@@ -67,25 +49,6 @@ object DataWeaveUtils {
     } else {
       new File(getDWHome(), "libs")
     }
-  }
-
-  def setupServices(moduleLoaderManager: ModuleLoaderManager): Unit = {
-    val services: Map[Class[_], Seq[_]] = Map(
-      classOf[NativeValueProvider] -> Seq(new SystemNativeValueProvider()), //Native Functions
-      classOf[DataFormat[_, _]] -> Seq(
-        new CSVDataFormat,
-        new JsonDataFormat,
-        new XmlDataFormat,
-        new CustomWeaveDataFormat(moduleLoaderManager),
-        new TextPlainDataFormat,
-        new OctetStreamDataFormat,
-        new PropertiesDataFormat,
-        new MultiPartDataFormat),
-      classOf[ServiceRegistration[_]] -> Seq(),
-      classOf[ReadFunctionProtocolHandler] -> Seq(new UrlProtocolHandler())
-    )
-    //Configure static provider
-    WeaveRuntime.setServiceProvider(new StaticServiceProvider(services))
   }
 }
 
