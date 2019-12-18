@@ -54,16 +54,16 @@ class NativeRuntime(libDir: File, path: Array[File]) {
 
       val dataWeaveScript =
         if (profile) {
-          time(() => weaveScriptingEngine.compile(script, NameIdentifier.ANONYMOUS_NAME, inputs.entries().map((wi) => new InputType(wi, None)).toArray), "Compile")
+          time(() => weaveScriptingEngine.compile(script, NameIdentifier.ANONYMOUS_NAME, inputs.entries().map((wi) => new InputType(wi, None)).toArray, defaultOutputMimeType), "Compile")
         } else {
-          weaveScriptingEngine.compile(script, NameIdentifier.ANONYMOUS_NAME, inputs.entries().map((wi) => new InputType(wi, None)).toArray)
+          weaveScriptingEngine.compile(script, NameIdentifier.ANONYMOUS_NAME, inputs.entries().map((wi) => new InputType(wi, None)).toArray, defaultOutputMimeType)
         }
       val serviceManager = ServiceManager(StdOutputLoggingService)
       val result =
         if (profile) {
-          time(() => dataWeaveScript.write(inputs, serviceManager, dataWeaveScript.declaredOutput().getOrElse(defaultOutputMimeType), Some(out)), "Execution")
+          time(() => dataWeaveScript.write(inputs, serviceManager, Some(out)), "Execution")
         } else {
-          dataWeaveScript.write(inputs, serviceManager, dataWeaveScript.declaredOutput().getOrElse(defaultOutputMimeType), Some(out))
+          dataWeaveScript.write(inputs, serviceManager, Some(out))
         }
       WeaveSuccessResult(out, result.getCharset().name())
     } catch {
