@@ -65,6 +65,7 @@ graal {
             "org.mule.weave.v2.grammar.,"+
             "org.mule.weave.v2.sdk.," +
             "org.mule.weave.v2.utils.," +
+            "org.mule.weave.v2.versioncheck.," +
             //Parboiled
             "org.parboiled2.," +
             "shapeless.syntax.," +

@@ -108,8 +108,8 @@ class NativeModuleComponentFactory(dynamicLevel: () => WeaveResourceResolver, sy
 
 
   override def createComponents(): ModuleComponents = {
-    val currentClassloader = ModuleParsingPhasesManager(ModuleLoaderManager(ModuleLoader(dynamicLevel())))
-    val parser = CompositeModuleParsingPhasesManager(currentClassloader, NativeSystemModuleComponents.systemModuleParser)
+    val currentClassloader: ModuleParsingPhasesManager = ModuleParsingPhasesManager(ModuleLoaderManager(ModuleLoader(dynamicLevel())))
+    val parser: CompositeModuleParsingPhasesManager = CompositeModuleParsingPhasesManager(NativeSystemModuleComponents.systemModuleParser, currentClassloader)
     val compiler: CustomRuntimeModuleNodeCompiler = RuntimeModuleNodeCompiler.chain(currentClassloader, systemModuleCompiler, parentLast = !systemFirst)
     ModuleComponents(new TwoLevelWeaveResourceResolver(NativeResourceResolver, dynamicLevel), parser, compiler)
   }

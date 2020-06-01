@@ -15,9 +15,13 @@ import org.mule.weave.v2.parser.phase.ModuleLoaderManager
 import org.mule.weave.v2.runtime.ScriptingBindings
 import org.mule.weave.v2.runtime.utils.AnsiColor.red
 import org.mule.weave.v2.version.ComponentVersion
+import sun.misc.Signal
+import sun.misc.SignalHandler
 
 import scala.collection.mutable
 import scala.io.Source
+import scala.util.Try
+
 
 object DataWeaveCLI extends App {
 
@@ -199,7 +203,6 @@ class DataWeaveCLIRunner {
   }
 
 
-
   def run(config: WeaveRunnerConfig): Int = {
     val path = config.path.map(new File(_))
     val nativeRuntime = new NativeRuntime(DataWeaveUtils.getLibPathHome(), path)
@@ -228,7 +231,24 @@ class DataWeaveCLIRunner {
 
     if (config.eval) {
       try {
-        nativeRuntime.eval(script, scriptingBindings)
+        //We need this to be able to handle the ctrl+c
+        val signalHandler: SignalHandler = (sig) => {
+          System.exit(sig.getNumber)
+        }
+        Signal.handle(new Signal("INT"), signalHandler)
+        Signal.handle(new Signal("TERM"), signalHandler)
+
+        val result = nativeRuntime.eval(script, scriptingBindings)
+        Runtime.getRuntime.addShutdownHook(new Thread() {
+          override def run(): Unit = {
+            Try(result.close())
+            System.out.println("Thanks for using DW. Have a nice day!")
+          }
+        })
+        System.out.println("Press 'ctrl'+c to stop the process.")
+        while (true) {
+          Thread.sleep(1000)
+        }
         0
       } catch {
         case le: Exception => {
@@ -237,14 +257,10 @@ class DataWeaveCLIRunner {
           -1
         }
       }
-
     } else {
 
       val out = if (config.outputPath.isDefined) new FileOutputStream(config.outputPath.get) else System.out
-
-
       val defaultOutputType = Option(System.getenv(DW_DEFAULT_OUTPUT_MIMETYPE_VAR)).getOrElse("application/json");
-
       val result = nativeRuntime.run(script, scriptingBindings, out, defaultOutputType, config.profile)
       //load inputs from
       if (result.success()) {

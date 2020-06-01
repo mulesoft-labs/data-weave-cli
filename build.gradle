@@ -1,15 +1,18 @@
 buildscript {
     repositories {
+        mavenLocal()
         maven {
             url "https://plugins.gradle.org/m2/"
         }
     }
+    dependencies {
+        classpath "com.palantir.graal:gradle-graal:0.7.0"
+
+    }
 }
 
-plugins {
-    id "com.palantir.graal" version "0.6.0"
-}
 
+apply plugin: 'com.palantir.graal'
 
 subprojects {
 
