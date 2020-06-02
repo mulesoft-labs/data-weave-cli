@@ -14,7 +14,6 @@ jobs:
     - javac -J-Xmx32m -version
     script:
     - "./gradlew clean"
-    - travis_wait 40 ./gradlew native-cli:nativeImage
     - travis_wait 40 ./gradlew native-cli:distro
     deploy:
     - provider: script
@@ -36,5 +35,4 @@ jobs:
         branch: master
 notifications:
   slack:
-    rooms:
-      secure: FYdW5paSCZKRA1VKWBdD06KNshWMcnod6Qy3Mjpc5Wfq9bUg8/Kco2MVzRrPQbiqUrIUWeRRpRysbxVnMGxgS30bR9NIZahATtLH69/2W2/qs5g4J+aU829pr5o8XAh+oFDHpaCVD4kgKBRGykUgxjDhBuyfwmklLxXzvXaCFKdkELVTKhK9xoa8mR8eWGtFO+jNMQDtbCaIZGA92lg+dC8/zqSlzXWSze9nmsGBjOhVeUxyxcxsbxCnSR0Su5vaOIOQ/J+G4aAl4cVYuWFGbIXUgDfFdAtG6Kkhz05TV78nMYNl1fvVlFZzoYFS1nVXyZaZGxqZQfD4ALcJmZ9ecb+Qq3+0oGky8SMvSEWuPsQYC/g2IWIkv8ydftLWWeMC21cfcG1HwoJhMb0iSvLPiPM12aoTi4Hjp7q0fE206MB+XaLGY+LD1aqFwyTEhn9N1SyWCuZ16N7KvZFqtQlQXkIZ0zX84z49FvzQm6dJAOGvPw/jpmcuo1miIPDluYja3vZmDdfMkBk/Fzr5JsO5c1eSmGhdU2mI/kApht+wtYUIDNBboYplwGmx9Gttmwln29y979xI/e5cIaOZZh7C9OtMSbl3Gl4R8PEqAcrc5p1vHJqcz6B1kuoOn/je9BINmoa4Rms8rvEZVi5PySVv4u9eQAZoL1USLAKNaX1hEJk=
+    secure: FYdW5paSCZKRA1VKWBdD06KNshWMcnod6Qy3Mjpc5Wfq9bUg8/Kco2MVzRrPQbiqUrIUWeRRpRysbxVnMGxgS30bR9NIZahATtLH69/2W2/qs5g4J+aU829pr5o8XAh+oFDHpaCVD4kgKBRGykUgxjDhBuyfwmklLxXzvXaCFKdkELVTKhK9xoa8mR8eWGtFO+jNMQDtbCaIZGA92lg+dC8/zqSlzXWSze9nmsGBjOhVeUxyxcxsbxCnSR0Su5vaOIOQ/J+G4aAl4cVYuWFGbIXUgDfFdAtG6Kkhz05TV78nMYNl1fvVlFZzoYFS1nVXyZaZGxqZQfD4ALcJmZ9ecb+Qq3+0oGky8SMvSEWuPsQYC/g2IWIkv8ydftLWWeMC21cfcG1HwoJhMb0iSvLPiPM12aoTi4Hjp7q0fE206MB+XaLGY+LD1aqFwyTEhn9N1SyWCuZ16N7KvZFqtQlQXkIZ0zX84z49FvzQm6dJAOGvPw/jpmcuo1miIPDluYja3vZmDdfMkBk/Fzr5JsO5c1eSmGhdU2mI/kApht+wtYUIDNBboYplwGmx9Gttmwln29y979xI/e5cIaOZZh7C9OtMSbl3Gl4R8PEqAcrc5p1vHJqcz6B1kuoOn/je9BINmoa4Rms8rvEZVi5PySVv4u9eQAZoL1USLAKNaX1hEJk=
