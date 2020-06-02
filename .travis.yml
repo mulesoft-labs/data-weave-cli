@@ -1,60 +1,40 @@
 jobs:
   include:
-#    - stage: deploy-native-windows
-#      os: windows
-#      language: shell
-#      before_install:
-#        - powershell -command 'Set-MpPreference -DisableRealtimeMonitoring $true'
-#        - powershell -Command 'Set-ExecutionPolicy -ExecutionPolicy RemoteSigned'
-#        - choco install windows-sdk-10-version-1809-all
-#        - git clone https://github.com/portapps/portapps ${TRAVIS_BUILD_DIR}/../portapps
-#        - source ${TRAVIS_BUILD_DIR}/../portapps/.travis/prepare.sh
-#        - bash ${TRAVIS_BUILD_DIR}/../portapps/.travis/java.sh
-#      script:
-#        - "powerShell -Command \"c:\\Users\\travis\\build\\mulesoft-labs\\data-weave-native\\gradlew.bat native-cli:distro\""
-#      deploy:
-#        - provider: script
-#          skip_cleanup: true
-#          script: "./gradlew native-cli:uploadDistro"
-#          on:
-#            branch: master
-    - stage: deploy-native-mac
-      os: osx
-      language: java
-      osx_image: xcode11
-      before_install:
-        - curl -sL https://get.sdkman.io | bash
-        - echo sdkman_auto_answer=true > $HOME/.sdkman/etc/config
-        - source "$HOME/.sdkman/bin/sdkman-init.sh"
-      install:
-        - sdk install java $(sdk list java | grep -o "8\.[0-9\.]*hs-adpt" | head -1)
-        - java -Xmx32m -version
-        - javac -J-Xmx32m -version
-      script:
-      - ./gradlew clean
-      - travis_wait 40 ./gradlew native-cli:nativeImage
-      - travis_wait 40 ./gradlew native-cli:distro
-      deploy:
-      - provider: script
-        skip_cleanup: true
-        script: "./gradlew native-cli:uploadDistro"
-        on:
-          branch: master
-    - stage: deploy-native-linux
-      os: linux
-      language: java
-      jdk: openjdk8
-      script:
-      - travis_wait 40 ./gradlew native-cli:distro
-      deploy:
-      - provider: script
-        skip_cleanup: true
-        script: "./gradlew native-cli:uploadDistro"
-        on:
-          branch: master
-
-#Token is encrypted
+  - stage: deploy-native-mac
+    os: osx
+    language: java
+    osx_image: xcode11
+    before_install:
+    - curl -sL https://get.sdkman.io | bash
+    - echo sdkman_auto_answer=true > $HOME/.sdkman/etc/config
+    - source "$HOME/.sdkman/bin/sdkman-init.sh"
+    install:
+    - sdk install java $(sdk list java | grep -o "8\.[0-9\.]*hs-adpt" | head -1)
+    - java -Xmx32m -version
+    - javac -J-Xmx32m -version
+    script:
+    - "./gradlew clean"
+    - travis_wait 40 ./gradlew native-cli:nativeImage
+    - travis_wait 40 ./gradlew native-cli:distro
+    deploy:
+    - provider: script
+      skip_cleanup: true
+      script: "./gradlew native-cli:uploadDistro"
+      on:
+        branch: master
+  - stage: deploy-native-linux
+    os: linux
+    language: java
+    jdk: openjdk8
+    script:
+    - travis_wait 40 ./gradlew native-cli:distro
+    deploy:
+    - provider: script
+      skip_cleanup: true
+      script: "./gradlew native-cli:uploadDistro"
+      on:
+        branch: master
 notifications:
   slack:
     rooms:
-      secure: drSh4Et3zGIIi7S7x8bUl+r0CZzV/7mTW6qbnzFmDBq5Lii73C0W86HWS8LD9mdmX8hFl/n5ySMH6P1t+9dXzmSOBNg3gnVm4F4iLCMPMb5bzIjFA3S9PKVONCHNvYfINurFhT8drVsBYcrkTcg0+FkxzJcNsbUe5IGz+xtV5jI+XUN2xmVP5/Fphshv87c86btB7shbOUzAZBCZ+LWl9SGNCsXz3lqnOmLQEKBDRN/CxpDmEQ/q5KMbV0uoXBRF1+Ab/NxY1ZeUC8qugEUoxHr2KkrWYoDWhjEty2nP8kxKy9e7i6uVu1VLKhX4TaLy9J/eWD+Vr22ByFyfFVmANgg0/zUNP9uEiPUpoo3Xdvx2cgQESYbI9rZoWo2QDDEwSFoF3YNZ7nBIrMQLJlJ8aNF/dN2QZxyMbrXlVdPw95MxAhOTroYQbMSdTnctA7iCkJqPkF67ECF21hIJQ3/oTHjcH7QWUn2aTUo4Y7UQq9gvjabDzipMfUmGmAkai+WVoDBNWQMUeRzyYuKIB6ZVWM+Hi9hn+udj/Tl6+TJSADxk1HyFHKFdTOh9QWKEd2IHdgqlM+WMLy+SdjA28xro2h5Z2VWrUcDEm/pWEetooysBoXFrc2nm9/vG5QzDxCA8Fpd86QEbu8uMP9SquXW+snVyVjSfo/yltkkGqsIYDBI=
+      secure: FYdW5paSCZKRA1VKWBdD06KNshWMcnod6Qy3Mjpc5Wfq9bUg8/Kco2MVzRrPQbiqUrIUWeRRpRysbxVnMGxgS30bR9NIZahATtLH69/2W2/qs5g4J+aU829pr5o8XAh+oFDHpaCVD4kgKBRGykUgxjDhBuyfwmklLxXzvXaCFKdkELVTKhK9xoa8mR8eWGtFO+jNMQDtbCaIZGA92lg+dC8/zqSlzXWSze9nmsGBjOhVeUxyxcxsbxCnSR0Su5vaOIOQ/J+G4aAl4cVYuWFGbIXUgDfFdAtG6Kkhz05TV78nMYNl1fvVlFZzoYFS1nVXyZaZGxqZQfD4ALcJmZ9ecb+Qq3+0oGky8SMvSEWuPsQYC/g2IWIkv8ydftLWWeMC21cfcG1HwoJhMb0iSvLPiPM12aoTi4Hjp7q0fE206MB+XaLGY+LD1aqFwyTEhn9N1SyWCuZ16N7KvZFqtQlQXkIZ0zX84z49FvzQm6dJAOGvPw/jpmcuo1miIPDluYja3vZmDdfMkBk/Fzr5JsO5c1eSmGhdU2mI/kApht+wtYUIDNBboYplwGmx9Gttmwln29y979xI/e5cIaOZZh7C9OtMSbl3Gl4R8PEqAcrc5p1vHJqcz6B1kuoOn/je9BINmoa4Rms8rvEZVi5PySVv4u9eQAZoL1USLAKNaX1hEJk=
