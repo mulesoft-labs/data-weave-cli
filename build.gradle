@@ -1,6 +1,6 @@
 buildscript {
     repositories {
-        mavenLocal()
+//        mavenLocal()
         maven {
             url "https://plugins.gradle.org/m2/"
         }
@@ -36,7 +36,7 @@ subprojects {
 
 
     repositories {
-        mavenLocal()
+//        mavenLocal()
         mavenCentral()
         maven {
             name "mule-releases"

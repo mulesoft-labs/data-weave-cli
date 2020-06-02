@@ -6,13 +6,18 @@ import org.mule.weave.v2.parser.phase.ModuleLoaderManager
 import org.mule.weave.v2.parser.phase.ModuleParsingPhasesManager
 import org.mule.weave.v2.parser.phase.ParsingContext
 import org.mule.weave.v2.sdk.ClassLoaderWeaveResourceResolver
+import org.mule.weave.v2.sdk.WeaveResourceResolver
 
 object NativeSystemModuleComponents {
+  /**
+    * The system resource resolver
+    */
+  val systemResourceResolver: WeaveResourceResolver = ClassLoaderWeaveResourceResolver()
   /**
     * Handles the parsing of the modules that are on the SystemClassLoader
     */
   val systemModuleParser: ModuleParsingPhasesManager =
-    ModuleParsingPhasesManager(ModuleLoaderManager(ModuleLoader(ClassLoaderWeaveResourceResolver())))
+    ModuleParsingPhasesManager(ModuleLoaderManager(ModuleLoader(systemResourceResolver)))
 
   def start(): Unit = {
     systemModuleParser.typeCheckModule(NameIdentifier.CORE_MODULE, ParsingContext(NameIdentifier.anonymous, systemModuleParser))

@@ -32,15 +32,11 @@ dependencies {
     compile group: 'org.mule.weave', name: 'http-module', version: "1.0.0-SNAPSHOT"
 }
 
-task downloadWlang(type: Copy) {
-    from zipTree(configurations.resourceDeps.singleFile)
-    into "$buildDir/wlang"
-}
-
 def genDirectory = new File("$project.buildDir/genresource")
 
 
-task genVersions {
+task genVersions() {
+    println("Generating Versions File.")
     def componentVersion = new File(genDirectory, "org/mule/weave/v2/version/ComponentVersion.scala")
     def parentFile = componentVersion.getParentFile()
     if (!parentFile.exists()) {
@@ -62,10 +58,12 @@ task genVersions {
     outputPrinter.close()
 }
 
+defaultTasks += genVersions
 
-genVersions.mustRunAfter(downloadWlang)
-compileScala.dependsOn(genVersions)
-compileJava.dependsOn(genVersions)
+compileScala {
+    dependsOn genVersions
+}
+
 
 
 
