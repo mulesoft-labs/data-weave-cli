@@ -29,6 +29,7 @@ import org.mule.weave.v2.runtime.ModuleComponents
 import org.mule.weave.v2.runtime.ModuleComponentsFactory
 import org.mule.weave.v2.runtime.ScriptingBindings
 import org.mule.weave.v2.runtime.ScriptingEngineSetupException
+import org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider
 import org.mule.weave.v2.sdk.TwoLevelWeaveResourceResolver
 import org.mule.weave.v2.sdk.WeaveResourceResolver
 
@@ -108,7 +109,8 @@ class NativeModuleComponentFactory(dynamicLevel: () => WeaveResourceResolver, sy
 
 
   override def createComponents(): ModuleComponents = {
-    val currentClassloader: ModuleParsingPhasesManager = ModuleParsingPhasesManager(ModuleLoaderManager(ModuleLoader(dynamicLevel())))
+    val weaveResourceResolver = dynamicLevel()
+    val currentClassloader: ModuleParsingPhasesManager = ModuleParsingPhasesManager(ModuleLoaderManager(Seq(ModuleLoader(weaveResourceResolver)), new SPIBasedModuleLoaderProvider(weaveResourceResolver)))
     val parser: CompositeModuleParsingPhasesManager = CompositeModuleParsingPhasesManager(NativeSystemModuleComponents.systemModuleParser, currentClassloader)
     val compiler: CustomRuntimeModuleNodeCompiler = RuntimeModuleNodeCompiler.chain(currentClassloader, systemModuleCompiler, parentLast = !systemFirst)
     ModuleComponents(new TwoLevelWeaveResourceResolver(NativeResourceResolver, dynamicLevel), parser, compiler)
