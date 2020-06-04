@@ -15,7 +15,7 @@
 | Binary | application/octet-stream| .bin|
     
 
-**DW CLI is** compiled with [Graal AOT](https://www.graalvm.org/docs/reference-manual/aot-compilation/) for fast bootstrap so download the one for your target os.
+**DW CLI is** compiled with [Graal AOT](https://www.graalvm.org/docs/reference-manual/aot-compilation/) for fast bootstrap so download the one for your target OS.
 
 
 ## How to install it 
