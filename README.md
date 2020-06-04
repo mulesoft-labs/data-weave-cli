@@ -121,7 +121,7 @@ Let's query users old enough to drink alcohol:
 
 * *DW_HOME* = The directory where the home will be found if not defined `~/.dw` will be used
 * *DW_LIB_PATH* = The directory where libraries are going to be search by default. If not defined `${DW_HOME}/libs` will be used
-* *DW_DEFAULT_INPUT_MIMETYPE* = The default mimeType that is going to be used for the standar input. If not defined `application/json` will be used
+* *DW_DEFAULT_INPUT_MIMETYPE* = The default mimeType that is going to be used for the standard input. If not defined `application/json` will be used
 * *DW_DEFAULT_OUTPUT_MIMETYPE* = The default output mimeType that is going to be if not defined. If not defined `application/json` will be used
 
 
