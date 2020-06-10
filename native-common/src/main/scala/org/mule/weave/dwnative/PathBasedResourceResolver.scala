@@ -1,83 +1,92 @@
 package org.mule.weave.dwnative
 
 import java.io.File
+import java.io.FileInputStream
+import java.io.InputStream
+import java.nio.charset.StandardCharsets
 import java.util.zip.ZipFile
 
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
+import org.mule.weave.v2.sdk.NameIdentifierHelper
 import org.mule.weave.v2.sdk.WeaveResource
 import org.mule.weave.v2.sdk.WeaveResourceResolver
-import org.mule.weave.v2.utils.WeaveConstants
-import org.mule.weave.v2.utils.WeaveFile
 
-import scala.collection.mutable
 import scala.io.Source
 
-class PathBasedResourceResolver(paths: Seq[File]) extends WeaveResourceResolver {
+class PathBasedResourceResolver(paths: Seq[ContentResolver]) extends WeaveResourceResolver {
 
-  def loadResources(): Map[NameIdentifier, Seq[WeaveResource]] = {
-
-    val result = mutable.ArrayBuffer[(NameIdentifier, WeaveResource)]()
-    paths
-      .foreach(f = (pathEntryFile) => {
-        if (pathEntryFile.isFile) {
-          val zipFile = new ZipFile(pathEntryFile)
-          val entries = zipFile.entries
-          while (entries.hasMoreElements) {
-            val entry = entries.nextElement
-            val path = entry.getName
-            if (!entry.isDirectory && path.endsWith(WeaveFile.fileExtension)) {
-              val identifier = NameIdentifier.fromPath(path)
-              val stream = zipFile.getInputStream(entry)
-              val source = Source.fromInputStream(stream, WeaveConstants.default_encoding)
-              try {
-                result.+=((identifier, WeaveResource(path, source.mkString)))
-              } finally {
-                source.close()
-              }
-            }
-          }
-        } else if (pathEntryFile.isDirectory) {
-          //Load file from directory
-          val rootPath = pathEntryFile.getAbsolutePath
-          recursiveListFiles(
-            pathEntryFile,
-            (f) => {
-              val relativeName = f.getAbsolutePath.substring(rootPath.length + 1)
-              val source = Source.fromFile(f, WeaveConstants.default_encoding)
-              try {
-                val resource = WeaveResource.apply(f.getAbsolutePath, source.mkString)
-                result.+=((NameIdentifier.fromPath(relativeName), resource))
-              } finally {
-                source.close()
-              }
-            })
-        }
-      })
-    val identifierToResources = result.groupBy(_._1).mapValues(_.map(_._2))
-
-    identifierToResources
+  override def resolve(name: NameIdentifier): Option[WeaveResource] = {
+    val filePath = NameIdentifierHelper.toWeaveFilePath(name)
+    val iterator = paths.iterator
+    while (iterator.hasNext) {
+      val maybeResource = iterator.next().resolve(filePath)
+      if (maybeResource.isDefined) {
+        return Some(WeaveResource(filePath, toString(maybeResource.get)))
+      }
+    }
+    None
   }
 
-  def recursiveListFiles[T](f: File, callback: (File) => Unit): Unit = {
-    val files = f.listFiles
-    if (files != null) {
-      files.foreach((f) =>
-        if (f.isFile && f.getName.endsWith(WeaveFile.fileExtension)) {
-          callback(f)
-        } else if (f.isDirectory) {
-          recursiveListFiles(f, callback)
-        })
+  def toString(is: InputStream) = {
+    val source = Source.fromInputStream(is)(StandardCharsets.UTF_8)
+    try {
+      source.mkString
+    } finally {
+      source.close()
     }
   }
 
-  lazy val entries: Map[NameIdentifier, Seq[WeaveResource]] = loadResources()
-
-  override def resolve(name: NameIdentifier): Option[WeaveResource] = {
-    entries.get(name).flatMap(_.headOption)
+  def resolve(filePath: String): Option[InputStream] = {
+    val iterator = paths.iterator
+    while (iterator.hasNext) {
+      val maybeResource = iterator.next().resolve(filePath)
+      if (maybeResource.isDefined) {
+        return maybeResource
+      }
+    }
+    None
   }
 
+
   override def resolveAll(name: NameIdentifier): Seq[WeaveResource] = {
-    entries.getOrElse(name, Seq())
+    val filePath = NameIdentifierHelper.toWeaveFilePath(name)
+    paths
+      .flatMap(_.resolve(filePath))
+      .map((content) => WeaveResource(filePath, toString(content)))
+  }
+}
+
+/**
+  *
+  */
+trait ContentResolver {
+
+  def resolve(path: String): Option[InputStream]
+}
+
+class DirectoryContentResolver(directory: File) extends ContentResolver {
+
+  override def resolve(path: String): Option[InputStream] = {
+    val file = new File(directory, path)
+    if (file.isFile) {
+      Some(new FileInputStream(file))
+    } else {
+      None
+    }
+  }
+}
+
+class JarContentResolver(jarFile: File) extends ContentResolver {
+
+  lazy val zipFile = new ZipFile(jarFile)
+
+  override def resolve(path: String): Option[InputStream] = {
+    val pathEntry = zipFile.getEntry(path)
+    if (pathEntry != null) {
+      Some(zipFile.getInputStream(pathEntry))
+    } else {
+      None
+    }
   }
 }
 
@@ -86,7 +95,7 @@ object PathBasedResourceResolver {
     if (libDir.exists()) {
       val files = libDir.listFiles()
       if (files != null) {
-        new PathBasedResourceResolver(files)
+        PathBasedResourceResolver(files.toSeq)
       } else {
         new PathBasedResourceResolver(Seq())
       }
@@ -95,5 +104,13 @@ object PathBasedResourceResolver {
     }
   }
 
-  def apply(paths: Seq[File]): PathBasedResourceResolver = new PathBasedResourceResolver(paths)
+  def apply(paths: Seq[File]): PathBasedResourceResolver = {
+    new PathBasedResourceResolver(paths.map((f) => {
+      if (f.isDirectory) {
+        new DirectoryContentResolver(f)
+      } else {
+        new JarContentResolver(f)
+      }
+    }))
+  }
 }

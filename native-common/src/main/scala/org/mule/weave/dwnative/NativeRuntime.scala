@@ -4,24 +4,33 @@ import java.io.File
 import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.nio.charset.StandardCharsets
 
+import org.mule.weave.v2.exception.InvalidLocationException
 import org.mule.weave.v2.interpreted.CustomRuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.RuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
+import org.mule.weave.v2.model.service.ProtocolUrlSourceProviderResolverService
+import org.mule.weave.v2.model.service.ReadFunctionProtocolHandler
 import org.mule.weave.v2.model.service.StdOutputLoggingService
+import org.mule.weave.v2.model.service.UrlProtocolHandler
+import org.mule.weave.v2.model.service.UrlSourceProviderResolverService
 import org.mule.weave.v2.model.values.BinaryValue
 import org.mule.weave.v2.module.reader.AutoPersistedOutputStream
 import org.mule.weave.v2.module.reader.DefaultAutoPersistedOutputStream
 import org.mule.weave.v2.module.reader.SourceProvider
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.exception.LocatableException
+import org.mule.weave.v2.parser.location.LocationCapable
 import org.mule.weave.v2.parser.phase.CompilationException
 import org.mule.weave.v2.parser.phase.CompositeModuleParsingPhasesManager
 import org.mule.weave.v2.parser.phase.ModuleLoader
 import org.mule.weave.v2.parser.phase.ModuleLoaderManager
 import org.mule.weave.v2.parser.phase.ModuleParsingPhasesManager
+import org.mule.weave.v2.runtime.DataWeaveResult
+import org.mule.weave.v2.runtime.DataWeaveScript
 import org.mule.weave.v2.runtime.DataWeaveScriptingEngine
 import org.mule.weave.v2.runtime.ExecuteResult
 import org.mule.weave.v2.runtime.InputType
@@ -35,7 +44,7 @@ import org.mule.weave.v2.sdk.WeaveResourceResolver
 
 class NativeRuntime(libDir: File, path: Array[File]) {
 
-  private val pathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
+  private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
   private val weaveScriptingEngine = DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true))
 
@@ -49,18 +58,9 @@ class NativeRuntime(libDir: File, path: Array[File]) {
 
   def run(script: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false): WeaveExecutionResult = {
     try {
-      if (profile) {
-        weaveScriptingEngine.enableProfileParsing()
-      }
-
-      val dataWeaveScript =
-        if (profile) {
-          time(() => weaveScriptingEngine.compile(script, NameIdentifier.ANONYMOUS_NAME, inputs.entries().map((wi) => new InputType(wi, None)).toArray, defaultOutputMimeType), "Compile")
-        } else {
-          weaveScriptingEngine.compile(script, NameIdentifier.ANONYMOUS_NAME, inputs.entries().map((wi) => new InputType(wi, None)).toArray, defaultOutputMimeType)
-        }
-      val serviceManager = ServiceManager(StdOutputLoggingService)
-      val result =
+      val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, defaultOutputMimeType, profile)
+      val serviceManager: ServiceManager = createServiceManager()
+      val result: DataWeaveResult =
         if (profile) {
           time(() => dataWeaveScript.write(inputs, serviceManager, Some(out)), "Execution")
         } else {
@@ -82,13 +82,45 @@ class NativeRuntime(libDir: File, path: Array[File]) {
         le.printStackTrace(new PrintWriter(writer))
         WeaveFailureResult("Internal error : " + le.getClass.getName + " : " + le.getMessage + "\n" + writer.toString)
       }
+    } finally {
+      if (profile) {
+        weaveScriptingEngine.disableProfileParsing()
+      }
     }
   }
 
-  def eval(script: String, inputs: ScriptingBindings): ExecuteResult = {
-    val dataWeaveScript = weaveScriptingEngine.compile(script, NameIdentifier.ANONYMOUS_NAME, inputs.entries().map((wi) => new InputType(wi, None)).toArray)
-    val serviceManager = ServiceManager(StdOutputLoggingService)
-    dataWeaveScript.exec(inputs, serviceManager)
+  private def compileScript(script: String, inputs: ScriptingBindings, defaultOutputMimeType: String, profile: Boolean) = {
+    if (profile) {
+      weaveScriptingEngine.enableProfileParsing()
+    }
+    if (profile) {
+      time(() => weaveScriptingEngine.compile(script, NameIdentifier.ANONYMOUS_NAME, inputs.entries().map((wi) => new InputType(wi, None)).toArray, defaultOutputMimeType), "Compile")
+    } else {
+      weaveScriptingEngine.compile(script, NameIdentifier.ANONYMOUS_NAME, inputs.entries().map((wi) => new InputType(wi, None)).toArray, defaultOutputMimeType)
+    }
+  }
+
+  private def createServiceManager() = {
+    val serviceManager = ServiceManager(StdOutputLoggingService, Map(
+      classOf[UrlSourceProviderResolverService] -> new ProtocolUrlSourceProviderResolverService(Seq(UrlProtocolHandler, WeavePathProtocolHandler(pathBasedResourceResolver)))
+    ))
+    serviceManager
+  }
+
+  def eval(script: String, inputs: ScriptingBindings, profile: Boolean): ExecuteResult = {
+    try {
+      val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, "application/dw", profile)
+      val serviceManager: ServiceManager = createServiceManager()
+      if (profile) {
+        time(() => dataWeaveScript.exec(inputs, serviceManager), "Execution")
+      } else {
+        dataWeaveScript.exec(inputs, serviceManager)
+      }
+    } finally {
+      if (profile) {
+        weaveScriptingEngine.disableProfileParsing()
+      }
+    }
   }
 
   def time[T](callback: () => T, label: String): T = {
@@ -97,6 +129,25 @@ class NativeRuntime(libDir: File, path: Array[File]) {
     println(s"Time taken by ${label}: ${(System.currentTimeMillis() - start)}ms")
     result
   }
+}
+
+
+class WeavePathProtocolHandler(path: PathBasedResourceResolver) extends ReadFunctionProtocolHandler {
+  override def handlerId: String = "classpath"
+
+  override def createSourceProvider(protocol: String, uri: String, locatable: LocationCapable): SourceProvider = {
+    val maybeResource = path.resolve(uri)
+    maybeResource match {
+      case Some(value) => {
+        SourceProvider(value, StandardCharsets.UTF_8)
+      }
+      case None => throw new InvalidLocationException(locatable.location(), uri)
+    }
+  }
+}
+
+object WeavePathProtocolHandler {
+  def apply(path: PathBasedResourceResolver): WeavePathProtocolHandler = new WeavePathProtocolHandler(path)
 }
 
 

@@ -238,14 +238,14 @@ class DataWeaveCLIRunner {
         Signal.handle(new Signal("INT"), signalHandler)
         Signal.handle(new Signal("TERM"), signalHandler)
 
-        val result = nativeRuntime.eval(script, scriptingBindings)
+        val result = nativeRuntime.eval(script, scriptingBindings, config.profile)
         Runtime.getRuntime.addShutdownHook(new Thread() {
           override def run(): Unit = {
             Try(result.close())
             System.out.println("Thanks for using DW. Have a nice day!")
           }
         })
-        System.out.println("Press 'ctrl'+c to stop the process.")
+        System.out.println("\nPress 'ctrl'+c to stop the process.")
         while (true) {
           Thread.sleep(1000)
         }
