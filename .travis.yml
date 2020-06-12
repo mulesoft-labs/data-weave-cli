@@ -10,11 +10,9 @@ jobs:
     - source "$HOME/.sdkman/bin/sdkman-init.sh"
     install:
     - sdk install java $(sdk list java | grep -o "8\.[0-9\.]*hs-adpt" | head -1)
-    - java -Xmx32m -version
-    - javac -J-Xmx32m -version
     script:
     - "./gradlew clean"
-    - travis_wait 40 ./gradlew native-cli:distro
+    - travis_wait 40 ./gradlew --stacktrace native-cli:distro
     deploy:
     - provider: script
       skip_cleanup: true
@@ -26,7 +24,7 @@ jobs:
     language: java
     jdk: openjdk8
     script:
-    - travis_wait 40 ./gradlew native-cli:distro
+    - travis_wait 40 ./gradlew --stacktrace native-cli:distro
     deploy:
     - provider: script
       skip_cleanup: true
