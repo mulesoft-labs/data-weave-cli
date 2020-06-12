@@ -192,7 +192,7 @@ class DataWeaveCLIRunner {
       | --eval          | Evaluates the script instead of writing it
       | --version       | The version of the CLI and Runtime
       |
-      | Examples
+      | Example:
       |
       | dw -i payload <fullpathToUser.json> "output application/json --- payload filter (item) -> item.age > 17"
       |
