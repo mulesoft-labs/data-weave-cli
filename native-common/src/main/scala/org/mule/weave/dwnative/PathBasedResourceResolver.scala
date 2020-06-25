@@ -11,9 +11,16 @@ import org.mule.weave.v2.sdk.NameIdentifierHelper
 import org.mule.weave.v2.sdk.WeaveResource
 import org.mule.weave.v2.sdk.WeaveResourceResolver
 
+import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 
-class PathBasedResourceResolver(paths: Seq[ContentResolver]) extends WeaveResourceResolver {
+class PathBasedResourceResolver(paths: mutable.ArrayBuffer[ContentResolver]) extends WeaveResourceResolver {
+
+  def addContent(cr: ContentResolver): PathBasedResourceResolver = {
+    paths.+=(cr)
+    this
+  }
 
   override def resolve(name: NameIdentifier): Option[WeaveResource] = {
     val filePath = NameIdentifierHelper.toWeaveFilePath(name)
@@ -27,7 +34,7 @@ class PathBasedResourceResolver(paths: Seq[ContentResolver]) extends WeaveResour
     None
   }
 
-  def toString(is: InputStream) = {
+  def toString(is: InputStream): String = {
     val source = Source.fromInputStream(is)(StandardCharsets.UTF_8)
     try {
       source.mkString
@@ -60,8 +67,17 @@ class PathBasedResourceResolver(paths: Seq[ContentResolver]) extends WeaveResour
   *
   */
 trait ContentResolver {
-
   def resolve(path: String): Option[InputStream]
+}
+
+object ContentResolver {
+  def apply(f: File): ContentResolver = {
+    if (f.isDirectory) {
+      new DirectoryContentResolver(f)
+    } else {
+      new JarContentResolver(f)
+    }
+  }
 }
 
 class DirectoryContentResolver(directory: File) extends ContentResolver {
@@ -81,7 +97,12 @@ class JarContentResolver(jarFile: File) extends ContentResolver {
   lazy val zipFile = new ZipFile(jarFile)
 
   override def resolve(path: String): Option[InputStream] = {
-    val pathEntry = zipFile.getEntry(path)
+    val zipEntry = if (path.startsWith("/")) {
+      path.substring(1)
+    } else {
+      path
+    }
+    val pathEntry = zipFile.getEntry(zipEntry)
     if (pathEntry != null) {
       Some(zipFile.getInputStream(pathEntry))
     } else {
@@ -97,20 +118,18 @@ object PathBasedResourceResolver {
       if (files != null) {
         PathBasedResourceResolver(files.toSeq)
       } else {
-        new PathBasedResourceResolver(Seq())
+        new PathBasedResourceResolver(ArrayBuffer())
       }
     } else {
-      new PathBasedResourceResolver(Seq())
+      new PathBasedResourceResolver(ArrayBuffer())
     }
   }
 
   def apply(paths: Seq[File]): PathBasedResourceResolver = {
-    new PathBasedResourceResolver(paths.map((f) => {
-      if (f.isDirectory) {
-        new DirectoryContentResolver(f)
-      } else {
-        new JarContentResolver(f)
-      }
-    }))
+    new PathBasedResourceResolver(ArrayBuffer(
+      paths.map((f) => {
+        ContentResolver(f)
+      }): _*
+    ))
   }
 }

@@ -3,7 +3,11 @@ package org.mule.weave.dwnative.utils
 import java.io.File
 
 object DataWeaveUtils {
-
+  /**
+    * Returns the DW home directory if exists it can be overwritten with env variable DW_HOME
+    *
+    * @return The home directory
+    */
   def getDWHome(): File = {
     val homeUser = new File(System.getProperty("user.home"))
     val weavehome = System.getenv("DW_HOME")
@@ -22,9 +26,9 @@ object DataWeaveUtils {
         defaultDWHomeDir
       } else {
         val dwScriptPath = System.getenv("_")
-        if(dwScriptPath != null) {
+        if (dwScriptPath != null) {
           val scriptPath = new File(dwScriptPath)
-          if(scriptPath.isFile && scriptPath.getName == "dw"){
+          if (scriptPath.isFile && scriptPath.getName == "dw") {
             val homeDirectory = scriptPath.getCanonicalFile.getParentFile.getParentFile
             if (WeaveProperties.verbose) {
               println(s"[debug] Home Directory detected from script at ${homeDirectory.getAbsolutePath}")
@@ -38,6 +42,29 @@ object DataWeaveUtils {
     }
   }
 
+  /**
+    * Returns the DW home directory if exists it can be overwritten with env variable DW_HOME
+    *
+    * @return The home directory
+    */
+  def getWorkingHome(): File = {
+    val weavehome = System.getenv("DW_WORKING_PATH")
+    if (weavehome != null) {
+      val home = new File(weavehome)
+      if (!home.exists()) {
+        println(AnsiColor.red(s"[error] Weave Working Home Directory `${weavehome}` declared on environment variable `DW_WORKING_PATH` does not exists."))
+      }
+      home
+    } else {
+      new File(getDWHome(), "tmp")
+    }
+  }
+
+  /**
+    * Returns the directory where all default jars are going to be present. It can be overwriten with DW_LIB_PATH
+    *
+    * @return The file
+    */
   def getLibPathHome(): File = {
     val weavehome = System.getenv("DW_LIB_PATH")
     if (weavehome != null) {
@@ -50,6 +77,8 @@ object DataWeaveUtils {
       new File(getDWHome(), "libs")
     }
   }
+
+  def sanitizeFilename(inputName: String): String = inputName.replaceAll("[^a-zA-Z0-9-_\\.]", "_")
 }
 
 object WeaveProperties {

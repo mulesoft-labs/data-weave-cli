@@ -1,11 +1,15 @@
 package org.mule.weave.dwnative
 
 import java.io.File
+import java.io.InputStream
 import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 
+import org.mule.weave.dwnative.utils.DataWeaveUtils
+import org.mule.weave.dwnative.utils.UnzipHelper
 import org.mule.weave.v2.exception.InvalidLocationException
 import org.mule.weave.v2.interpreted.CustomRuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.RuntimeModuleNodeCompiler
@@ -24,6 +28,7 @@ import org.mule.weave.v2.module.reader.SourceProvider
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.exception.LocatableException
 import org.mule.weave.v2.parser.location.LocationCapable
+import org.mule.weave.v2.parser.phase.AnnotationProcessor
 import org.mule.weave.v2.parser.phase.CompilationException
 import org.mule.weave.v2.parser.phase.CompositeModuleParsingPhasesManager
 import org.mule.weave.v2.parser.phase.ModuleLoader
@@ -36,17 +41,48 @@ import org.mule.weave.v2.runtime.ExecuteResult
 import org.mule.weave.v2.runtime.InputType
 import org.mule.weave.v2.runtime.ModuleComponents
 import org.mule.weave.v2.runtime.ModuleComponentsFactory
+import org.mule.weave.v2.runtime.ParserConfiguration
 import org.mule.weave.v2.runtime.ScriptingBindings
 import org.mule.weave.v2.runtime.ScriptingEngineSetupException
 import org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider
 import org.mule.weave.v2.sdk.TwoLevelWeaveResourceResolver
 import org.mule.weave.v2.sdk.WeaveResourceResolver
+import org.weave.deps.MavenDependencyAnnotationProcessor
+import org.weave.deps.ResourceDependencyAnnotationProcessor
 
 class NativeRuntime(libDir: File, path: Array[File]) {
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
-  private val weaveScriptingEngine = DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true))
+  private val weaveScriptingEngine = {
+    val resourceDependencyAnnotationProcessor = ResourceDependencyAnnotationProcessor((is: InputStream, unzip: Boolean, url: String) => {
+      val directory = DataWeaveUtils.getWorkingHome()
+      directory.mkdirs()
+      var file: File = new File(directory, DataWeaveUtils.sanitizeFilename(url))
+      var i = 0
+      while (file.exists()) {
+        file = new File(directory, DataWeaveUtils.sanitizeFilename(url + s"_${i}"))
+        i = i + 1
+      }
+      println(s"New resource at ${file.getAbsolutePath}")
+      if (unzip) {
+        UnzipHelper.unZipIt(is, file)
+      } else {
+        Files.copy(is, file.toPath)
+      }
+      pathBasedResourceResolver.addContent(ContentResolver(file))
+    })
+    val mavenDependencyAnnotationProcessor = MavenDependencyAnnotationProcessor((jarFile: File) => {
+      println(s"New Maven resource at ${jarFile.getAbsolutePath}")
+      pathBasedResourceResolver.addContent(ContentResolver(jarFile))
+    })
+    val annotationProcessors: Seq[(String, AnnotationProcessor)] = Seq(
+      (ResourceDependencyAnnotationProcessor.ANNOTATION_NAME.name, resourceDependencyAnnotationProcessor),
+      (MavenDependencyAnnotationProcessor.ANNOTATION_NAME.name, mavenDependencyAnnotationProcessor),
+
+    )
+    DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration(parsingAnnotationProcessors = annotationProcessors))
+  }
 
   def getResourceContent(ni: NameIdentifier): Option[String] = {
     pathBasedResourceResolver.resolve(ni).map(_.content())
@@ -90,6 +126,7 @@ class NativeRuntime(libDir: File, path: Array[File]) {
   }
 
   private def compileScript(script: String, inputs: ScriptingBindings, defaultOutputMimeType: String, profile: Boolean) = {
+
     if (profile) {
       weaveScriptingEngine.enableProfileParsing()
     }
