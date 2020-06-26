@@ -36,7 +36,7 @@ subprojects {
 
 
     repositories {
-        mavenLocal()
+//        mavenLocal()
         mavenCentral()
         maven {
             name "mule-releases"
@@ -45,6 +45,10 @@ subprojects {
         maven {
             name "mule-snapshots"
             url "http://repository.mulesoft.org/nexus/content/repositories/snapshots/"
+        }
+        maven {
+            name "jitpack.io"
+            url "https://jitpack.io"
         }
     }
 
