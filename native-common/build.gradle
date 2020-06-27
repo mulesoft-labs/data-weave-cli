@@ -18,9 +18,6 @@ sourceSets {
     }
 }
 
-repositories {
-    mavenLocal()
-}
 
 dependencies {
     compile project(":dependency-manager")
@@ -29,8 +26,11 @@ dependencies {
     compile group: 'org.mule.weave', name: 'core-modules', version: weaveVersion
     compile group: 'org.mule.weave', name: 'yaml-module', version: weaveVersion
     compile group: 'org.mule.weave', name: 'ndjson-module', version: weaveVersion
+    compile(group: 'org.mule.weave', name: 'raml-module', version: "1.0.0-SNAPSHOT"){
+        exclude group: 'org.slf4j'
+    }
     compile group: 'org.mule.weave', name: 'http-module', version: "1.0.0-SNAPSHOT"
-    compile group: 'org.mule.weave', name: 'raml-module', version: "1.0.0-SNAPSHOT"
+
 }
 
 def genDirectory = new File("$project.buildDir/genresource")

@@ -1,4 +1,4 @@
-package org.mule.weave.dwnative
+package org.mule.weave.dwnative.initializer
 
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.phase.ModuleLoader
@@ -25,5 +25,8 @@ object NativeSystemModuleComponents {
     systemModuleParser.typeCheckModule(NameIdentifier.OBJECTS_MODULE, ParsingContext(NameIdentifier.anonymous, systemModuleParser))
     systemModuleParser.typeCheckModule(NameIdentifier.RUNTIME_MODULE, ParsingContext(NameIdentifier.anonymous, systemModuleParser))
     systemModuleParser.typeCheckModule(NameIdentifier.SYSTEM_MODULE, ParsingContext(NameIdentifier.anonymous, systemModuleParser))
+    systemModuleParser.typeCheckModule(NameIdentifier("dw::io::http::Server"), ParsingContext(NameIdentifier.anonymous, systemModuleParser))
+    systemModuleParser.typeCheckModule(NameIdentifier("dw::io::file::FileSystem"), ParsingContext(NameIdentifier.anonymous, systemModuleParser))
+    systemModuleParser.typeCheckModule(NameIdentifier("dw::deps::Deps"), ParsingContext(NameIdentifier.anonymous, systemModuleParser))
   }
 }

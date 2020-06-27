@@ -8,6 +8,7 @@ import java.io.StringWriter
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
+import org.mule.weave.dwnative.initializer.NativeSystemModuleComponents
 import org.mule.weave.dwnative.utils.DataWeaveUtils
 import org.mule.weave.dwnative.utils.UnzipHelper
 import org.mule.weave.v2.exception.InvalidLocationException
