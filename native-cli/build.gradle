@@ -81,7 +81,8 @@ graal {
 //            "org.mule.weave.v2.model.types.,"
 //            "org.mule.weave.v2.core.functions."
 //    option "-H:+TraceClassInitialization"
-//    option getOsName() == "osx" ? "--no-server" : "-J-Xms1G"
+    option "-H:DeadlockWatchdogInterval=1000"
+    option getOsName() == "osx" ? "--no-server" : "-J-Xms1G"
 }
 
 import com.monochromeroad.gradle.plugin.aws.s3.S3Sync

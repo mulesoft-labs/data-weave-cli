@@ -5,7 +5,7 @@ package org.mule.weave.dwnative.initializer;
  */
 public class Startup {
     static {
-        System.out.println("Startup ->  Initializing Modules for performance.");
+        System.out.println("Startup -> Initializing Modules for performance.");
         NativeSystemModuleComponents.start();
     }
 }
