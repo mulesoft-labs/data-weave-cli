@@ -2,6 +2,9 @@ package org.mule.weave.dwnative.cli
 
 import java.io.File
 import java.io.FileOutputStream
+import java.io.PrintWriter
+import java.io.StringWriter
+import java.util.concurrent.Executors
 
 import org.mule.weave.dwnative.NativeRuntime
 import org.mule.weave.dwnative.utils.AnsiColor
@@ -205,7 +208,8 @@ class DataWeaveCLIRunner {
 
   def run(config: WeaveRunnerConfig): Int = {
     val path = config.path.map(new File(_))
-    val nativeRuntime = new NativeRuntime(DataWeaveUtils.getLibPathHome(), path)
+
+    val nativeRuntime = new NativeRuntime(DataWeaveUtils.getCacheHome(), DataWeaveUtils.getLibPathHome(), path, Executors.newCachedThreadPool())
     val script: String = if (config.main.isDefined) {
       val mainScriptName = config.main.get
       val maybeString = nativeRuntime.getResourceContent(NameIdentifier(mainScriptName))
@@ -253,7 +257,9 @@ class DataWeaveCLIRunner {
       } catch {
         case le: Exception => {
           println(AnsiColor.red("Error while executing the script:"))
-          println(AnsiColor.red(le.getMessage))
+          val writer = new StringWriter()
+          le.printStackTrace(new PrintWriter(writer))
+          println(AnsiColor.red(writer.toString))
           -1
         }
       }

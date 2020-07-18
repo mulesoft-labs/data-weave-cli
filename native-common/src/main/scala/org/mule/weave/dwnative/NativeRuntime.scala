@@ -1,16 +1,13 @@
 package org.mule.weave.dwnative
 
 import java.io.File
-import java.io.InputStream
 import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.charset.StandardCharsets
-import java.nio.file.Files
+import java.util.concurrent.ExecutorService
 
 import org.mule.weave.dwnative.initializer.NativeSystemModuleComponents
-import org.mule.weave.dwnative.utils.DataWeaveUtils
-import org.mule.weave.dwnative.utils.UnzipHelper
 import org.mule.weave.v2.exception.InvalidLocationException
 import org.mule.weave.v2.interpreted.CustomRuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.RuntimeModuleNodeCompiler
@@ -48,40 +45,60 @@ import org.mule.weave.v2.runtime.ScriptingEngineSetupException
 import org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider
 import org.mule.weave.v2.sdk.TwoLevelWeaveResourceResolver
 import org.mule.weave.v2.sdk.WeaveResourceResolver
+import org.weave.deps.Artifact
+import org.weave.deps.DependencyManagerController
 import org.weave.deps.MavenDependencyAnnotationProcessor
 import org.weave.deps.ResourceDependencyAnnotationProcessor
 
-class NativeRuntime(libDir: File, path: Array[File]) {
+import scala.concurrent.Await
+import scala.concurrent.Future
+import scala.concurrent.duration.Duration
+
+class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], executor: ExecutorService) {
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
   private val weaveScriptingEngine = {
-    val resourceDependencyAnnotationProcessor = ResourceDependencyAnnotationProcessor((is: InputStream, unzip: Boolean, url: String) => {
-      val directory = DataWeaveUtils.getWorkingHome()
-      directory.mkdirs()
-      var file: File = new File(directory, DataWeaveUtils.sanitizeFilename(url))
-      var i = 0
-      while (file.exists()) {
-        file = new File(directory, DataWeaveUtils.sanitizeFilename(url + s"_${i}"))
-        i = i + 1
-      }
-      println(s"New resource at ${file.getAbsolutePath}")
-      if (unzip) {
-        UnzipHelper.unZipIt(is, file)
-      } else {
-        Files.copy(is, file.toPath)
-      }
-      pathBasedResourceResolver.addContent(ContentResolver(file))
-    })
-    val mavenDependencyAnnotationProcessor = MavenDependencyAnnotationProcessor((jarFile: File) => {
-      println(s"New Maven resource at ${jarFile.getAbsolutePath}")
-      pathBasedResourceResolver.addContent(ContentResolver(jarFile))
-    })
+    val resourceDependencyAnnotationProcessor = ResourceDependencyAnnotationProcessor(
+      new File(resourcesCacheDir, "resources"),
+      new DependencyManagerController {
+        override def downloaded(id: String, kind: String, artifact: Future[Option[Artifact]]): Unit = {
+          pathBasedResourceResolver.addContent(new LazyContentResolver(() => {
+            Await.result(artifact, Duration.Inf) match {
+              case Some(artifact: Artifact) => {
+                ContentResolver(artifact.file)
+              }
+              case None => EmptyContentResolver
+            }
+          })
+
+          )
+        }
+      }, executor
+    )
+
+    val mavenDependencyAnnotationProcessor =
+      MavenDependencyAnnotationProcessor(
+        new File(resourcesCacheDir, "maven"),
+        new DependencyManagerController {
+          override def downloaded(id: String, kind: String, artifact: Future[Option[Artifact]]): Unit = {
+            pathBasedResourceResolver.addContent(new LazyContentResolver(() => {
+              Await.result(artifact, Duration.Inf) match {
+                case Some(artifact: Artifact) => {
+                  ContentResolver(artifact.file)
+                }
+                case None => EmptyContentResolver
+              }
+            })
+            )
+          }
+        }, executor)
+
     val annotationProcessors: Seq[(String, AnnotationProcessor)] = Seq(
       (ResourceDependencyAnnotationProcessor.ANNOTATION_NAME.name, resourceDependencyAnnotationProcessor),
-      (MavenDependencyAnnotationProcessor.ANNOTATION_NAME.name, mavenDependencyAnnotationProcessor),
-
+      (MavenDependencyAnnotationProcessor.ANNOTATION_NAME.name, mavenDependencyAnnotationProcessor)
     )
+
     DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration(parsingAnnotationProcessors = annotationProcessors))
   }
 

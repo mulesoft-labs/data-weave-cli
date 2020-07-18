@@ -61,6 +61,24 @@ object DataWeaveUtils {
   }
 
   /**
+    * Returns the DW home directory if exists it can be overwritten with env variable DW_HOME
+    *
+    * @return The home directory
+    */
+  def getCacheHome(): File = {
+    val weavehome = System.getenv("DW_CACHE_PATH")
+    if (weavehome != null) {
+      val home = new File(weavehome)
+      if (!home.exists()) {
+        println(AnsiColor.red(s"[error] Weave Cache Home Directory `${weavehome}` declared on environment variable `DW_CACHE_PATH` does not exists."))
+      }
+      home
+    } else {
+      new File(getDWHome(), "cache")
+    }
+  }
+
+  /**
     * Returns the directory where all default jars are going to be present. It can be overwriten with DW_LIB_PATH
     *
     * @return The file

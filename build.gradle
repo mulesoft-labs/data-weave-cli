@@ -19,6 +19,7 @@ subprojects {
     apply plugin: "java"
     apply plugin: "scala"
     apply plugin: 'com.palantir.graal'
+    apply plugin: 'maven-publish'
 
     group 'org.mule.weave.native'
     version nativeVersion
@@ -34,6 +35,29 @@ subprojects {
         targetCompatibility = '1.8'
     }
 
+
+    publishing {
+        publications.all {
+            pom.withXml {
+                asNode().dependencies.'*'.findAll() {
+                    it.scope.text() == 'runtime' && project.configurations.compile.allDependencies.find { dep ->
+                        dep.name == it.artifactId.text()
+                    }
+                }.each { it.scope*.value = 'compile' }
+            }
+        }
+        publications {
+            mavenJava(MavenPublication) {
+                from components.java
+            }
+        }
+        repositories {
+            maven {
+                name "mule-ee-releases"
+                url "https://repository-master.mulesoft.org/nexus/content/repositories/${project.version.endsWith('-SNAPSHOT') ? 'snapshots/' : 'releases/'}"
+            }
+        }
+    }
 
     repositories {
         mavenLocal()

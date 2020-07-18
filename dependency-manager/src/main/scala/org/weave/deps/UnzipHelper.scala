@@ -1,4 +1,4 @@
-package org.mule.weave.dwnative.utils
+package org.weave.deps
 
 import java.io.File
 import java.io.FileOutputStream

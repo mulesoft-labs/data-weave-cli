@@ -10,11 +10,12 @@ import org.mule.weave.dwnative.utils.DataWeaveUtils;
 import org.mule.weave.v2.runtime.ScriptingBindings;
 
 import java.io.File;
+import java.util.concurrent.Executors;
 
 
 public class DataWeaveNativeLibrary {
 
-    private static NativeRuntime runtime = new NativeRuntime(DataWeaveUtils.getLibPathHome(), new File[0]);
+    private static NativeRuntime runtime = new NativeRuntime(DataWeaveUtils.getCacheHome(), DataWeaveUtils.getLibPathHome(), new File[0], Executors.newCachedThreadPool());
 
     @CEntryPoint(name = "runDW")
     public static CCharPointer runDW(IsolateThread thread, CCharPointer transform) {

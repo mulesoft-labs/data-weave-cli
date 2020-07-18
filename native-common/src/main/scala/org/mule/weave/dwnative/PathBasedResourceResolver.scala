@@ -70,6 +70,20 @@ trait ContentResolver {
   def resolve(path: String): Option[InputStream]
 }
 
+object EmptyContentResolver extends ContentResolver{
+  override def resolve(path: String): Option[InputStream] = None
+}
+
+class LazyContentResolver(resolver: () => ContentResolver) extends ContentResolver {
+
+  private lazy val theResolver = resolver()
+
+  override def resolve(path: String): Option[InputStream] = {
+    theResolver.resolve(path)
+  }
+}
+
+
 object ContentResolver {
   def apply(f: File): ContentResolver = {
     if (f.isDirectory) {
@@ -92,7 +106,7 @@ class DirectoryContentResolver(directory: File) extends ContentResolver {
   }
 }
 
-class JarContentResolver(jarFile: File) extends ContentResolver {
+class JarContentResolver(jarFile: => File) extends ContentResolver {
 
   lazy val zipFile = new ZipFile(jarFile)
 
