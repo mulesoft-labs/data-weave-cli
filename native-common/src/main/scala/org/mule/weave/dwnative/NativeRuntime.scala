@@ -45,10 +45,10 @@ import org.mule.weave.v2.runtime.ScriptingEngineSetupException
 import org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider
 import org.mule.weave.v2.sdk.TwoLevelWeaveResourceResolver
 import org.mule.weave.v2.sdk.WeaveResourceResolver
-import org.weave.deps.Artifact
-import org.weave.deps.DependencyManagerController
-import org.weave.deps.MavenDependencyAnnotationProcessor
-import org.weave.deps.ResourceDependencyAnnotationProcessor
+import org.mule.weave.v2.deps.Artifact
+import org.mule.weave.v2.deps.DependencyManagerController
+import org.mule.weave.v2.deps.MavenDependencyAnnotationProcessor
+import org.mule.weave.v2.deps.ResourceDependencyAnnotationProcessor
 
 import scala.concurrent.Await
 import scala.concurrent.Future
@@ -58,20 +58,16 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
-  private val weaveScriptingEngine = {
+  private val weaveScriptingEngine: DataWeaveScriptingEngine = {
     val resourceDependencyAnnotationProcessor = ResourceDependencyAnnotationProcessor(
       new File(resourcesCacheDir, "resources"),
       new DependencyManagerController {
-        override def downloaded(id: String, kind: String, artifact: Future[Option[Artifact]]): Unit = {
+        override def downloaded(id: String, kind: String, artifact: Future[Seq[Artifact]]): Unit = {
           pathBasedResourceResolver.addContent(new LazyContentResolver(() => {
-            Await.result(artifact, Duration.Inf) match {
-              case Some(artifact: Artifact) => {
-                ContentResolver(artifact.file)
-              }
-              case None => EmptyContentResolver
-            }
+            new CompositeContentResolver(Await.result(artifact, Duration.Inf).map((artifact) => {
+              ContentResolver(artifact.file)
+            }))
           })
-
           )
         }
       }, executor
@@ -81,13 +77,13 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
       MavenDependencyAnnotationProcessor(
         new File(resourcesCacheDir, "maven"),
         new DependencyManagerController {
-          override def downloaded(id: String, kind: String, artifact: Future[Option[Artifact]]): Unit = {
+          override def downloaded(id: String, kind: String, artifact: Future[Seq[Artifact]]): Unit = {
             pathBasedResourceResolver.addContent(new LazyContentResolver(() => {
               Await.result(artifact, Duration.Inf) match {
-                case Some(artifact: Artifact) => {
+                case Seq(artifact: Artifact) => {
                   ContentResolver(artifact.file)
                 }
-                case None => EmptyContentResolver
+                case Seq() => EmptyContentResolver
               }
             })
             )

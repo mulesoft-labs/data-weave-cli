@@ -42,11 +42,10 @@ class MavenDependencyAnnotationProcessor(cacheDirectory: File, controller: Depen
   private def loadRepos(): Seq[MavenRepository] = {
     Seq(
       Dangerous.maven2Local,
-      MavenRepository("http://repository.mulesoft.org/nexus/content/repositories/snapshots/", changing = Some(true)),
-      MavenRepository("http://repository.mulesoft.org/nexus/content/repositories/releases/"),
-      MavenRepository("https://repo1.maven.org/maven2"),
-      Repositories.jitpack,
+      MavenRepository("https://repository.mulesoft.org/nexus/content/repositories/releases/"),
+      MavenRepository("https://repository.mulesoft.org/nexus/content/repositories/snapshots/", changing = Some(true)),
       Repositories.central,
+      Repositories.jitpack,
       Repositories.sonatype("releases")
     )
   }
@@ -83,23 +82,14 @@ class MavenDependencyAnnotationProcessor(cacheDirectory: File, controller: Depen
         }))
         .future()(context)
         .map((downloads) => {
-          downloads.headOption match {
-            case Some(head) => {
-              head match {
-                case Left(ae) => {
-                  //Show that we are not able to download it
-                  messageCollector(ae.message)
-                  None
-                }
-                case Right(file) => {
-                  Some(Artifact(file))
-                }
-              }
-            }
-            case None => {
+          downloads.flatMap {
+            case Left(ae) => {
               //Show that we are not able to download it
-              messageCollector(s"Unable to resolve ${artifactId}")
+              messageCollector(ae.message)
               None
+            }
+            case Right(file) => {
+              Some(Artifact(file))
             }
           }
         })(context)

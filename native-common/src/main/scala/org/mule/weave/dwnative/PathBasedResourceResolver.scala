@@ -70,8 +70,19 @@ trait ContentResolver {
   def resolve(path: String): Option[InputStream]
 }
 
-object EmptyContentResolver extends ContentResolver{
+object EmptyContentResolver extends ContentResolver {
   override def resolve(path: String): Option[InputStream] = None
+}
+
+class CompositeContentResolver(contents: Seq[ContentResolver]) extends ContentResolver {
+  override def resolve(path: String): Option[InputStream] = {
+    contents
+      .toStream
+      .flatMap((content) => {
+        content.resolve(path)
+      })
+      .headOption
+  }
 }
 
 class LazyContentResolver(resolver: () => ContentResolver) extends ContentResolver {

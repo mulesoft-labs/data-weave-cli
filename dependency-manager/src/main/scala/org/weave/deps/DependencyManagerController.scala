@@ -22,7 +22,7 @@ trait DependencyManagerController {
     * @param kind     the kind
     * @param artifact a future to download the file
     */
-  def downloaded(id: String, kind: String, artifact: Future[Option[Artifact]]): Unit
+  def downloaded(id: String, kind: String, artifact: Future[Seq[Artifact]]): Unit
 
 }
 

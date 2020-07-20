@@ -49,9 +49,9 @@ class ResourceDependencyAnnotationProcessor(resourceCache: File, weavePathUpdate
       val filename = URLEncoder.encode(url, "UTF-8")
       resourceCache.mkdirs()
       val theCachedFile = new File(resourceCache, filename)
-      val downloadedArtifact: Future[Option[Artifact]] =
+      val downloadedArtifact: Future[Seq[Artifact]] =
         if (theCachedFile.exists()) {
-          Future.successful(Some(Artifact(theCachedFile)))
+          Future.successful(Seq(Artifact(theCachedFile)))
         } else {
           val resourceUrl = new URL(url)
           Future({
@@ -60,37 +60,37 @@ class ResourceDependencyAnnotationProcessor(resourceCache: File, weavePathUpdate
               val stream: InputStream = connection.getInputStream
               try {
                 Files.copy(stream, theCachedFile.toPath)
-                Some(Artifact(theCachedFile))
+                Seq(Artifact(theCachedFile))
               } finally {
                 stream.close()
               }
             } catch {
               case io: IOException => {
                 errorMessage(io.getMessage)
-                None
+                Seq()
               }
             }
           })(context)
         }
 
 
-      val unzippedArtifact: Future[Option[Artifact]] =
+      val unzippedArtifact: Future[Seq[Artifact]] =
         if (shouldUnzip) {
           downloadedArtifact.map((artifact) => {
             val filename = URLEncoder.encode("unzip:" + url, "UTF-8")
             val theCachedFile = new File(resourceCache, filename)
             if (theCachedFile.exists()) {
-              Some(Artifact(theCachedFile))
-            } else if (artifact.isDefined) {
-              val zipStream = new FileInputStream(artifact.get.file)
+              Seq(Artifact(theCachedFile))
+            } else if (artifact.nonEmpty) {
+              val zipStream = new FileInputStream(artifact.head.file)
               try {
                 UnzipHelper.unZipIt(zipStream, theCachedFile)
               } finally {
                 zipStream.close()
               }
-              Some(Artifact(theCachedFile, isDirectory = true))
+              Seq(Artifact(theCachedFile, isDirectory = true))
             } else {
-              None
+              Seq()
             }
           })(context)
         } else {

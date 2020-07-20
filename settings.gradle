@@ -1,4 +1,3 @@
 include 'native-common'
 include 'native-lib'
 include 'native-cli'
-include 'dependency-manager'
