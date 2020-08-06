@@ -184,10 +184,19 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
 
 
 class WeavePathProtocolHandler(path: PathBasedResourceResolver) extends ReadFunctionProtocolHandler {
-  override def handlerId: String = "classpath"
 
-  override def createSourceProvider(protocol: String, uri: String, locatable: LocationCapable): SourceProvider = {
-    val maybeResource = path.resolve(uri)
+  override def handles(url: String): Boolean = {
+    url.startsWith("classpath://")
+  }
+
+  override def createSourceProvider(url: String, locatable: LocationCapable): SourceProvider = {
+    val uri = url.stripPrefix("classpath://")
+    val wellFormedUri = if (uri.startsWith("/")) {
+      uri.substring(1)
+    } else {
+      uri
+    }
+    val maybeResource = path.resolve(wellFormedUri)
     maybeResource match {
       case Some(value) => {
         SourceProvider(value, StandardCharsets.UTF_8)

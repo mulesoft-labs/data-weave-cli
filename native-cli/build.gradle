@@ -84,7 +84,7 @@ graal {
 //            "org.mule.weave.v2.core.functions."
 //    option "-H:+TraceClassInitialization"
     option "-H:DeadlockWatchdogInterval=1000"
-    option "-H:+PrintImageObjectTree"
+//    option "-H:+PrintImageObjectTree"
 //    option getOsName() == "osx" ? "--no-server" : "-J-Xms1G"
 }
 

@@ -29,6 +29,7 @@ dependencies {
     compile group: 'org.mule.weave', name: 'dependency-manager', version: weaveVersion
     compile(group: 'org.mule.weave', name: 'raml-module', version: "1.0.0-SNAPSHOT"){
         exclude group: 'org.slf4j'
+        exclude group: 'org.topbraid.shacl'
     }
     compile group: 'org.mule.weave', name: 'http-module', version: "1.0.0-SNAPSHOT"
 
