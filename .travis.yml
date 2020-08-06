@@ -9,7 +9,7 @@ jobs:
     - echo sdkman_auto_answer=true > $HOME/.sdkman/etc/config
     - source "$HOME/.sdkman/bin/sdkman-init.sh"
     install:
-    - sdk install java $(sdk list java | grep -o "8\.[0-9\.]*hs-adpt" | head -1)
+    - sdk install java 8.0.265.hs-adpt
     script:
     - "./gradlew clean"
     - travis_wait 60  ./gradlew --stacktrace native-cli:distro
