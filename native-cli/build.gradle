@@ -85,7 +85,7 @@ graal {
 //    option "-H:+TraceClassInitialization"
     option "-H:DeadlockWatchdogInterval=1000"
 //    option "-H:+PrintImageObjectTree"
-//    option getOsName() == "osx" ? "--no-server" : "-J-Xms1G"
+    option getOsName() == "osx" ? "--no-server" : "-J-Xms1G"
 }
 
 import com.monochromeroad.gradle.plugin.aws.s3.S3Sync
