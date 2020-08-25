@@ -58,6 +58,7 @@ graal {
             "amf.,"+
             "org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider\$"
     option "--initialize-at-build-time=" +
+            "sun.instrument.InstrumentationImpl," +
             "org.mule.weave.dwnative.initializer.Startup," +
             "org.mule.weave.dwnative.," +
             "org.mule.weave.v2.parser.," +
@@ -85,7 +86,7 @@ graal {
 //    option "-H:+TraceClassInitialization"
     option "-H:DeadlockWatchdogInterval=1000"
 //    option "-H:+PrintImageObjectTree"
-    option getOsName() == "osx" ? "--no-server" : "-J-Xms1G"
+    option "-J-Xmx6G"
 }
 
 import com.monochromeroad.gradle.plugin.aws.s3.S3Sync
