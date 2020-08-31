@@ -9,6 +9,8 @@ buildscript {
     }
 }
 
+
+
 dependencies{
     compile project(':native-common')
     
@@ -47,6 +49,7 @@ private static String getOsName() {
 graal {
     mainClass 'org.mule.weave.dwnative.cli.DataWeaveCLI'
     outputName 'dw'
+    javaVersion '11'
     graalVersion graalvmVersion
     option "-H:+ReportExceptionStackTraces"
     option "-J-Xmx3G"
