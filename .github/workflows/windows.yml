@@ -41,9 +41,9 @@ jobs:
       run: wmic pagefile list /format:list
     - name: configure Pagefile
       uses: al-cheb/configure-pagefile-action@v1.2
-    - name: Build Native Image
-        run: |
-          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x86_amd64
-          gradlew build -x
-          gradlew native-cli:nativeImage
-        shell: cmd
+    - name: Build Native Image On Windows
+      run: |
+        call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x86_amd64
+        gradlew build -x
+        gradlew native-cli:nativeImage
+      shell: cmd
