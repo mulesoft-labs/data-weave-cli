@@ -33,5 +33,5 @@ jobs:
       run: ./gradlew build
 
     # Runs a set of commands using the runners shell
-    - name: Run a multi-line script
+    - name: Create Native Image
       run: ./gradlew native-cli:nativeImage
