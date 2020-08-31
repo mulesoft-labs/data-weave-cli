@@ -41,6 +41,8 @@ jobs:
       run: wmic pagefile list /format:list
     - name: configure Pagefile
       uses: al-cheb/configure-pagefile-action@v1.2
+    - name: install visualstudio2017
+      run: choco install windows-sdk-7.1 kb2519277
     - name: Build Native Image On Windows
       run: |
         call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x86_amd64
