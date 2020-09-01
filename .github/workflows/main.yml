@@ -67,5 +67,5 @@ jobs:
       #      uses: al-cheb/configure-pagefile-action@v1.2
 
       - name: Build Native Image On Windows
-        run: gradlew -d native-cli:nativeImage
+        run: gradlew.bat -d native-cli:nativeImage
 #        shell: cmd
