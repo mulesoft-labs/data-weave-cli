@@ -47,8 +47,7 @@ private static String getOsName() {
 }
 
 graal {
-    windowsVsVersion '2019'
-    windowsVsEdition 'Enterprise'
+    windowsVsVarsPath 'C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Enterprise\\VC\\Auxiliary\\Build\\vcvars64.bat'
     mainClass 'org.mule.weave.dwnative.cli.DataWeaveCLI'
     outputName 'dw'
     javaVersion '11'

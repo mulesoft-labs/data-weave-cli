@@ -49,23 +49,14 @@ jobs:
           java-version: 11
 #      - name: install visualstudio2017
 #        run: choco install visualstudio2017-workload-vctools
-#      - name: version
-#        run: dir "C:\Program Files (x86)\Microsoft Visual Studio"
-#      - name: list it
-#        run: dir "C:\Program Files (x86)\Microsoft Visual Studio\2017"
-#      - name: list it1
-#        run: dir "C:\Program Files (x86)\Microsoft Visual Studio\2017\BuildTools"
-#      - name: list it2
-#        run: dir "C:\Program Files (x86)\Microsoft Visual Studio\2017\BuildTools\VC"
-#      - name: list it3
-#        run: dir "C:\Program Files (x86)\Microsoft Visual Studio\2017\BuildTools\VC\Auxiliary"
-#      - name: testit
-#        run: dir "C:\Program Files (x86)\Microsoft Visual Studio\2017\BuildTools\VC\Auxiliary\Build"
-#      #    - name: print page size
-#      #      run: wmic pagefile list /format:list
-#      #    - name: configure Pagefile
-#      #      uses: al-cheb/configure-pagefile-action@v1.2
-
+      - name: Visual Studio Versions
+        run: dir "C:\Program Files (x86)\Microsoft Visual Studio"
+      - name: Executables Vistual Studio Versions
+        run: dir "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build"
+#    - name: print page size
+#      run: wmic pagefile list /format:list
+#    - name: configure Pagefile
+#      uses: al-cheb/configure-pagefile-action@v1.2
       - name: Build Native Image On Windows
-        run: ./gradlew -d --stacktrace --scan native-cli:nativeImage
-#        shell: cmd
+        run:  gradlew -d --stacktrace --scan native-cli:nativeImage
+        shell: cmd
