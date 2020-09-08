@@ -32,6 +32,7 @@ dependencies {
         exclude group: 'org.topbraid.shacl'
     }
     compile group: 'org.mule.weave', name: 'http-module', version: "1.0.0-SNAPSHOT"
+    compile group: 'org.mule.weave', name: 'http-netty-module', version: "1.0.0-SNAPSHOT"
 
 }
 
