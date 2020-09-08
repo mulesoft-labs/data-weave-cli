@@ -35,6 +35,8 @@ jobs:
     # Runs a set of commands using the runners shell
     - name: Create Native Image
       run: ./gradlew native-cli:nativeImage
+    - name: Upload to S3
+      run: ./gradlew native-cli:uploadDistro    
 
   WINDOWS:
     runs-on: windows-2019
