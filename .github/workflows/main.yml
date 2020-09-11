@@ -39,6 +39,9 @@ jobs:
       run: |
         ./gradlew native-cli:distro
         ./gradlew native-cli:uploadDistro
+      env:
+        AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
+        AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
 
 #  WINDOWS:
 #    runs-on: windows-2019
