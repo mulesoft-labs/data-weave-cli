@@ -58,7 +58,9 @@ graal {
     option "--allow-incomplete-classpath"
     option "-H:EnableURLProtocols=http,https"
     option "--initialize-at-run-time=org.mule.weave.v2.module.raml.RamlModuleLoader," +
-            "io.netty.util.internal.logging.Log4JLogger," +
+            "io.netty,"+
+            "org.asynchttpclient,"+
+            "org.mule.weave.v2.module.http.netty.HttpAsyncClientService,"+
             "amf.,"+
             "org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider\$"
     option "--initialize-at-build-time=" +
@@ -87,8 +89,9 @@ graal {
 //            "org.mule.weave.v2.model.values.,"
 //            "org.mule.weave.v2.model.types.,"
 //            "org.mule.weave.v2.core.functions."
-//    option "-H:+TraceClassInitialization"
+    option "-H:+TraceClassInitialization"
     option "-H:DeadlockWatchdogInterval=1000"
+    option "--report-unsupported-elements-at-runtime"
 //    option "-H:+PrintImageObjectTree"
     option "-J-Xmx6G"
 }

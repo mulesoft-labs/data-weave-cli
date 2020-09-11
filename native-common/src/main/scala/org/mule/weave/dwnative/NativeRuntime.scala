@@ -7,6 +7,7 @@ import java.io.StringWriter
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ExecutorService
 
+import io.netty.util.internal.PlatformDependent
 import org.mule.weave.dwnative.initializer.NativeSystemModuleComponents
 import org.mule.weave.v2.deps.Artifact
 import org.mule.weave.v2.deps.MavenDependencyAnnotationProcessor
@@ -57,7 +58,16 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
+  /**
+    * Setup initialization properties
+    */
+  private def setupEnv(): Unit = {
+    System.setProperty("io.netty.processId", Math.abs(PlatformDependent.threadLocalRandom.nextInt).toString);
+    System.setProperty("io.netty.noUnsafe", true.toString);
+  }
+
   private val weaveScriptingEngine: DataWeaveScriptingEngine = {
+    setupEnv()
     val resourceDependencyAnnotationProcessor = ResourceDependencyAnnotationProcessor(
       new File(resourcesCacheDir, "resources"),
       (id: String, kind: String, artifact: Future[Seq[Artifact]]) => {
@@ -101,7 +111,9 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
     run(script, inputs, new DefaultAutoPersistedOutputStream())
   }
 
+
   def run(script: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false): WeaveExecutionResult = {
+
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, defaultOutputMimeType, profile)
       val serviceManager: ServiceManager = createServiceManager()
