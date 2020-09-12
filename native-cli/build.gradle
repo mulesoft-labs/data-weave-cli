@@ -17,12 +17,6 @@ dependencies{
     testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: '3.0.1'
 }
 
-println(System.getenv("AWS_ACCESS_KEY_ID").length())
-println(System.getenv("AWS_ACCESS_KEY_ID").charAt(3))
-println(System.getenv("AWS_ACCESS_KEY_ID").charAt(4))
-println(System.getenv("AWS_SECRET_KEY").length())
-println(System.getenv("AWS_SECRET_KEY").charAt(3))
-println(System.getenv("AWS_SECRET_KEY").charAt(4))
 ext {
 
 
