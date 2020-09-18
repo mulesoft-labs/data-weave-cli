@@ -23,6 +23,10 @@ sourceSets {
     }
 }
 
+// Merging Service Files
+shadowJar {
+    mergeServiceFiles()
+}
 
 dependencies {
 
