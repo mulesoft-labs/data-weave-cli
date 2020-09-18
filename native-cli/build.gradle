@@ -12,17 +12,14 @@ buildscript {
 
 
 dependencies{
-    compile project(':native-common')
-    
+    compile project(path: ':native-common', configuration: 'shadow')
     testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: '3.0.1'
 }
 
 ext {
-
-
     aws = [
-            accessKey: System.getenv("AWS_ACCESS_KEY_ID"),
-            secretKey: System.getenv("AWS_SECRET_KEY")
+        accessKey: System.getenv("AWS_ACCESS_KEY_ID"),
+        secretKey: System.getenv("AWS_SECRET_KEY")
     ]
 }
 
@@ -51,7 +48,7 @@ private static String getOsName() {
 }
 
 graal {
-    windowsVsVarsPath 'C:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat'
+    windowsVsVarsPath 'C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Enterprise\\VC\\Auxiliary\\Build\\vcvars64.bat'
     mainClass 'org.mule.weave.dwnative.cli.DataWeaveCLI'
     outputName 'dw'
     javaVersion '11'
