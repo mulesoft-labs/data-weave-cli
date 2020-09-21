@@ -26,7 +26,7 @@ brew install dw
 ```
 
 #### Manually
-1. Download the zip [Mac](http://weave-cli.s3.amazonaws.com/native-cli-1.0.1-SNAPSHOT-native-distro-osx.zip) | [Linux](http://weave-cli.s3.amazonaws.com/native-cli-1.0.1-SNAPSHOT-native-distro-linux.zip) | [Windows] (http://weave-cli.s3.amazonaws.com/native-cli-1.0.1-SNAPSHOT-native-distro-windows.zip) 
+1. Download the zip [Mac](http://weave-cli.s3.amazonaws.com/native-cli-1.0.1-SNAPSHOT-native-distro-osx.zip) | [Linux](http://weave-cli.s3.amazonaws.com/native-cli-1.0.1-SNAPSHOT-native-distro-linux.zip) | [Windows](http://weave-cli.s3.amazonaws.com/native-cli-1.0.1-SNAPSHOT-native-distro-windows.zip) 
 2. Unzip the file on your `<home_directory>/.dw`
 3. Add `<home_directory>/.dw/bin` to your PATH
 
