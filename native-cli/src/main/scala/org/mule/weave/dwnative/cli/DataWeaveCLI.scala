@@ -63,6 +63,15 @@ class DataWeaveCLIRunner {
     }
   }
 
+  def fileToString(scriptFile: File): String = {
+    val source = Source.fromFile(scriptFile, "UTF-8")
+    try {
+      source.mkString
+    } finally {
+      source.close()
+    }
+  }
+
   def parse(args: Array[String]): Either[WeaveRunnerConfig, String] = {
     var i = 0
     //Use the current directory as the path
@@ -72,14 +81,20 @@ class DataWeaveCLIRunner {
     var profile = false
     var eval = false
     var main: Option[String] = None
+
     val inputs: mutable.Map[String, File] = mutable.Map()
+
 
     while (i < args.length) {
       args(i) match {
         case "-p" | "--path" => {
-          path = if (i + 1 < args.length) {
+          if (i + 1 < args.length) {
             i = i + 1
-            args(i)
+            if (path.isEmpty) {
+              path = args(i)
+            } else {
+              path = path + File.pathSeparator + args(i)
+            }
           } else {
             return Right("Missing path expression")
           }
@@ -96,6 +111,73 @@ class DataWeaveCLIRunner {
           println(" - DataWeave Runtime: V" + DW_RUNTIME_VERSION)
           return Right("")
         }
+        case "--update-grimoires" => {
+          println("Updating grimoires")
+          updateGrimoires()
+          return Right("")
+        }
+        case "--add-wizard" => {
+          if (i + 1 < args.length) {
+            i = i + 1
+            val wizardName = args(i)
+            println(s"Downloading Grimoire From The Wise: `${wizardName}`.")
+            cloneGrimoire(wizardName)
+            return Right("")
+          } else {
+            return Right("Missing <outputPath>")
+          }
+        }
+        case "--spell" => {
+          if (i + 1 < args.length) {
+            i = i + 1
+            val spell = args(i)
+            val wizard = if (spell.contains("/")) {
+              spell.split("/").head
+            } else {
+              null
+            }
+            val spellName = if (spell.contains("/")) {
+              spell.split("/")(1)
+            } else {
+              spell
+            }
+
+            var wizardGrimoire = grimoireFolder(wizard)
+            if (!wizardGrimoire.exists()) {
+              cloneGrimoire(wizard)
+            }
+            wizardGrimoire = grimoireFolder(wizard)
+            val wizardName = if(wizard == null) "Weave" else wizard
+            if (!wizardGrimoire.exists()) {
+
+              return Right(s"[ERROR] Unable to get Wise `$wizardName's` Grimoire.")
+
+            }
+
+            val spellFolder = new File(wizardGrimoire, spellName)
+            if (!spellFolder.exists()) {
+              updateGrimoire(wizardGrimoire)
+            }
+
+            if (!spellFolder.exists()) {
+              return Right(s"[ERROR] Unable find ${spellName} in Wise `${wizardName}'s` Grimoire.")
+            }
+
+            val srcFolder = new File(spellFolder, "src")
+            val mainFile = new File(srcFolder, "Main.dwl")
+            if (!mainFile.isFile) {
+              return Right(s"[ERROR] Unable find `Main.dwl` in the spell: `${spellName}` inside Wise `${wizardName}'s` Grimoire.")
+            }
+            if (path.isEmpty) {
+              path = srcFolder.getAbsolutePath
+            } else {
+              path = path + File.pathSeparator + srcFolder.getAbsolutePath
+            }
+            scriptToRun = Some(fileToString(mainFile))
+          } else {
+            return Right("Missing <spellName>")
+          }
+        }
         case "-i" | "--input" => {
           if (i + 2 < args.length) {
             val input: File = new File(args(i + 2))
@@ -111,17 +193,17 @@ class DataWeaveCLIRunner {
           i = i + 2
         }
         case "-o" | "--output" => {
-          output = if (i + 1 < args.length) {
+          if (i + 1 < args.length) {
             i = i + 1
-            Some(args(i))
+            output = Some(args(i))
           } else {
             return Right("Missing <outputPath>")
           }
         }
         case "-main" | "-m" => {
-          main = if (i + 1 < args.length) {
+          if (i + 1 < args.length) {
             i = i + 1
-            Some(args(i))
+            main = Some(args(i))
           } else {
             return Right("Missing main name identifier")
           }
@@ -131,12 +213,7 @@ class DataWeaveCLIRunner {
             i = i + 1
             val scriptFile = new File(args(i))
             if (scriptFile.exists()) {
-              val source = Source.fromFile(scriptFile, "UTF-8")
-              try {
-                scriptToRun = Some(source.mkString)
-              } finally {
-                source.close()
-              }
+              scriptToRun = Some(fileToString(scriptFile))
             } else {
               return Right(s"File `${args(i)}` was not found.")
             }
@@ -162,7 +239,7 @@ class DataWeaveCLIRunner {
 
     val paths = if (path.isEmpty) Array[String]() else path.split(File.pathSeparatorChar)
     if (scriptToRun.isEmpty && main.isEmpty) {
-      Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath>")
+      Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath> or --spell ")
     } else {
       Left(WeaveRunnerConfig(paths, profile, eval, scriptToRun, main, inputs.toMap, output))
     }
@@ -186,6 +263,9 @@ class DataWeaveCLIRunner {
       |
       |Arguments Detail:
       |
+      | --spell | Runs a spell. Use the <spellName> or <wizard>/<spellName> for spells from a given wizard.
+      | --update-grimoires | Update all wizard grimoires
+      | --add-wizard    | Downloads wizard grimoire so that its spell are accessible
       | --path or -p    | Path of jars or directories where weave files are being searched.
       | --input or -i   | Declares a new input.
       | --verbose or -v | Enable Verbose Mode.
@@ -201,7 +281,7 @@ class DataWeaveCLIRunner {
       |
       | Documentation reference:
       |
-      | https://docs.mulesoft.com/mule-runtime/4.2/dataweave
+      | https://docs.mulesoft.com/mule-runtime/4.3/dataweave
     """.stripMargin
   }
 
@@ -210,6 +290,7 @@ class DataWeaveCLIRunner {
     val path = config.path.map(new File(_))
 
     val nativeRuntime = new NativeRuntime(DataWeaveUtils.getCacheHome(), DataWeaveUtils.getLibPathHome(), path, Executors.newCachedThreadPool())
+
     val script: String = if (config.main.isDefined) {
       val mainScriptName = config.main.get
       val maybeString = nativeRuntime.getResourceContent(NameIdentifier(mainScriptName))
@@ -264,7 +345,6 @@ class DataWeaveCLIRunner {
         }
       }
     } else {
-
       val out = if (config.outputPath.isDefined) new FileOutputStream(config.outputPath.get) else System.out
       val defaultOutputType = Option(System.getenv(DW_DEFAULT_OUTPUT_MIMETYPE_VAR)).getOrElse("application/json");
       val result = nativeRuntime.run(script, scriptingBindings, out, defaultOutputType, config.profile)
@@ -288,6 +368,54 @@ class DataWeaveCLIRunner {
       None
     }
   }
+
+
+  def grimoireFolder(wizard: String): File = {
+    val grimoiresFolder = grimoiresFolders
+    new File(grimoiresFolder, grimoireName(wizard))
+  }
+
+   def grimoiresFolders: File = {
+    new File(DataWeaveUtils.getDWHome(), "grimoires")
+  }
+
+  def cloneGrimoire(wizard: String): Unit = {
+    println(s"Fetching `${wizard}'s` Grimoire.")
+    val url: String = buildRepoUrl(wizard)
+    val processBuilder = new ProcessBuilder("git", "clone", url, grimoireFolder(wizard).getAbsolutePath)
+    processBuilder.inheritIO()
+    processBuilder.start().waitFor()
+  }
+
+  def updateGrimoires(): Unit = {
+    val grimoires = grimoiresFolders.listFiles()
+    grimoires.foreach((grimoire) => {
+      updateGrimoire(grimoire)
+    })
+  }
+
+  def updateGrimoire(grimoire: File): Int = {
+    val processBuilder = new ProcessBuilder("git", "pull")
+    processBuilder.directory(grimoire)
+    processBuilder.inheritIO()
+    processBuilder.start().waitFor()
+
+  }
+
+  def buildRepoUrl(user: String): String = {
+    val domain = if (user == null) "mulesoft-labs" else user
+    val repo = grimoireName(user)
+    val url = s"https://github.com/${domain}/${repo}.git"
+    url
+  }
+
+  def grimoireName(user: String): String = {
+    if (user == null)
+      "data-weave-grimoire"
+    else
+      s"${user}-data-weave-grimoire"
+  }
+
 }
 
 class CustomWeaveDataFormat(moduleManager: ModuleLoaderManager) extends WeaveDataFormat {
