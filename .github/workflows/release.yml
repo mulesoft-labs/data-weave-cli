@@ -46,18 +46,15 @@ jobs:
           draft: false
           prerelease: false
 
-      # Build Artifact that we want to publish
-      - name: Build artifact name
-        id: artifact_name
-        run: |
-          if [OS == 'Windows']
-          then
-              echo "::set-output name=artifact::dw.exe"
-          else
-              echo "::set-output name=artifact::dw"
-          fi
-        env:
-          OS: ${{runner.os}}
+      # Build Artifact that we want to publish for windows
+      - name: Build artifact name Windows
+        run:  echo "::set-env name=artifact::dw.exe"
+        if: ${{runner.os == "Windows"}}
+
+      # Build Artifact that we want to publish for other envs
+      - name: Build artifact name Windows
+        run: echo "::set-env name=artifact::dw"
+        if: ${{runner.os != "Windows"}}
 
       - name: Artifact version
         id: artifact_version
@@ -71,6 +68,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
-          asset_path: native-cli/build/graal/${{ steps.artifact_name.outputs.artifact }}
+          asset_path: native-cli/build/graal/${{ env.artifact }}
           asset_name: data-weave-${{env.NATIVE_VERSION}}-${{runner.os}}
           asset_content_type: application/zip

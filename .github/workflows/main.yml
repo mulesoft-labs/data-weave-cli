@@ -49,21 +49,18 @@ jobs:
         AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
         AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
 
-    # Build Artifact that we want to publish
-    - name: Build artifact name
-      id: artifact_name
-      run: |
-        if [OS == 'Windows']
-        then
-            echo "::set-output name=artifact::dw.exe"
-        else
-            echo "::set-output name=artifact::dw"
-        fi
-      env:
-        OS: ${{runner.os}}
+    # Build Artifact that we want to publish for windows
+    - name: Build artifact name Windows
+      run:  echo "::set-env name=artifact::dw.exe"
+      if: ${{runner.os == "Windows"}}
+
+    # Build Artifact that we want to publish for other envs
+    - name: Build artifact name Windows
+      run: echo "::set-env name=artifact::dw"
+      if: ${{runner.os != "Windows"}}
 
     - name: Upload generated script
       uses: actions/upload-artifact@v2
       with:
         name: dw-${{runner.os}}
-        path: native-cli/build/graal/${{ steps.artifact_name.outputs.artifact }}
+        path: native-cli/build/graal/${{ env.artifact }}
