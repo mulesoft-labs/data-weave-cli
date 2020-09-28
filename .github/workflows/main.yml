@@ -49,18 +49,18 @@ jobs:
         AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
         AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
 
-      # Build Artifact that we want to publish
-      - name: Build artifact name
-        id: artifact_name
-        run: |
-          if [OS == 'Windows']
-          then
-              echo "::set-output name=artifact::dw.exe"
-          else
-              echo "::set-output name=artifact::dw"
-          fi
-        env:
-          OS: ${{runner.os}}
+    # Build Artifact that we want to publish
+    - name: Build artifact name
+      id: artifact_name
+      run: |
+        if [OS == 'Windows']
+        then
+            echo "::set-output name=artifact::dw.exe"
+        else
+            echo "::set-output name=artifact::dw"
+        fi
+      env:
+        OS: ${{runner.os}}
 
     - name: Upload generated script
         uses: actions/upload-artifact@v2
