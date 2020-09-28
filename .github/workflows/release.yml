@@ -41,30 +41,17 @@ jobs:
       - name: Create Native Image
         run: ./gradlew native-cli:nativeImage
 
-      # Create the release In github
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
-
       - name: Artifact version
         id: artifact_version
         run: echo "::set-env name=NATIVE_VERSION::$(echo '${{github.ref}}' | sed -e 's,.*/v\(.*\),\1,')"
 
       # Upload the artifact file
-      - name: Upload Release Asset
-        id: upload-release-asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload binaries to release
+        uses: svenstaro/upload-release-action@v2
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
-          asset_path: native-cli/build/graal/${{ matrix.script_name }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: native-cli/build/graal/${{ matrix.script_name }}
           asset_name: data-weave-${{env.NATIVE_VERSION}}-${{runner.os}}
-          asset_content_type: application/zip
+          tag: ${{ github.ref }}
+          overwrite: true
+
