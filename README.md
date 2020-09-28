@@ -168,3 +168,18 @@ This example will create a really big csv and it will stream it to the HTTP serv
 
 ### Documentation
 For more info about the language see the [docs site](https://docs.mulesoft.com/mule-runtime/latest/dataweave)
+
+### Spells 
+
+
+Spells are just executables scripts that can be called from the command line using the `Spell` name.
+For example 
+`dw --eval --spell Playground` It is going to execute the Playground spell that is going to be located in 
+`{User_Home}/.dw/grimoires/data-weave-grimoire/Playground/src/Main.dwl`
+
+### Grimoire
+
+A grimoire is a collection of `spells` from a given `wizard`. The default `grimoire` is located in [data-weave-grimoire](https://github.com/mulesoft-labs/data-weave-grimoire)
+But it can also be consumed from other trusted `Wizard`. For example `leansh/Tutorial` is going to looks for a github repo called leansh-data-weave-grimoire under leansh user.
+
+
