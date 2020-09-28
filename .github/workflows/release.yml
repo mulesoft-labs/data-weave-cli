@@ -1,7 +1,4 @@
-# This is a basic workflow to help you get started with Actions
-
-name: Release Native CLI
-
+name: Release DataWeave Native CLI
 on:
   push:
     # Sequence of patterns matched against refs/tags
@@ -74,6 +71,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
-          asset_path: 'native-cli/build/graal/${{ steps.artifact_name.outputs.artifact }}
+          asset_path: native-cli/build/graal/${{ steps.artifact_name.outputs.artifact }}
           asset_name: data-weave-${{env.NATIVE_VERSION}}-${{runner.os}}
           asset_content_type: application/zip
