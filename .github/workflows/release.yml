@@ -50,13 +50,13 @@ jobs:
       - name: Build artifact name Windows
         run:  |
           echo "::set-env name=artifact::dw.exe"
-        if: contains(runner.os, 'windows')
+        if: contains(runner.os, 'indows')
 
       # Build Artifact that we want to publish for other envs
       - name: Build artifact name Windows
         run: |
           echo "::set-env name=artifact::dw"
-        if: !contains(runner.os, 'windows')
+        if: !contains(runner.os, 'indows')
 
       - name: Artifact version
         id: artifact_version
