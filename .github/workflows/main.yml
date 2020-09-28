@@ -51,14 +51,17 @@ jobs:
 
     # Build Artifact that we want to publish for windows
     - name: Build artifact name Windows
-      run:  echo "::set-env name=artifact::dw.exe"
+      run:  |
+        echo "::set-env name=artifact::dw.exe"
       if: contains(runner.os, 'windows')
 
     # Build Artifact that we want to publish for other envs
     - name: Build artifact name Windows
-      run: echo "::set-env name=artifact::dw"
+      run: |
+        echo "::set-env name=artifact::dw"
       if: !contains(runner.os, 'windows')
 
+    # Upload the generated artifact
     - name: Upload generated script
       uses: actions/upload-artifact@v2
       with:
