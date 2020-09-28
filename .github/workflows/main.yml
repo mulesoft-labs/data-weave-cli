@@ -56,7 +56,7 @@ jobs:
       if: contains(runner.os, 'indows')
 
     # Build Artifact that we want to publish for other envs
-    - name: Build artifact name Windows
+    - name: Build artifact name for Linux and Mac
       run: |
         echo "::set-env name=artifact::dw"
       if: !contains(runner.os, 'indows')
