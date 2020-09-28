@@ -63,7 +63,7 @@ jobs:
         OS: ${{runner.os}}
 
     - name: Upload generated script
-        uses: actions/upload-artifact@v2
-        with:
-          name: dw-${{runner.os}}
-          path: native-cli/build/graal/${{ steps.artifact_name.outputs.artifact }}
+      uses: actions/upload-artifact@v2
+      with:
+        name: dw-${{runner.os}}
+        path: native-cli/build/graal/${{ steps.artifact_name.outputs.artifact }}
