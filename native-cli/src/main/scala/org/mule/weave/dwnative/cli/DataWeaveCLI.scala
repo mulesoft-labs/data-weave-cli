@@ -80,6 +80,7 @@ class DataWeaveCLIRunner {
     var output: Option[String] = None
     var profile = false
     var eval = false
+    var cleanCache = false
     var main: Option[String] = None
 
     val inputs: mutable.Map[String, File] = mutable.Map()
@@ -126,6 +127,9 @@ class DataWeaveCLIRunner {
           } else {
             return Right("Missing <outputPath>")
           }
+        }
+        case "--clean-cache" => {
+          cleanCache = true
         }
         case "--spell" => {
           if (i + 1 < args.length) {
@@ -241,7 +245,7 @@ class DataWeaveCLIRunner {
     if (scriptToRun.isEmpty && main.isEmpty) {
       Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath> or --spell ")
     } else {
-      Left(WeaveRunnerConfig(paths, profile, eval, scriptToRun, main, inputs.toMap, output))
+      Left(WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun, main, inputs.toMap, output))
     }
   }
 
@@ -271,9 +275,10 @@ class DataWeaveCLIRunner {
       | --verbose or -v | Enable Verbose Mode.
       | --output or -o  | Specifies output file for the transformation if not standard output will be used.
       | --main or -m    | The full qualified name of the mapping to be execute.
-      | --file or -f    | Path to the file
+      | --file or -f     | Path to the file
       | --eval          | Evaluates the script instead of writing it
       | --version       | The version of the CLI and Runtime
+      | --clean-cache   | Cleans the cache where all artifacts are being downloaded this force to download all artifacts every time
       |
       | Example:
       |
@@ -285,11 +290,26 @@ class DataWeaveCLIRunner {
     """.stripMargin
   }
 
+  def deleteDirectory(directoryToBeDeleted: File): Boolean = {
+    val allContents = directoryToBeDeleted.listFiles
+    if (allContents != null) {
+      for (file <- allContents) {
+        deleteDirectory(file)
+      }
+    }
+    directoryToBeDeleted.delete
+  }
+
 
   def run(config: WeaveRunnerConfig): Int = {
     val path = config.path.map(new File(_))
 
-    val nativeRuntime = new NativeRuntime(DataWeaveUtils.getCacheHome(), DataWeaveUtils.getLibPathHome(), path, Executors.newCachedThreadPool())
+    val cacheDirectory = DataWeaveUtils.getCacheHome()
+    if(config.cleanCache){
+      deleteDirectory(cacheDirectory)
+      cacheDirectory.mkdirs()
+    }
+    val nativeRuntime = new NativeRuntime(cacheDirectory, DataWeaveUtils.getLibPathHome(), path, Executors.newCachedThreadPool())
 
     val script: String = if (config.main.isDefined) {
       val mainScriptName = config.main.get
@@ -422,5 +442,5 @@ class CustomWeaveDataFormat(moduleManager: ModuleLoaderManager) extends WeaveDat
   override def createModuleLoader(): ModuleLoaderManager = moduleManager
 }
 
-case class WeaveRunnerConfig(path: Array[String], profile: Boolean, eval: Boolean, scriptToRun: Option[String], main: Option[String], inputs: Map[String, File], outputPath: Option[String])
+case class WeaveRunnerConfig(path: Array[String], profile: Boolean, eval: Boolean, cleanCache:Boolean, scriptToRun: Option[String], main: Option[String], inputs: Map[String, File], outputPath: Option[String])
 

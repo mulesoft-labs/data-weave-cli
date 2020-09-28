@@ -53,7 +53,7 @@ subprojects {
         }
         repositories {
             maven {
-                name "mule-ee-releases"
+                name "mule-releases"
                 url "https://repository-master.mulesoft.org/nexus/content/repositories/${project.version.endsWith('-SNAPSHOT') ? 'snapshots/' : 'releases/'}"
             }
         }
