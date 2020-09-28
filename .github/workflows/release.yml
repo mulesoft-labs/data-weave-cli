@@ -11,7 +11,7 @@ on:
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   # This workflow contains a single job called "build"
-  OSX_LINUX_WINDOWS:
+  RELEASE_EXTENSION:
     strategy:
       matrix:
         os: [macos-latest, ubuntu-latest, windows-2019]
@@ -35,10 +35,9 @@ jobs:
 
       # Runs a set of commands using the runners shell
       - name: Create Native Image
-        run: |
-          echo "::set-env name=NATIVE_VERSION::$(echo '${{github.ref}}' | sed -e 's,.*/v\(.*\),\1,')"
-          export NATIVE_VERSION=$(echo '${{github.ref}}' | sed -e 's,.*/v\(.*\),\1,')
-          ./gradlew native-cli:nativeImage -p nativeVersion:${NATIVE_VERSION}
+        run: ./gradlew native-cli:nativeImage
+
+      # Create the release In github
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
@@ -50,6 +49,7 @@ jobs:
           draft: false
           prerelease: false
 
+      # Build Artifact that we want to publish
       - name: Build artifact name
         id: artifact_name
         run: |
@@ -61,6 +61,12 @@ jobs:
           fi
         env:
           OS: ${{runner.os}}
+
+      - name: Artifact version
+        id: artifact_version
+        run: echo "::set-env name=NATIVE_VERSION::$(echo '${{github.ref}}' | sed -e 's,.*/v\(.*\),\1,')"
+
+      # Upload the artifact file
       - name: Upload Release Asset
         id: upload-release-asset
         uses: actions/upload-release-asset@v1
