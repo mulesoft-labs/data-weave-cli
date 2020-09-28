@@ -17,6 +17,13 @@ jobs:
     strategy:
       matrix:
         os: [macos-latest, ubuntu-latest, windows-2019]
+        include:
+          - os: windows-2019
+            script_name: dw.exe
+          - os: ubuntu-latest
+            script_name: dw
+          - os: macos-latest
+            script_name: dw
     runs-on: ${{ matrix.os }}
 
     # Steps represent a sequence of tasks that will be executed as part of the job
@@ -49,21 +56,9 @@ jobs:
         AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
         AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
 
-    # Build Artifact that we want to publish for windows
-    - name: Build artifact name Windows
-      run:  |
-        echo "::set-env name=artifact::dw.exe"
-      if: contains(runner.os, 'indows')
-
-    # Build Artifact that we want to publish for other envs
-    - name: Build artifact name for Linux and Mac
-      run: |
-        echo "::set-env name=artifact::dw"
-      if: !contains(runner.os, 'indows')
-
     # Upload the generated artifact
     - name: Upload generated script
       uses: actions/upload-artifact@v2
       with:
         name: dw-${{runner.os}}
-        path: native-cli/build/graal/${{ env.artifact }}
+        path: native-cli/build/graal/${{ matrix.script_name }}
