@@ -14,11 +14,11 @@ jobs:
         os: [macos-latest, ubuntu-latest, windows-2019]
         include:
           - os: windows-2019
-            script_name: dw.exe
+            script_name: windows
           - os: ubuntu-latest
-            script_name: dw
+            script_name: linux
           - os: macos-latest
-            script_name: dw
+            script_name: osx
 
     runs-on: ${{ matrix.os }}
     # Steps represent a sequence of tasks that will be executed as part of the job
@@ -37,21 +37,24 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
           AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
 
+      - name: Artifact version
+          id: artifact_version
+          run: echo "::set-env name=NATIVE_VERSION::$(echo '${{github.ref}}' | sed -e 's,.*/v\(.*\),\1,')"
+
+
       # Runs a set of commands using the runners shell
       - name: Create Native Image
-        run: ./gradlew native-cli:nativeImage
-
-      - name: Artifact version
-        id: artifact_version
-        run: echo "::set-env name=NATIVE_VERSION::$(echo '${{github.ref}}' | sed -e 's,.*/v\(.*\),\1,')"
+        run: |
+          ./gradlew native-cli:nativeImage -PnativeVersion=${{env.NATIVE_VERSION}}
+          ./gradlew native-cli:distro -PnativeVersion=${{env.NATIVE_VERSION}}
 
       # Upload the artifact file
       - name: Upload binaries to release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: native-cli/build/graal/${{ matrix.script_name }}
-          asset_name: data-weave-${{env.NATIVE_VERSION}}-${{runner.os}}
+          file: native-cli/build/distributions/native-cli-${{env.NATIVE_VERSION}}-native-distro-${{ matrix.script_name }}.zip
+          asset_name: dw-${{env.NATIVE_VERSION}}-${{runner.os}}.zip
           tag: ${{ github.ref }}
           overwrite: true
 

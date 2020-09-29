@@ -19,11 +19,11 @@ jobs:
         os: [macos-latest, ubuntu-latest, windows-2019]
         include:
           - os: windows-2019
-            script_name: dw.exe
+            script_name: windows
           - os: ubuntu-latest
-            script_name: dw
+            script_name: linux
           - os: macos-latest
-            script_name: dw
+            script_name: osx
     runs-on: ${{ matrix.os }}
 
     # Steps represent a sequence of tasks that will be executed as part of the job
@@ -60,5 +60,5 @@ jobs:
     - name: Upload generated script
       uses: actions/upload-artifact@v2
       with:
-        name: dw-${{runner.os}}
-        path: native-cli/build/graal/${{ matrix.script_name }}
+        name: dw-${{env.NATIVE_VERSION}}-${{runner.os}}.zip
+        path: native-cli/build/distributions/native-cli-${{env.NATIVE_VERSION}}-native-distro-${{ matrix.script_name }}.zip
