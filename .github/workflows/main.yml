@@ -61,4 +61,4 @@ jobs:
       uses: actions/upload-artifact@v2
       with:
         name: dw-${{env.NATIVE_VERSION}}-${{runner.os}}.zip
-        path: native-cli/build/distributions/native-cli-${{env.NATIVE_VERSION}}-native-distro-${{ matrix.script_name }}.zip
+        path: native-cli/build/distributions/native-cli-1.0.3-SNAPSHOT-native-distro-${{ matrix.script_name }}.zip
