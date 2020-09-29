@@ -9,7 +9,8 @@ on:
     branches: [ master ]
   pull_request:
     branches: [ master ]
-
+env:
+  NATIVE_VERSION: 1.0.8
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   # This workflow contains a single job called "build"
@@ -60,5 +61,5 @@ jobs:
     - name: Upload generated script
       uses: actions/upload-artifact@v2
       with:
-        name: dw-1.0.3-SNAPSHOT-${{runner.os}}.zip
-        path: native-cli/build/distributions/native-cli--native-distro-${{ matrix.script_name }}.zip
+        name: dw-${{env.NATIVE_VERSION}}-${{runner.os}}.zip
+        path: native-cli/build/distributions/native-cli-${{env.NATIVE_VERSION}}-native-distro-${{ matrix.script_name }}.zip

@@ -7,7 +7,7 @@ on:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 env:
-  NATIVE_VERSION: 1.0.7
+  NATIVE_VERSION: 1.0.8
 
 jobs:
 
@@ -44,8 +44,8 @@ jobs:
       # Runs a set of commands using the runners shell
       - name: Create Native Image
         run: |
-          ./gradlew native-cli:nativeImage -PnativeVersion=${{env.NATIVE_VERSION}}
-          ./gradlew native-cli:distro -PnativeVersion=${{env.NATIVE_VERSION}}
+          ./gradlew native-cli:nativeImage
+          ./gradlew native-cli:distro
 
       # Upload the artifact file
       - name: Upload binaries to release
