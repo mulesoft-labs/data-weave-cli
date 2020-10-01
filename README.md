@@ -2,30 +2,40 @@
 
 **DW CLI** allows to execute queries and generate data directly from the command line.
 
-**Supported Data Formats are:**
 
-| Format  |      MimeType      |  Extension |
-|----------|:-------------:|------:|
-| Xml |  application/xml | .xml |
-| Json |    application/json   |   .json |
-| CSV | application/csv |   .csv |
-| Properties | text/x-java-properties | .properties|
-| TextPlain | text/plain | .txt|
-| Yaml | application/yaml | .yaml|
-| Binary | application/octet-stream| .bin|
     
 
 **DW CLI is** compiled with [Graal AOT](https://www.graalvm.org/docs/reference-manual/aot-compilation/) for fast bootstrap so download the one for your target OS.
 
+## What does it contains?
 
-## How to install it 
-#### Using Homebrew:
+- It includes all the modules that are included in the weave runtime. [wlang](https://github.com/mulesoft/data-weave/tree/master/wlang)
+- It includes file-module, http-module and raml-module from [data-weave-io]((https://github.com/mulesoft-labs/data-weave-io)
+- It includes dependency-management-module. This module allows to declare dependencies using annotations.
+- Data Formats are:
+
+| Format  |      MimeType      |  Extension |
+|----------|:-------------:|------:|
+| Xml | application/xml | .xml |
+| Json | application/json | .json |
+| CSV | application/csv | .csv |
+| Properties | text/x-java-properties | .properties|
+| TextPlain | text/plain | .txt|
+| Yaml | application/yaml | .yaml|
+| Binary | application/octet-stream| .bin|
+| Multipart | multipart/form-data| .multipart|
+| UrlEncoded | application/x-www-form-urlencoded|.urlencoded|
+| NDjson| application/x-ndjson|.ndjson|
+
+## How to install it? 
+
+### Using Homebrew:
 ```
 brew tap mulesoft-labs/data-weave
 brew install dw
 ```
 
-#### Manually
+### Manually
 1. Download the zip [Mac](https://github.com/mulesoft-labs/data-weave-native/releases/download/v1.0.9/dw-1.0.9-macOS.zip) | [Linux](https://github.com/mulesoft-labs/data-weave-native/releases/download/v1.0.9/dw-1.0.9-Linux.zip) | [Windows](https://github.com/mulesoft-labs/data-weave-native/releases/download/v1.0.9/dw-1.0.9-Windows.zip) 
 2. Unzip the file on your `<home_directory>/.dw`
 3. Add `<home_directory>/.dw/bin` to your PATH
@@ -41,6 +51,7 @@ If the directory containing the `dw` executable is in your PATH, you can run `dw
 `dw`
  
 ```bash
+
 .........................................................................
 .%%%%%....%%%%...%%%%%%...%%%%...%%...%%..%%%%%%...%%%%...%%..%%..%%%%%%.
 .%%..%%..%%..%%....%%....%%..%%..%%...%%..%%......%%..%%..%%..%%..%%.....
@@ -56,22 +67,29 @@ dw [-p <weavePath>]? [-i <name> <path>]* [-v]? [-o <outputPath>]? [[-f <filePath
 
 Arguments Detail:
 
+ --spell | Runs a spell. Use the <spellName> or <wizard>/<spellName> for spells from a given wizard.
+ --update-grimoires | Update all wizard grimoires
+ --add-wizard    | Downloads wizard grimoire so that its spell are accessible
  --path or -p    | Path of jars or directories where weave files are being searched.
  --input or -i   | Declares a new input.
  --verbose or -v | Enable Verbose Mode.
  --output or -o  | Specifies output file for the transformation if not standard output will be used.
  --main or -m    | The full qualified name of the mapping to be execute.
+ --file or -f     | Path to the file
+ --eval          | Evaluates the script instead of writing it
+ --version       | The version of the CLI and Runtime
+ --clean-cache   | Cleans the cache where all artifacts are being downloaded this force to download all artifacts every time
 
- Examples
+ Example:
 
  dw -i payload <fullpathToUser.json> "output application/json --- payload filter (item) -> item.age > 17"
 
  Documentation reference:
 
- https://docs.mulesoft.com/mule-runtime/4.2/dataweave
+ https://docs.mulesoft.com/mule-runtime/4.3/dataweave
+    
 
 ```
-
 
 ### Query content from a file
 
@@ -166,10 +184,10 @@ This example will create a really big csv and it will stream it to the HTTP serv
 `dw "output application/csv --- (1 to 10000000000000000000000) map (item) -> {name: 'User \$(item)'}" | curl -X POST  -T "/dev/stdin" http://localhost:8081/`
 
 
-### Documentation
+## Documentation
 For more info about the language see the [docs site](https://docs.mulesoft.com/mule-runtime/latest/dataweave)
 
-### Spells 
+## Spells 
 
 
 Spells are just executables scripts that can be called from the command line using the `Spell` name.
@@ -177,7 +195,7 @@ For example
 `dw --eval --spell Playground` It is going to execute the Playground spell that is going to be located in 
 `{User_Home}/.dw/grimoires/data-weave-grimoire/Playground/src/Main.dwl`
 
-### Grimoire
+## Grimoire
 
 A grimoire is a collection of `spells` from a given `wizard`. The default `grimoire` is located in [data-weave-grimoire](https://github.com/mulesoft-labs/data-weave-grimoire)
 But it can also be consumed from other trusted `Wizard`. For example `leansh/Tutorial` is going to looks for a github repo called leansh-data-weave-grimoire under leansh user.
