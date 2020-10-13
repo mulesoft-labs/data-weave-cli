@@ -400,7 +400,8 @@ class DataWeaveCLIRunner {
   }
 
   def cloneGrimoire(wizard: String): Unit = {
-    println(s"Fetching `${wizard}'s` Grimoire.")
+    val wizardName = if(wizard == null) "DW" else wizard
+    println(s"Fetching `$wizardName's` Grimoire.")
     val url: String = buildRepoUrl(wizard)
     val processBuilder = new ProcessBuilder("git", "clone", url, grimoireFolder(wizard).getAbsolutePath)
     processBuilder.inheritIO()
