@@ -25,14 +25,14 @@ subprojects {
     version nativeVersion
 
     compileScala {
-        targetCompatibility = "11"
-        sourceCompatibility = "11"
+//        targetCompatibility = "11"
+//        sourceCompatibility = "11"
     }
 
 
     compileJava   {
-        sourceCompatibility = '11'
-        targetCompatibility = '11'
+//        sourceCompatibility = '11'
+//        targetCompatibility = '11'
     }
 
 

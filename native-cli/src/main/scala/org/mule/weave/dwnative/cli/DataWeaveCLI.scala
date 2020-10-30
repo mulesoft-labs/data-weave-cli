@@ -4,6 +4,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.nio.file.Files
 import java.util.concurrent.Executors
 
 import org.mule.weave.dwnative.NativeRuntime
@@ -22,6 +23,7 @@ import sun.misc.Signal
 import sun.misc.SignalHandler
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 import scala.util.Try
 
@@ -37,13 +39,18 @@ object DataWeaveCLI extends App {
 }
 
 class DataWeaveCLIRunner {
-  val DW_DEFAULT_INPUT_MIMETYPE_VAR = "DW_DEFAULT_INPUT_MIMETYPE"
+  val DW_DEFAULT_INPUT_MIMETYPE_VAR: String = "DW_DEFAULT_INPUT_MIMETYPE"
+  val DW_DEFAULT_OUTPUT_MIMETYPE_VAR: String = "DW_DEFAULT_OUTPUT_MIMETYPE"
+  private val DATA_WEAVE_GRIMOIRE_FOLDER = "data-weave-grimoire"
 
-  val DW_DEFAULT_OUTPUT_MIMETYPE_VAR = "DW_DEFAULT_OUTPUT_MIMETYPE"
+  val DW_CLI_VERSION: String = ComponentVersion.nativeVersion
+  val DW_RUNTIME_VERSION: String = ComponentVersion.weaveVersion
 
-  val DW_CLI_VERSION = ComponentVersion.nativeVersion
 
-  val DW_RUNTIME_VERSION = ComponentVersion.weaveVersion
+  @transient
+  var keepRunning = true
+  val monitor = new Object()
+
 
   def run(args: Array[String]): Int = {
     val scriptToRun = parse(args)
@@ -76,12 +83,16 @@ class DataWeaveCLIRunner {
     var i = 0
     //Use the current directory as the path
     var path: String = ""
-    var scriptToRun: Option[String] = None
+    var scriptToRun: Option[() => String] = None
     var output: Option[String] = None
     var profile = false
     var eval = false
+    var watch = false
+    val filesToWatch: ArrayBuffer[File] = ArrayBuffer()
     var cleanCache = false
     var main: Option[String] = None
+    var scriptName: Option[String] = None
+    var remoteDebug = false
 
     val inputs: mutable.Map[String, File] = mutable.Map()
 
@@ -131,7 +142,15 @@ class DataWeaveCLIRunner {
         case "--clean-cache" => {
           cleanCache = true
         }
-        case "--spell" => {
+        case "--watch" => {
+          watch = true
+        }
+        case "--list-spells" => {
+          val builder: StringBuilder = listSpells()
+          println(builder)
+          return Right("")
+        }
+        case "-s" | "--spell" => {
           if (i + 1 < args.length) {
             i = i + 1
             val spell = args(i)
@@ -145,17 +164,20 @@ class DataWeaveCLIRunner {
             } else {
               spell
             }
+            val lastUpdate = hoursSinceLastUpdate()
+            //Update grimoires every day
+            if (lastUpdate > 24) {
+              updateGrimoires()
+            }
 
             var wizardGrimoire = grimoireFolder(wizard)
             if (!wizardGrimoire.exists()) {
               cloneGrimoire(wizard)
             }
             wizardGrimoire = grimoireFolder(wizard)
-            val wizardName = if(wizard == null) "Weave" else wizard
+            val wizardName = if (wizard == null) "Weave" else wizard
             if (!wizardGrimoire.exists()) {
-
               return Right(s"[ERROR] Unable to get Wise `$wizardName's` Grimoire.")
-
             }
 
             val spellFolder = new File(wizardGrimoire, spellName)
@@ -177,7 +199,8 @@ class DataWeaveCLIRunner {
             } else {
               path = path + File.pathSeparator + srcFolder.getAbsolutePath
             }
-            scriptToRun = Some(fileToString(mainFile))
+            scriptName = Some(spellName)
+            scriptToRun = Some(() => fileToString(mainFile))
           } else {
             return Right("Missing <spellName>")
           }
@@ -187,6 +210,7 @@ class DataWeaveCLIRunner {
             val input: File = new File(args(i + 2))
             val inputName: String = args(i + 1)
             if (input.exists()) {
+              filesToWatch.+=(input)
               inputs.put(inputName, input)
             } else {
               return Right(red(s"Invalid input file $inputName ${input.getAbsolutePath}."))
@@ -207,17 +231,23 @@ class DataWeaveCLIRunner {
         case "-main" | "-m" => {
           if (i + 1 < args.length) {
             i = i + 1
+            scriptName = Some(args(i))
             main = Some(args(i))
           } else {
             return Right("Missing main name identifier")
           }
+        }
+        case "--remote-debug" => {
+          remoteDebug = true
         }
         case "-f" | "--file" => {
           if (i + 1 < args.length) {
             i = i + 1
             val scriptFile = new File(args(i))
             if (scriptFile.exists()) {
-              scriptToRun = Some(fileToString(scriptFile))
+              filesToWatch.+=(scriptFile)
+              scriptName = Some(scriptFile.getName)
+              scriptToRun = Some(() => fileToString(scriptFile))
             } else {
               return Right(s"File `${args(i)}` was not found.")
             }
@@ -231,8 +261,8 @@ class DataWeaveCLIRunner {
         case "--eval" => {
           eval = true
         }
-        case scriptPath if (i + 1 == args.length) => {
-          scriptToRun = Some(scriptPath)
+        case script if (i + 1 == args.length) => {
+          scriptToRun = Some(() => script)
         }
         case arg => {
           return Right(s"Invalid argument ${arg}")
@@ -245,8 +275,40 @@ class DataWeaveCLIRunner {
     if (scriptToRun.isEmpty && main.isEmpty) {
       Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath> or --spell ")
     } else {
-      Left(WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun, main, inputs.toMap, output))
+      Left(WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun, main, inputs.toMap, output, filesToWatch, watch, remoteDebug))
     }
+  }
+
+
+
+  private def listSpells(): StringBuilder = {
+    val builder = new StringBuilder()
+    builder.append("Spells:\n")
+    val grimoires = grimoiresFolders()
+    val grimoiresDirs = grimoires.listFiles()
+    if (grimoiresDirs != null) {
+      grimoiresDirs.foreach((g) => {
+        val name = if (g.getName.equals(DATA_WEAVE_GRIMOIRE_FOLDER)) "" else g.getName + "/"
+        val spells = g.listFiles()
+        if (spells != null) {
+          spells.foreach((s) => {
+            if (s.isDirectory && !s.isHidden) {
+              builder.append(s" - ${name}${s.getName}:")
+              val readme = new File(s, "Readme.md")
+              if (readme.exists()) {
+                val source = Source.fromFile(readme, "UTF-8")
+                builder.append("\n     ")
+                builder.append(source.mkString.replaceAllLiterally("\n", "\n     ").slice(0, 450))
+                builder.append("\n")
+                source.close()
+              }
+              builder.append("\n")
+            }
+          })
+        }
+      })
+    }
+    builder
   }
 
   def usages(): String = {
@@ -267,18 +329,21 @@ class DataWeaveCLIRunner {
       |
       |Arguments Detail:
       |
-      | --spell | Runs a spell. Use the <spellName> or <wizard>/<spellName> for spells from a given wizard.
+      | --watch            | Keep the cli up and watch the used files for modifications and re execute
+      | --list-spells      | List all the available spells
+      | --spell or -s      | Runs a spell. Use the <spellName> or <wizard>/<spellName> for spells from a given wizard.
       | --update-grimoires | Update all wizard grimoires
-      | --add-wizard    | Downloads wizard grimoire so that its spell are accessible
-      | --path or -p    | Path of jars or directories where weave files are being searched.
-      | --input or -i   | Declares a new input.
-      | --verbose or -v | Enable Verbose Mode.
-      | --output or -o  | Specifies output file for the transformation if not standard output will be used.
-      | --main or -m    | The full qualified name of the mapping to be execute.
-      | --file or -f     | Path to the file
-      | --eval          | Evaluates the script instead of writing it
-      | --version       | The version of the CLI and Runtime
-      | --clean-cache   | Cleans the cache where all artifacts are being downloaded this force to download all artifacts every time
+      | --add-wizard       | Downloads wizard grimoire so that its spell are accessible
+      | --path or -p       | Path of jars or directories where weave files are being searched.
+      | --input or -i      | Declares a new input.
+      | --verbose or -v    | Enable Verbose Mode.
+      | --output or -o     | Specifies output file for the transformation if not standard output will be used.
+      | --main or -m       | The full qualified name of the mapping to be execute.
+      | --file or -f        | Path to the file
+      | --eval             | Evaluates the script instead of writing it
+      | --version          | The version of the CLI and Runtime
+      | --clean-cache      | Cleans the cache where all artifacts are being downloaded this force to download all artifacts every time
+      | --remote-debug     | Enables remote debugging
       |
       | Example:
       |
@@ -290,6 +355,7 @@ class DataWeaveCLIRunner {
     """.stripMargin
   }
 
+
   def deleteDirectory(directoryToBeDeleted: File): Boolean = {
     val allContents = directoryToBeDeleted.listFiles
     if (allContents != null) {
@@ -300,83 +366,121 @@ class DataWeaveCLIRunner {
     directoryToBeDeleted.delete
   }
 
-
   def run(config: WeaveRunnerConfig): Int = {
-    val path = config.path.map(new File(_))
-
-    val cacheDirectory = DataWeaveUtils.getCacheHome()
-    if(config.cleanCache){
-      deleteDirectory(cacheDirectory)
-      cacheDirectory.mkdirs()
-    }
-    val nativeRuntime = new NativeRuntime(cacheDirectory, DataWeaveUtils.getLibPathHome(), path, Executors.newCachedThreadPool())
-
-    val script: String = if (config.main.isDefined) {
-      val mainScriptName = config.main.get
-      val maybeString = nativeRuntime.getResourceContent(NameIdentifier(mainScriptName))
-      if (maybeString.isDefined) {
-        maybeString.get
-      } else {
-        println(AnsiColor.red(s"[ERROR] Unable to resolve `${mainScriptName}` in the specified classpath."))
-        return -1; //ERROR
-      }
-    } else {
-      config.scriptToRun.get
-    }
-
-    val defaultInputType = Option(System.getenv(DW_DEFAULT_INPUT_MIMETYPE_VAR)).getOrElse("application/json")
-    val scriptingBindings = new ScriptingBindings
-    if (config.inputs.isEmpty) {
-      scriptingBindings.addBinding("payload", System.in, defaultInputType)
-    } else {
-      config.inputs.foreach((input) => {
-        scriptingBindings.addBinding(input._1, input._2, getMimeTypeByFileExtension(input._2))
-      })
-    }
-
-    if (config.eval) {
-      try {
-        //We need this to be able to handle the ctrl+c
-        val signalHandler: SignalHandler = (sig) => {
-          System.exit(sig.getNumber)
-        }
-        Signal.handle(new Signal("INT"), signalHandler)
-        Signal.handle(new Signal("TERM"), signalHandler)
-
-        val result = nativeRuntime.eval(script, scriptingBindings, config.profile)
-        Runtime.getRuntime.addShutdownHook(new Thread() {
-          override def run(): Unit = {
-            Try(result.close())
-            System.out.println("Thanks for using DW. Have a nice day!")
-          }
+    if (config.watch) {
+      clearConsole()
+      val fileWatcher = FileWatcher(config.filesToWatch)
+      fileWatcher.addListener((_) => {
+        clearConsole()
+        keepRunning = false
+        monitor.synchronized({
+          monitor.notifyAll()
         })
-        System.out.println("\nPress 'ctrl'+c to stop the process.")
-        while (true) {
-          Thread.sleep(1000)
-        }
-        0
-      } catch {
-        case le: Exception => {
-          println(AnsiColor.red("Error while executing the script:"))
-          val writer = new StringWriter()
-          le.printStackTrace(new PrintWriter(writer))
-          println(AnsiColor.red(writer.toString))
-          -1
-        }
-      }
+      })
+      fileWatcher.startWatching()
+      doRun(config)
     } else {
-      val out = if (config.outputPath.isDefined) new FileOutputStream(config.outputPath.get) else System.out
-      val defaultOutputType = Option(System.getenv(DW_DEFAULT_OUTPUT_MIMETYPE_VAR)).getOrElse("application/json");
-      val result = nativeRuntime.run(script, scriptingBindings, out, defaultOutputType, config.profile)
-      //load inputs from
-      if (result.success()) {
-        0
-      } else {
-        println(AnsiColor.red("Error while executing the script:"))
-        println(AnsiColor.red(result.result()))
-        -1
-      }
+      doRun(config)
     }
+  }
+
+
+  def clearConsole(): Unit = {
+    Try({
+      if (System.getProperty("os.name").contains("Windows")) {
+        new ProcessBuilder("cmd", "/c", "cls").inheritIO.start.waitFor
+      }
+      else {
+        System.out.print("\u001b\u0063")
+      }
+    })
+  }
+
+  def doRun(config: WeaveRunnerConfig): Int = {
+    var exitCode = 0
+    do {
+      val path = config.path.map(new File(_))
+      val cacheDirectory = DataWeaveUtils.getCacheHome()
+      if (config.cleanCache) {
+        deleteDirectory(cacheDirectory)
+        cacheDirectory.mkdirs()
+      }
+      val nativeRuntime = new NativeRuntime(cacheDirectory, DataWeaveUtils.getLibPathHome(), path, Executors.newCachedThreadPool())
+      val script = if (config.main.isDefined) {
+        val mainScriptName = config.main.get
+        val maybeString = nativeRuntime.getResourceContent(NameIdentifier(mainScriptName))
+        if (maybeString.isDefined) {
+          maybeString.get
+        } else {
+          println(AnsiColor.red(s"[ERROR] Unable to resolve `${mainScriptName}` in the specified classpath."))
+          exitCode = -1; //ERROR
+          ""
+        }
+      } else {
+        config.scriptToRun.get()
+      }
+
+      val defaultInputType = Option(System.getenv(DW_DEFAULT_INPUT_MIMETYPE_VAR)).getOrElse("application/json")
+      val scriptingBindings = new ScriptingBindings
+      if (config.inputs.isEmpty) {
+        scriptingBindings.addBinding("payload", System.in, defaultInputType)
+      } else {
+        config.inputs.foreach((input) => {
+          scriptingBindings.addBinding(input._1, input._2, getMimeTypeByFileExtension(input._2))
+        })
+      }
+
+      if (config.eval) {
+        keepRunning = true
+        try {
+          //We need this to be able to handle the ctrl+c
+          val signalHandler: SignalHandler = (sig) => {
+            System.exit(sig.getNumber)
+          }
+          Signal.handle(new Signal("INT"), signalHandler)
+          Signal.handle(new Signal("TERM"), signalHandler)
+
+          val result = nativeRuntime.eval(script, scriptingBindings, config.profile, config.remoteDebug)
+          Runtime.getRuntime.addShutdownHook(new Thread() {
+            override def run(): Unit = {
+              Try(result.close())
+              System.out.println("Thanks for using DW. Have a nice day!")
+            }
+          })
+          System.out.println("\nPress 'ctrl'+c to stop the process.")
+          while (keepRunning) {
+            Thread.sleep(100)
+          }
+        } catch {
+          case le: Exception => {
+            println(AnsiColor.red("Error while executing the script:"))
+            val writer = new StringWriter()
+            le.printStackTrace(new PrintWriter(writer))
+            println(AnsiColor.red(writer.toString))
+            exitCode = -1
+          }
+        }
+      } else {
+        val out = if (config.outputPath.isDefined) new FileOutputStream(config.outputPath.get) else System.out
+        val defaultOutputType = Option(System.getenv(DW_DEFAULT_OUTPUT_MIMETYPE_VAR)).getOrElse("application/json")
+        val result = nativeRuntime.run(script, scriptingBindings, out, defaultOutputType, config.profile, config.remoteDebug)
+        //load inputs from
+        if (result.success()) {
+          exitCode = 0
+        } else {
+          println(AnsiColor.red("Error while executing the script:"))
+          println(AnsiColor.red(result.result()))
+          exitCode = -1
+        }
+
+        if (config.watch) {
+          monitor.synchronized({
+            monitor.wait()
+          })
+        }
+      }
+    } while (config.watch)
+    exitCode
   }
 
   def getMimeTypeByFileExtension(file: File): Option[String] = {
@@ -389,18 +493,23 @@ class DataWeaveCLIRunner {
     }
   }
 
+  def hoursSinceLastUpdate(): Int = {
+    val lastModified = lastUpdatedMarkFile().lastModified()
+    val millis = System.currentTimeMillis() - lastModified
+    (millis / (1000 * 60 * 20)).asInstanceOf[Int]
+  }
 
   def grimoireFolder(wizard: String): File = {
-    val grimoiresFolder = grimoiresFolders
+    val grimoiresFolder = grimoiresFolders()
     new File(grimoiresFolder, grimoireName(wizard))
   }
 
-   def grimoiresFolders: File = {
+  def grimoiresFolders(): File = {
     new File(DataWeaveUtils.getDWHome(), "grimoires")
   }
 
   def cloneGrimoire(wizard: String): Unit = {
-    val wizardName = if(wizard == null) "DW" else wizard
+    val wizardName = if (wizard == null) "DW" else wizard
     println(s"Fetching `$wizardName's` Grimoire.")
     val url: String = buildRepoUrl(wizard)
     val processBuilder = new ProcessBuilder("git", "clone", url, grimoireFolder(wizard).getAbsolutePath)
@@ -408,8 +517,22 @@ class DataWeaveCLIRunner {
     processBuilder.start().waitFor()
   }
 
+  def updateLastUpdateTimeStamp(): Boolean = {
+    val lastUpdate: File = lastUpdatedMarkFile()
+    lastUpdate.setLastModified(System.currentTimeMillis())
+  }
+
+  private def lastUpdatedMarkFile() = {
+    val lastUpdate = new File(grimoiresFolders(), "lastUpdate.txt")
+    if (!lastUpdate.exists()) {
+      Files.write(lastUpdate.toPath, "LAST UPDATE".getBytes("UTF-8"))
+    }
+    lastUpdate
+  }
+
   def updateGrimoires(): Unit = {
-    val grimoires = grimoiresFolders.listFiles()
+    updateLastUpdateTimeStamp()
+    val grimoires = grimoiresFolders().listFiles()
     grimoires.foreach((grimoire) => {
       updateGrimoire(grimoire)
     })
@@ -432,9 +555,9 @@ class DataWeaveCLIRunner {
 
   def grimoireName(user: String): String = {
     if (user == null)
-      "data-weave-grimoire"
+      DATA_WEAVE_GRIMOIRE_FOLDER
     else
-      s"${user}-data-weave-grimoire"
+      s"${user}-$DATA_WEAVE_GRIMOIRE_FOLDER"
   }
 
 }
@@ -443,5 +566,16 @@ class CustomWeaveDataFormat(moduleManager: ModuleLoaderManager) extends WeaveDat
   override def createModuleLoader(): ModuleLoaderManager = moduleManager
 }
 
-case class WeaveRunnerConfig(path: Array[String], profile: Boolean, eval: Boolean, cleanCache:Boolean, scriptToRun: Option[String], main: Option[String], inputs: Map[String, File], outputPath: Option[String])
+case class WeaveRunnerConfig(path: Array[String],
+                             profile: Boolean,
+                             eval: Boolean,
+                             cleanCache: Boolean,
+                             scriptToRun: Option[() => String],
+                             main: Option[String],
+                             inputs: Map[String, File],
+                             outputPath: Option[String],
+                             filesToWatch: Seq[File],
+                             watch: Boolean,
+                             remoteDebug: Boolean
+                            )
 

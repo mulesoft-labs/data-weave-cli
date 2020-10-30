@@ -112,10 +112,12 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
   }
 
 
-  def run(script: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false): WeaveExecutionResult = {
-
+  def run(script: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false, debug: Boolean = false): WeaveExecutionResult = {
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, defaultOutputMimeType, profile)
+      if(debug) {
+        dataWeaveScript.enableDebug()
+      }
       val serviceManager: ServiceManager = createServiceManager()
       val result: DataWeaveResult =
         if (profile) {
@@ -165,9 +167,12 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
     serviceManager
   }
 
-  def eval(script: String, inputs: ScriptingBindings, profile: Boolean): ExecuteResult = {
+  def eval(script: String, inputs: ScriptingBindings, profile: Boolean, debug: Boolean = false): ExecuteResult = {
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, "application/dw", profile)
+      if(debug) {
+        dataWeaveScript.enableDebug()
+      }
       val serviceManager: ServiceManager = createServiceManager()
       if (profile) {
         time(() => dataWeaveScript.exec(inputs, serviceManager), "Execution")
