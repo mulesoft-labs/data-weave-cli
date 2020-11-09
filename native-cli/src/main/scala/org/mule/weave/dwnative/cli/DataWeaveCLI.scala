@@ -8,14 +8,17 @@ import java.nio.file.Files
 import java.util.concurrent.Executors
 
 import org.mule.weave.dwnative.NativeRuntime
+import org.mule.weave.dwnative.WeaveExecutionResult
 import org.mule.weave.dwnative.utils.AnsiColor
 import org.mule.weave.dwnative.utils.DataWeaveUtils
 import org.mule.weave.dwnative.utils.WeaveProperties
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
+import org.mule.weave.v2.io.FileHelper
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.module.DataFormatManager
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.phase.ModuleLoaderManager
+import org.mule.weave.v2.runtime.ExecuteResult
 import org.mule.weave.v2.runtime.ScriptingBindings
 import org.mule.weave.v2.runtime.utils.AnsiColor.red
 import org.mule.weave.v2.version.ComponentVersion
@@ -83,15 +86,13 @@ class DataWeaveCLIRunner {
     var i = 0
     //Use the current directory as the path
     var path: String = ""
-    var scriptToRun: Option[() => String] = None
+    var scriptToRun: Option[(NativeRuntime) => WeaveModule] = None
     var output: Option[String] = None
     var profile = false
     var eval = false
     var watch = false
     val filesToWatch: ArrayBuffer[File] = ArrayBuffer()
     var cleanCache = false
-    var main: Option[String] = None
-    var scriptName: Option[String] = None
     var remoteDebug = false
 
     val inputs: mutable.Map[String, File] = mutable.Map()
@@ -199,8 +200,9 @@ class DataWeaveCLIRunner {
             } else {
               path = path + File.pathSeparator + srcFolder.getAbsolutePath
             }
-            scriptName = Some(spellName)
-            scriptToRun = Some(() => fileToString(mainFile))
+            scriptToRun = Some((_) => {
+              WeaveModule(fileToString(mainFile), "Main")
+            })
           } else {
             return Right("Missing <spellName>")
           }
@@ -231,8 +233,16 @@ class DataWeaveCLIRunner {
         case "-main" | "-m" => {
           if (i + 1 < args.length) {
             i = i + 1
-            scriptName = Some(args(i))
-            main = Some(args(i))
+            scriptToRun = Some((nativeRuntime) => {
+              val mainScriptName = args(i)
+              val maybeString = nativeRuntime.getResourceContent(NameIdentifier(mainScriptName))
+              if (maybeString.isDefined) {
+                WeaveModule(maybeString.get, args(i))
+              } else {
+                println(AnsiColor.red(s"[ERROR] Unable to resolve `${mainScriptName}` in the specified classpath."))
+                WeaveModule("", args(i))
+              }
+            })
           } else {
             return Right("Missing main name identifier")
           }
@@ -246,8 +256,7 @@ class DataWeaveCLIRunner {
             val scriptFile = new File(args(i))
             if (scriptFile.exists()) {
               filesToWatch.+=(scriptFile)
-              scriptName = Some(scriptFile.getName)
-              scriptToRun = Some(() => fileToString(scriptFile))
+              scriptToRun = Some((_) => WeaveModule(fileToString(scriptFile), FileHelper.baseName(scriptFile)))
             } else {
               return Right(s"File `${args(i)}` was not found.")
             }
@@ -262,7 +271,7 @@ class DataWeaveCLIRunner {
           eval = true
         }
         case script if (i + 1 == args.length) => {
-          scriptToRun = Some(() => script)
+          scriptToRun = Some((_) => WeaveModule(script, NameIdentifier.ANONYMOUS_NAME.toString()))
         }
         case arg => {
           return Right(s"Invalid argument ${arg}")
@@ -272,13 +281,12 @@ class DataWeaveCLIRunner {
     }
 
     val paths = if (path.isEmpty) Array[String]() else path.split(File.pathSeparatorChar)
-    if (scriptToRun.isEmpty && main.isEmpty) {
+    if (scriptToRun.isEmpty) {
       Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath> or --spell ")
     } else {
-      Left(WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun, main, inputs.toMap, output, filesToWatch, watch, remoteDebug))
+      Left(WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun.get, inputs.toMap, output, filesToWatch, watch, remoteDebug))
     }
   }
-
 
 
   private def listSpells(): StringBuilder = {
@@ -397,31 +405,18 @@ class DataWeaveCLIRunner {
   }
 
   def doRun(config: WeaveRunnerConfig): Int = {
-    var exitCode = 0
-    do {
-      val path = config.path.map(new File(_))
-      val cacheDirectory = DataWeaveUtils.getCacheHome()
-      if (config.cleanCache) {
-        deleteDirectory(cacheDirectory)
-        cacheDirectory.mkdirs()
-      }
-      val nativeRuntime = new NativeRuntime(cacheDirectory, DataWeaveUtils.getLibPathHome(), path, Executors.newCachedThreadPool())
-      val script = if (config.main.isDefined) {
-        val mainScriptName = config.main.get
-        val maybeString = nativeRuntime.getResourceContent(NameIdentifier(mainScriptName))
-        if (maybeString.isDefined) {
-          maybeString.get
-        } else {
-          println(AnsiColor.red(s"[ERROR] Unable to resolve `${mainScriptName}` in the specified classpath."))
-          exitCode = -1; //ERROR
-          ""
-        }
-      } else {
-        config.scriptToRun.get()
-      }
+    var exitCode: Int = 0
+    val path: Array[File] = config.path.map(new File(_))
+    val cacheDirectory: File = DataWeaveUtils.getCacheHome()
+    if (config.cleanCache) {
+      deleteDirectory(cacheDirectory)
+      cacheDirectory.mkdirs()
+    }
+    val nativeRuntime: NativeRuntime = new NativeRuntime(cacheDirectory, DataWeaveUtils.getLibPathHome(), path, Executors.newCachedThreadPool())
 
-      val defaultInputType = Option(System.getenv(DW_DEFAULT_INPUT_MIMETYPE_VAR)).getOrElse("application/json")
-      val scriptingBindings = new ScriptingBindings
+    do {
+      val defaultInputType: String = Option(System.getenv(DW_DEFAULT_INPUT_MIMETYPE_VAR)).getOrElse("application/json")
+      val scriptingBindings: ScriptingBindings = new ScriptingBindings
       if (config.inputs.isEmpty) {
         scriptingBindings.addBinding("payload", System.in, defaultInputType)
       } else {
@@ -429,6 +424,7 @@ class DataWeaveCLIRunner {
           scriptingBindings.addBinding(input._1, input._2, getMimeTypeByFileExtension(input._2))
         })
       }
+      val module: WeaveModule = config.scriptToRun(nativeRuntime)
 
       if (config.eval) {
         keepRunning = true
@@ -440,7 +436,8 @@ class DataWeaveCLIRunner {
           Signal.handle(new Signal("INT"), signalHandler)
           Signal.handle(new Signal("TERM"), signalHandler)
 
-          val result = nativeRuntime.eval(script, scriptingBindings, config.profile, config.remoteDebug)
+
+          val result: ExecuteResult = nativeRuntime.eval(module.content, scriptingBindings, module.nameIdentifier, config.profile, config.remoteDebug)
           Runtime.getRuntime.addShutdownHook(new Thread() {
             override def run(): Unit = {
               Try(result.close())
@@ -463,7 +460,7 @@ class DataWeaveCLIRunner {
       } else {
         val out = if (config.outputPath.isDefined) new FileOutputStream(config.outputPath.get) else System.out
         val defaultOutputType = Option(System.getenv(DW_DEFAULT_OUTPUT_MIMETYPE_VAR)).getOrElse("application/json")
-        val result = nativeRuntime.run(script, scriptingBindings, out, defaultOutputType, config.profile, config.remoteDebug)
+        val result: WeaveExecutionResult = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, out, defaultOutputType, config.profile, config.remoteDebug)
         //load inputs from
         if (result.success()) {
           exitCode = 0
@@ -570,8 +567,7 @@ case class WeaveRunnerConfig(path: Array[String],
                              profile: Boolean,
                              eval: Boolean,
                              cleanCache: Boolean,
-                             scriptToRun: Option[() => String],
-                             main: Option[String],
+                             scriptToRun: (NativeRuntime) => WeaveModule,
                              inputs: Map[String, File],
                              outputPath: Option[String],
                              filesToWatch: Seq[File],
@@ -579,3 +575,4 @@ case class WeaveRunnerConfig(path: Array[String],
                              remoteDebug: Boolean
                             )
 
+case class WeaveModule(content: String, nameIdentifier: String)

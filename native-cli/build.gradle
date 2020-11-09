@@ -13,6 +13,7 @@ buildscript {
 
 dependencies{
     compile project(path: ':native-common', configuration: 'shadow')
+//    compile project(path: ':native-common')
     compile group: 'org.mule.weave', name: 'ndjson-module', version: weaveVersion
     testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: '3.0.1'
 }

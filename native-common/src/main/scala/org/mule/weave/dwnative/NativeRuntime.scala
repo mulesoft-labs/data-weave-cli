@@ -58,14 +58,6 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
-  /**
-    * Setup initialization properties
-    */
-  private def setupEnv(): Unit = {
-    System.setProperty("io.netty.processId", Math.abs(PlatformDependent.threadLocalRandom.nextInt).toString);
-    System.setProperty("io.netty.noUnsafe", true.toString);
-  }
-
   private val weaveScriptingEngine: DataWeaveScriptingEngine = {
     setupEnv()
     val resourceDependencyAnnotationProcessor = ResourceDependencyAnnotationProcessor(
@@ -103,18 +95,27 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
     DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration(parsingAnnotationProcessors = annotationProcessors))
   }
 
+
+  /**
+    * Setup initialization properties
+    */
+  private def setupEnv(): Unit = {
+    System.setProperty("io.netty.processId", Math.abs(PlatformDependent.threadLocalRandom.nextInt).toString);
+    System.setProperty("io.netty.noUnsafe", true.toString);
+  }
+
   def getResourceContent(ni: NameIdentifier): Option[String] = {
     pathBasedResourceResolver.resolve(ni).map(_.content())
   }
 
-  def run(script: String, inputs: ScriptingBindings): WeaveExecutionResult = {
-    run(script, inputs, new DefaultAutoPersistedOutputStream())
+  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings): WeaveExecutionResult = {
+    run(script,nameIdentifier, inputs, new DefaultAutoPersistedOutputStream())
   }
 
 
-  def run(script: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false, debug: Boolean = false): WeaveExecutionResult = {
+  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false, debug: Boolean = false): WeaveExecutionResult = {
     try {
-      val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, defaultOutputMimeType, profile)
+      val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), defaultOutputMimeType, profile)
       if(debug) {
         dataWeaveScript.enableDebug()
       }
@@ -148,15 +149,17 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
     }
   }
 
-  private def compileScript(script: String, inputs: ScriptingBindings, defaultOutputMimeType: String, profile: Boolean) = {
-
+  private def compileScript(script: String, inputs: ScriptingBindings, nameIdentifier: NameIdentifier, defaultOutputMimeType: String, profile: Boolean) = {
+    println(s"Compiling ${nameIdentifier}")
     if (profile) {
       weaveScriptingEngine.enableProfileParsing()
     }
     if (profile) {
-      time(() => weaveScriptingEngine.compile(script, NameIdentifier.ANONYMOUS_NAME, inputs.entries().map((wi) => new InputType(wi, None)).toArray, defaultOutputMimeType), "Compile")
+      time(() => {
+        weaveScriptingEngine.compile(script, nameIdentifier, inputs.entries().map((wi) => new InputType(wi, None)).toArray, defaultOutputMimeType)
+      }, s"Compile ${nameIdentifier}")
     } else {
-      weaveScriptingEngine.compile(script, NameIdentifier.ANONYMOUS_NAME, inputs.entries().map((wi) => new InputType(wi, None)).toArray, defaultOutputMimeType)
+      weaveScriptingEngine.compile(script, nameIdentifier, inputs.entries().map((wi) => new InputType(wi, None)).toArray, defaultOutputMimeType)
     }
   }
 
@@ -167,9 +170,9 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
     serviceManager
   }
 
-  def eval(script: String, inputs: ScriptingBindings, profile: Boolean, debug: Boolean = false): ExecuteResult = {
+  def eval(script: String, inputs: ScriptingBindings, nameIdentifier: String, profile: Boolean, debug: Boolean = false): ExecuteResult = {
     try {
-      val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, "application/dw", profile)
+      val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), "application/dw", profile)
       if(debug) {
         dataWeaveScript.enableDebug()
       }
