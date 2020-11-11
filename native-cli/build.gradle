@@ -9,6 +9,12 @@ buildscript {
     }
 }
 
+plugins {
+    id 'com.github.johnrengelman.shadow' version '5.2.0'
+    id 'application'
+}
+
+mainClassName = 'org.mule.weave.dwnative.cli.DataWeaveCLI'
 
 
 dependencies{
@@ -24,6 +30,12 @@ ext {
         secretKey: System.getenv("AWS_SECRET_KEY")
     ]
 }
+
+// Merging Service Files
+shadowJar {
+    mergeServiceFiles()
+}
+
 
 import org.apache.tools.ant.taskdefs.condition.Os
 
