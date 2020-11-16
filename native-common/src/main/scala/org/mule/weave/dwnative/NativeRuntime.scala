@@ -150,7 +150,6 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
   }
 
   private def compileScript(script: String, inputs: ScriptingBindings, nameIdentifier: NameIdentifier, defaultOutputMimeType: String, profile: Boolean) = {
-    println(s"Compiling ${nameIdentifier}")
     if (profile) {
       weaveScriptingEngine.enableProfileParsing()
     }

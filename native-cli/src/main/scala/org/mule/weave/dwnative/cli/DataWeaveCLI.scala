@@ -375,6 +375,14 @@ class DataWeaveCLIRunner {
   }
 
   def run(config: WeaveRunnerConfig): Int = {
+    val path: Array[File] = config.path.map(new File(_))
+    val cacheDirectory: File = DataWeaveUtils.getCacheHome()
+    if (config.cleanCache) {
+      deleteDirectory(cacheDirectory)
+      cacheDirectory.mkdirs()
+    }
+    val nativeRuntime: NativeRuntime = new NativeRuntime(cacheDirectory, DataWeaveUtils.getLibPathHome(), path, Executors.newCachedThreadPool())
+
     if (config.watch) {
       clearConsole()
       val fileWatcher = FileWatcher(config.filesToWatch)
@@ -386,9 +394,9 @@ class DataWeaveCLIRunner {
         })
       })
       fileWatcher.startWatching()
-      doRun(config)
+      doRun(config, nativeRuntime)
     } else {
-      doRun(config)
+      doRun(config, nativeRuntime)
     }
   }
 
@@ -404,16 +412,8 @@ class DataWeaveCLIRunner {
     })
   }
 
-  def doRun(config: WeaveRunnerConfig): Int = {
+  def doRun(config: WeaveRunnerConfig, nativeRuntime: NativeRuntime): Int = {
     var exitCode: Int = 0
-    val path: Array[File] = config.path.map(new File(_))
-    val cacheDirectory: File = DataWeaveUtils.getCacheHome()
-    if (config.cleanCache) {
-      deleteDirectory(cacheDirectory)
-      cacheDirectory.mkdirs()
-    }
-    val nativeRuntime: NativeRuntime = new NativeRuntime(cacheDirectory, DataWeaveUtils.getLibPathHome(), path, Executors.newCachedThreadPool())
-
     do {
       val defaultInputType: String = Option(System.getenv(DW_DEFAULT_INPUT_MIMETYPE_VAR)).getOrElse("application/json")
       val scriptingBindings: ScriptingBindings = new ScriptingBindings
@@ -425,7 +425,6 @@ class DataWeaveCLIRunner {
         })
       }
       val module: WeaveModule = config.scriptToRun(nativeRuntime)
-
       if (config.eval) {
         keepRunning = true
         try {
@@ -435,8 +434,6 @@ class DataWeaveCLIRunner {
           }
           Signal.handle(new Signal("INT"), signalHandler)
           Signal.handle(new Signal("TERM"), signalHandler)
-
-
           val result: ExecuteResult = nativeRuntime.eval(module.content, scriptingBindings, module.nameIdentifier, config.profile, config.remoteDebug)
           Runtime.getRuntime.addShutdownHook(new Thread() {
             override def run(): Unit = {
@@ -448,6 +445,7 @@ class DataWeaveCLIRunner {
           while (keepRunning) {
             Thread.sleep(100)
           }
+          Try(result.close())
         } catch {
           case le: Exception => {
             println(AnsiColor.red("Error while executing the script:"))
