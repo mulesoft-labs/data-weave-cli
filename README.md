@@ -41,6 +41,19 @@ brew install dw
 3. Add `<home_directory>/.dw/bin` to your PATH
 
 
+### From code
+
+Execute the gradle task nativeImage
+
+```
+./gradlew native-cli:nativeImage
+```
+
+It takes several minutes so good time to take and refeel your mate.
+
+Once it finishes you will find the `dw` binary in `native-cli/build/graal/dw`
+
+
 ## How to use it
 
 If the directory containing the `dw` executable is in your PATH, you can run `dw` from anywhere. If it is not, go to the `bin` directory referenced in the installation instructions and run `dw` from there.
