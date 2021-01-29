@@ -1,5 +1,6 @@
 package org.mule.weave.native
 
+import org.scalatest.BeforeAndAfterAll
 import org.scalatest.FreeSpec
 import org.scalatest.Matchers
 
@@ -7,7 +8,23 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import scala.io.Source
 
-class NativeCliTest extends FreeSpec with Matchers {
+class NativeCliTest extends FreeSpec with Matchers with BeforeAndAfterAll {
+
+
+  override protected def beforeAll(): Unit = {
+    getDefaultDWHome().mkdirs()
+  }
+
+  def getDefaultDWHome(): File = {
+    val homeUser = getUserHome()
+    val defaultDWHomeDir = new File(homeUser, ".dw")
+    defaultDWHomeDir
+  }
+
+  def getUserHome(): File = {
+    new File(System.getProperty("user.home"))
+  }
+
 
   private val OS = System.getProperty("os.name").toLowerCase
 

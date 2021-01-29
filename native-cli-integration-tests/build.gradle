@@ -4,6 +4,7 @@ plugins {
 
 
 dependencies {
+    compile project(":native-cli")
     testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
     testRuntime 'org.pegdown:pegdown:1.6.0'
 }
