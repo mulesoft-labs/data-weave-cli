@@ -1,0 +1,11 @@
+plugins {
+    id "com.github.maiflai.scalatest" version "${scalaTestPluginVersion}"
+}
+
+
+dependencies {
+    testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
+    testRuntime 'org.pegdown:pegdown:1.6.0'
+}
+
+test.dependsOn(":native-cli:nativeImage")

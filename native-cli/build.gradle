@@ -21,7 +21,7 @@ dependencies{
     compile project(path: ':native-common', configuration: 'shadow')
 //    compile project(path: ':native-common')
     compile group: 'org.mule.weave', name: 'ndjson-module', version: weaveVersion
-    testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: '3.0.1'
+    testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
 }
 
 ext {
@@ -104,7 +104,7 @@ graal {
 //            "org.mule.weave.v2.model.values.,"
 //            "org.mule.weave.v2.model.types.,"
 //            "org.mule.weave.v2.core.functions."
-    option "-H:+TraceClassInitialization"
+//    option "-H:+TraceClassInitialization"
     option "-H:DeadlockWatchdogInterval=1000"
     option "--report-unsupported-elements-at-runtime"
 //    option "-H:+PrintImageObjectTree"

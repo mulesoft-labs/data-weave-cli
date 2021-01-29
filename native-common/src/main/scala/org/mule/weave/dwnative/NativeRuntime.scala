@@ -6,7 +6,6 @@ import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ExecutorService
-
 import io.netty.util.internal.PlatformDependent
 import org.mule.weave.dwnative.initializer.NativeSystemModuleComponents
 import org.mule.weave.v2.deps.Artifact
@@ -16,6 +15,7 @@ import org.mule.weave.v2.exception.InvalidLocationException
 import org.mule.weave.v2.interpreted.CustomRuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.RuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
+import org.mule.weave.v2.io.DefaultFileService
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
 import org.mule.weave.v2.model.service.ProtocolUrlSourceProviderResolverService
@@ -109,7 +109,7 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
   }
 
   def run(script: String, nameIdentifier: String, inputs: ScriptingBindings): WeaveExecutionResult = {
-    run(script,nameIdentifier, inputs, new DefaultAutoPersistedOutputStream())
+    run(script,nameIdentifier, inputs, new DefaultAutoPersistedOutputStream(DefaultFileService))
   }
 
 

@@ -1,3 +1,5 @@
 include 'native-common'
 include 'native-lib'
 include 'native-cli'
+include 'native-cli-integration-tests'
+
