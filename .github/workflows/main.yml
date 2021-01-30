@@ -17,9 +17,9 @@ jobs:
   OSX_LINUX_WINDOWS:
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-2019]
+        os: [macos-latest, ubuntu-latest, windows-2016]
         include:
-          - os: windows-2019
+          - os: windows-2016
             script_name: windows
           - os: ubuntu-latest
             script_name: linux
@@ -37,7 +37,7 @@ jobs:
           java-version: 11
 
     # Runs a single command using the runners shell
-    - name: Run native image
+    - name: Run Build native image
       run: ./gradlew build
       env:
         AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
