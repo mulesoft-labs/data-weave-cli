@@ -1,12 +1,5 @@
 package org.mule.weave.dwnative.cli
 
-import java.io.File
-import java.io.FileOutputStream
-import java.io.PrintWriter
-import java.io.StringWriter
-import java.nio.file.Files
-import java.util.concurrent.Executors
-
 import org.mule.weave.dwnative.NativeRuntime
 import org.mule.weave.dwnative.WeaveExecutionResult
 import org.mule.weave.dwnative.utils.AnsiColor
@@ -15,6 +8,7 @@ import org.mule.weave.dwnative.utils.WeaveProperties
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
 import org.mule.weave.v2.io.FileHelper
 import org.mule.weave.v2.model.EvaluationContext
+import org.mule.weave.v2.model.values.StringValue
 import org.mule.weave.v2.module.DataFormatManager
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.phase.ModuleLoaderManager
@@ -25,6 +19,12 @@ import org.mule.weave.v2.version.ComponentVersion
 import sun.misc.Signal
 import sun.misc.SignalHandler
 
+import java.io.File
+import java.io.FileOutputStream
+import java.io.PrintWriter
+import java.io.StringWriter
+import java.nio.file.Files
+import java.util.concurrent.Executors
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
@@ -96,11 +96,11 @@ class DataWeaveCLIRunner {
     var remoteDebug = false
 
     val inputs: mutable.Map[String, File] = mutable.Map()
-
+    val properties: mutable.Map[String, String] = mutable.Map()
 
     while (i < args.length) {
       args(i) match {
-        case "-p" | "--path" => {
+        case "--path" => {
           if (i + 1 < args.length) {
             i = i + 1
             if (path.isEmpty) {
@@ -111,6 +111,16 @@ class DataWeaveCLIRunner {
           } else {
             return Right("Missing path expression")
           }
+        }
+        case "-p" | "--property" => {
+          if (i + 2 < args.length) {
+            val propName: String = args(i + 1)
+            val propValue: String = args(i + 2)
+            properties.put(propName, propValue)
+          } else {
+            return Right(red("Invalid amount of arguments on `Property`."))
+          }
+          i = i + 2
         }
         case "-v" | "--verbose" => {
           WeaveProperties.verbose = true
@@ -284,7 +294,7 @@ class DataWeaveCLIRunner {
     if (scriptToRun.isEmpty) {
       Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath> or --spell ")
     } else {
-      Left(WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun.get, inputs.toMap, output, filesToWatch, watch, remoteDebug))
+      Left(WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun.get, properties.toMap, inputs.toMap, output, filesToWatch, watch, remoteDebug))
     }
   }
 
@@ -342,7 +352,8 @@ class DataWeaveCLIRunner {
       | --spell or -s      | Runs a spell. Use the <spellName> or <wizard>/<spellName> for spells from a given wizard.
       | --update-grimoires | Update all wizard grimoires
       | --add-wizard       | Downloads wizard grimoire so that its spell are accessible
-      | --path or -p       | Path of jars or directories where weave files are being searched.
+      | --path             | Path of jars or directories where weave files are being searched.
+      | --prop or -p       | Property to be passed.
       | --input or -i      | Declares a new input.
       | --verbose or -v    | Enable Verbose Mode.
       | --output or -o     | Specifies output file for the transformation if not standard output will be used.
@@ -424,6 +435,11 @@ class DataWeaveCLIRunner {
           scriptingBindings.addBinding(input._1, input._2, getMimeTypeByFileExtension(input._2))
         })
       }
+
+      config.properties.foreach((prop) =>{
+        scriptingBindings.addBinding(prop._1, StringValue(prop._2))
+      })
+
       val module: WeaveModule = config.scriptToRun(nativeRuntime)
       if (config.eval) {
         keepRunning = true
@@ -566,6 +582,7 @@ case class WeaveRunnerConfig(path: Array[String],
                              eval: Boolean,
                              cleanCache: Boolean,
                              scriptToRun: (NativeRuntime) => WeaveModule,
+                             properties: Map[String, String],
                              inputs: Map[String, File],
                              outputPath: Option[String],
                              filesToWatch: Seq[File],
