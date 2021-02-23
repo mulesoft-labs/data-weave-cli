@@ -38,7 +38,15 @@ jobs:
 
     # Runs a single command using the runners shell
     - name: Run Build on native
-      run: ./gradlew native-cli:build
+      run:
+        |
+        if [OS == 'Windows']
+        then
+            ./gradlew native-cli:build -PgraalvmVersion=20.3.1.2
+        else
+            ./gradlew native-cli:build
+        fi
+
       env:
         AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
         AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
