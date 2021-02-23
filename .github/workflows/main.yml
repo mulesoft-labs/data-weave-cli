@@ -44,7 +44,7 @@ jobs:
             else
                 ./gradlew native-cli:build
             fi
-
+      shell: bash
       env:
         AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
         AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
@@ -57,6 +57,7 @@ jobs:
             else
               ./gradlew native-cli:nativeImage
             fi
+      shell: bash
       env:
         AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
         AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
