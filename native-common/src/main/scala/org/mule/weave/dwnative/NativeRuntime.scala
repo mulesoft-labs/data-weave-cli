@@ -1,11 +1,5 @@
 package org.mule.weave.dwnative
 
-import java.io.File
-import java.io.OutputStream
-import java.io.PrintWriter
-import java.io.StringWriter
-import java.nio.charset.StandardCharsets
-import java.util.concurrent.ExecutorService
 import io.netty.util.internal.PlatformDependent
 import org.mule.weave.dwnative.initializer.NativeSystemModuleComponents
 import org.mule.weave.v2.deps.Artifact
@@ -15,7 +9,7 @@ import org.mule.weave.v2.exception.InvalidLocationException
 import org.mule.weave.v2.interpreted.CustomRuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.RuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
-import org.mule.weave.v2.io.DefaultFileService
+import org.mule.weave.v2.io.service.DefaultFileService
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
 import org.mule.weave.v2.model.service.ProtocolUrlSourceProviderResolverService
@@ -50,6 +44,12 @@ import org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider
 import org.mule.weave.v2.sdk.TwoLevelWeaveResourceResolver
 import org.mule.weave.v2.sdk.WeaveResourceResolver
 
+import java.io.File
+import java.io.OutputStream
+import java.io.PrintWriter
+import java.io.StringWriter
+import java.nio.charset.StandardCharsets
+import java.util.concurrent.ExecutorService
 import scala.concurrent.Await
 import scala.concurrent.Future
 import scala.concurrent.duration.Duration
