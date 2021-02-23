@@ -38,14 +38,13 @@ jobs:
 
     # Runs a single command using the runners shell
     - name: Run Build on native
-      run:
-        |
-        if [OS == 'Windows']
-        then
-            ./gradlew native-cli:build -PgraalvmVersion=20.3.1.2
-        else
-            ./gradlew native-cli:build
-        fi
+      run: |
+            if [OS == 'Windows']
+            then
+                ./gradlew native-cli:build -PgraalvmVersion=20.3.1.2
+            else
+                ./gradlew native-cli:build
+            fi
 
       env:
         AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
@@ -53,7 +52,13 @@ jobs:
 
     # Runs a set of commands using the runners shell
     - name: Create Native Image
-      run: ./gradlew native-cli:nativeImage
+      run: |
+            if [OS == 'Windows']
+            then
+              ./gradlew native-cli:nativeImage -PgraalvmVersion=20.3.1.2
+            else
+              ./gradlew native-cli:nativeImage
+            fi
       env:
         AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
         AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
