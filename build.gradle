@@ -6,7 +6,7 @@ buildscript {
         }
     }
     dependencies {
-        classpath "com.palantir.graal:gradle-graal:0.7.1"
+        classpath "com.palantir.graal:gradle-graal:0.7.2"
     }
 }
 
@@ -24,14 +24,14 @@ subprojects {
     version nativeVersion
 
     compileScala {
-//        targetCompatibility = "11"
-//        sourceCompatibility = "11"
+        targetCompatibility = "11"
+        sourceCompatibility = "11"
     }
 
 
     compileJava   {
-//        sourceCompatibility = '11'
-//        targetCompatibility = '11'
+        sourceCompatibility = '11'
+        targetCompatibility = '11'
     }
 
 

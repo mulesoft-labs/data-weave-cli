@@ -35,8 +35,14 @@ jobs:
           java-version: 11
 
       # Runs a single command using the runners shell
-      - name: Run native image
-        run: ./gradlew build
+      - name: Run Build on native
+        run: |
+          if [ "$RUNNER_OS" == 'Windows' ]; then
+              ./gradlew native-cli:build -PgraalvmVersion=20.2.0
+          else
+              ./gradlew native-cli:build
+          fi
+        shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
           AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
@@ -44,8 +50,17 @@ jobs:
       # Runs a set of commands using the runners shell
       - name: Create Native Image
         run: |
-          ./gradlew native-cli:nativeImage
-          ./gradlew native-cli:distro
+          if [ "$RUNNER_OS" == 'Windows' ]; then
+            ./gradlew native-cli:nativeImage -PgraalvmVersion=20.2.0
+            ./gradlew native-cli:distro
+          else
+            ./gradlew native-cli:nativeImage
+            ./gradlew native-cli:distro
+          fi
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
+          AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
 
       # Upload the artifact file
       - name: Upload binaries to release
