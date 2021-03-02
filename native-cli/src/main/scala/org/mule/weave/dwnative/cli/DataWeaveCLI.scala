@@ -94,6 +94,7 @@ class DataWeaveCLIRunner {
     val filesToWatch: ArrayBuffer[File] = ArrayBuffer()
     var cleanCache = false
     var remoteDebug = false
+    var telemetry = false
 
     val inputs: mutable.Map[String, File] = mutable.Map()
     val properties: mutable.Map[String, String] = mutable.Map()
@@ -240,6 +241,9 @@ class DataWeaveCLIRunner {
             return Right("Missing <outputPath>")
           }
         }
+        case "--telemetry" => {
+          telemetry = true
+        }
         case "-main" | "-m" => {
           if (i + 1 < args.length) {
             i = i + 1
@@ -294,7 +298,7 @@ class DataWeaveCLIRunner {
     if (scriptToRun.isEmpty) {
       Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath> or --spell ")
     } else {
-      Left(WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun.get, properties.toMap, inputs.toMap, output, filesToWatch, watch, remoteDebug))
+      Left(WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun.get, properties.toMap, inputs.toMap, output, filesToWatch, watch, remoteDebug, telemetry))
     }
   }
 
@@ -363,6 +367,7 @@ class DataWeaveCLIRunner {
       | --version          | The version of the CLI and Runtime
       | --clean-cache      | Cleans the cache where all artifacts are being downloaded this force to download all artifacts every time
       | --remote-debug     | Enables remote debugging
+      | --telemetry     | Enables telemetry reporting
       |
       | Example:
       |
@@ -450,7 +455,7 @@ class DataWeaveCLIRunner {
           }
           Signal.handle(new Signal("INT"), signalHandler)
           Signal.handle(new Signal("TERM"), signalHandler)
-          val result: ExecuteResult = nativeRuntime.eval(module.content, scriptingBindings, module.nameIdentifier, config.profile, config.remoteDebug)
+          val result: ExecuteResult = nativeRuntime.eval(module.content, scriptingBindings, module.nameIdentifier, config.profile, config.remoteDebug, config.telemetry)
           Runtime.getRuntime.addShutdownHook(new Thread() {
             override def run(): Unit = {
               Try(result.close())
@@ -474,7 +479,7 @@ class DataWeaveCLIRunner {
       } else {
         val out = if (config.outputPath.isDefined) new FileOutputStream(config.outputPath.get) else System.out
         val defaultOutputType = Option(System.getenv(DW_DEFAULT_OUTPUT_MIMETYPE_VAR)).getOrElse("application/json")
-        val result: WeaveExecutionResult = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, out, defaultOutputType, config.profile, config.remoteDebug)
+        val result: WeaveExecutionResult = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, out, defaultOutputType, config.profile, config.remoteDebug, config.telemetry)
         //load inputs from
         if (result.success()) {
           exitCode = 0
@@ -587,7 +592,8 @@ case class WeaveRunnerConfig(path: Array[String],
                              outputPath: Option[String],
                              filesToWatch: Seq[File],
                              watch: Boolean,
-                             remoteDebug: Boolean
+                             remoteDebug: Boolean,
+                             telemetry: Boolean
                             )
 
 case class WeaveModule(content: String, nameIdentifier: String)

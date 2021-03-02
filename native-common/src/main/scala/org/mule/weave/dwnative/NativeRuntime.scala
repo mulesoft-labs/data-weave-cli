@@ -113,11 +113,15 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
   }
 
 
-  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false, debug: Boolean = false): WeaveExecutionResult = {
+  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false, remoteDebug: Boolean = false, telemetry: Boolean = false): WeaveExecutionResult = {
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), defaultOutputMimeType, profile)
-      if(debug) {
+      if(remoteDebug) {
         dataWeaveScript.enableDebug()
+      }
+      if(telemetry){
+        dataWeaveScript.enableTelemetry()
+        dataWeaveScript.enableMemoryTelemetry()
       }
       val serviceManager: ServiceManager = createServiceManager()
       val result: DataWeaveResult =
@@ -169,11 +173,15 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
     serviceManager
   }
 
-  def eval(script: String, inputs: ScriptingBindings, nameIdentifier: String, profile: Boolean, debug: Boolean = false): ExecuteResult = {
+  def eval(script: String, inputs: ScriptingBindings, nameIdentifier: String, profile: Boolean, debug: Boolean = false, telemetry: Boolean = false): ExecuteResult = {
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), "application/dw", profile)
       if(debug) {
         dataWeaveScript.enableDebug()
+      }
+      if(telemetry){
+        dataWeaveScript.enableTelemetry()
+        dataWeaveScript.enableMemoryTelemetry()
       }
       val serviceManager: ServiceManager = createServiceManager()
       if (profile) {
