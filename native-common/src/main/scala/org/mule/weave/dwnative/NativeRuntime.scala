@@ -9,7 +9,6 @@ import org.mule.weave.v2.exception.InvalidLocationException
 import org.mule.weave.v2.interpreted.CustomRuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.RuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
-import org.mule.weave.v2.io.service.DefaultFileService
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
 import org.mule.weave.v2.model.service.ProtocolUrlSourceProviderResolverService
@@ -19,7 +18,6 @@ import org.mule.weave.v2.model.service.UrlProtocolHandler
 import org.mule.weave.v2.model.service.UrlSourceProviderResolverService
 import org.mule.weave.v2.model.values.BinaryValue
 import org.mule.weave.v2.module.reader.AutoPersistedOutputStream
-import org.mule.weave.v2.module.reader.DefaultAutoPersistedOutputStream
 import org.mule.weave.v2.module.reader.SourceProvider
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.exception.LocatableException
@@ -109,28 +107,28 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
   }
 
   def run(script: String, nameIdentifier: String, inputs: ScriptingBindings): WeaveExecutionResult = {
-    run(script,nameIdentifier, inputs, new DefaultAutoPersistedOutputStream(DefaultFileService))
+    run(script, nameIdentifier, inputs, None)
   }
 
 
-  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false, remoteDebug: Boolean = false, telemetry: Boolean = false): WeaveExecutionResult = {
+  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: Option[OutputStream], defaultOutputMimeType: String = "application/json", profile: Boolean = false, remoteDebug: Boolean = false, telemetry: Boolean = false): WeaveExecutionResult = {
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), defaultOutputMimeType, profile)
-      if(remoteDebug) {
+      if (remoteDebug) {
         dataWeaveScript.enableDebug()
       }
-      if(telemetry){
+      if (telemetry) {
         dataWeaveScript.enableTelemetry()
         dataWeaveScript.enableMemoryTelemetry()
       }
       val serviceManager: ServiceManager = createServiceManager()
       val result: DataWeaveResult =
         if (profile) {
-          time(() => dataWeaveScript.write(inputs, serviceManager, Some(out)), "Execution")
+          time(() => dataWeaveScript.write(inputs, serviceManager, out), "Execution")
         } else {
-          dataWeaveScript.write(inputs, serviceManager, Some(out))
+          dataWeaveScript.write(inputs, serviceManager, out)
         }
-      WeaveSuccessResult(out, result.getCharset().name())
+      WeaveSuccessResult(out.get, result.getCharset().name())
     } catch {
       case cr: CompilationException => {
         WeaveFailureResult(cr.getMessage())
@@ -176,10 +174,10 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
   def eval(script: String, inputs: ScriptingBindings, nameIdentifier: String, profile: Boolean, debug: Boolean = false, telemetry: Boolean = false): ExecuteResult = {
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), "application/dw", profile)
-      if(debug) {
+      if (debug) {
         dataWeaveScript.enableDebug()
       }
-      if(telemetry){
+      if (telemetry) {
         dataWeaveScript.enableTelemetry()
         dataWeaveScript.enableMemoryTelemetry()
       }
@@ -268,7 +266,7 @@ case class WeaveSuccessResult(outputStream: OutputStream, charset: String) exten
       case ap: AutoPersistedOutputStream => {
         implicit val context: EvaluationContext = EvaluationContext()
         try {
-          new String(BinaryValue.getBytesFromSeekableStream(ap.toInputStream, close = true), charset)
+          new String(BinaryValue.getBytesFromSeekableStream(ap.toInputStream, close = true, memoryService = context.serviceManager.memoryService), charset)
         } finally {
           context.close()
         }

@@ -21,6 +21,7 @@ import sun.misc.SignalHandler
 
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.file.Files
@@ -362,12 +363,12 @@ class DataWeaveCLIRunner {
       | --verbose or -v    | Enable Verbose Mode.
       | --output or -o     | Specifies output file for the transformation if not standard output will be used.
       | --main or -m       | The full qualified name of the mapping to be execute.
-      | --file or -f        | Path to the file
+      | --file or -f       | Path to the file
       | --eval             | Evaluates the script instead of writing it
       | --version          | The version of the CLI and Runtime
       | --clean-cache      | Cleans the cache where all artifacts are being downloaded this force to download all artifacts every time
       | --remote-debug     | Enables remote debugging
-      | --telemetry     | Enables telemetry reporting
+      | --telemetry        | Enables telemetry reporting
       |
       | Example:
       |
@@ -477,9 +478,9 @@ class DataWeaveCLIRunner {
           }
         }
       } else {
-        val out = if (config.outputPath.isDefined) new FileOutputStream(config.outputPath.get) else System.out
+        val out: OutputStream = if (config.outputPath.isDefined) new FileOutputStream(config.outputPath.get) else System.out
         val defaultOutputType = Option(System.getenv(DW_DEFAULT_OUTPUT_MIMETYPE_VAR)).getOrElse("application/json")
-        val result: WeaveExecutionResult = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, out, defaultOutputType, config.profile, config.remoteDebug, config.telemetry)
+        val result: WeaveExecutionResult = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, Some(out), defaultOutputType, config.profile, config.remoteDebug, config.telemetry)
         //load inputs from
         if (result.success()) {
           exitCode = 0
