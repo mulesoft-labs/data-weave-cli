@@ -442,7 +442,7 @@ class DataWeaveCLIRunner {
         })
       }
 
-      config.properties.foreach((prop) =>{
+      config.properties.foreach((prop) => {
         scriptingBindings.addBinding(prop._1, StringValue(prop._2))
       })
 
@@ -478,7 +478,19 @@ class DataWeaveCLIRunner {
           }
         }
       } else {
-        val out: OutputStream = if (config.outputPath.isDefined) new FileOutputStream(config.outputPath.get) else System.out
+        val out: OutputStream = if (config.outputPath.isDefined) {
+          val outputFile = new File(config.outputPath.get)
+          if (!outputFile.getParentFile.exists()) {
+            val created = outputFile.getParentFile.mkdirs()
+            if(!created){
+              println(AnsiColor.red(s"Unable to create output file folder: `${outputFile.getParent}``"))
+              return -1
+            }
+          }
+          new FileOutputStream(outputFile)
+        } else {
+          System.out
+        }
         val defaultOutputType = Option(System.getenv(DW_DEFAULT_OUTPUT_MIMETYPE_VAR)).getOrElse("application/json")
         val result: WeaveExecutionResult = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, Some(out), defaultOutputType, config.profile, config.remoteDebug, config.telemetry)
         //load inputs from
