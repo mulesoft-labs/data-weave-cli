@@ -108,6 +108,8 @@ graal {
     option "-H:DeadlockWatchdogInterval=1000"
     option "--report-unsupported-elements-at-runtime"
     option "-H:CompilationExpirationPeriod=0"
+//    option "-H:+DashboardAll"
+//    option "-H:DashboardDump=/Users/mdeachaval/labs/palantir/weave-native-library/native-cli/dump"
 //    option "-H:+PrintImageObjectTree"
     option "-J-Xmx6G"
 }
