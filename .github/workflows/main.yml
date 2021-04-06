@@ -17,7 +17,8 @@ jobs:
   OSX_LINUX_WINDOWS:
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+#        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, ubuntu-latest]
         include:
 #          - os: windows-latest
 #            script_name: windows
