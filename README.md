@@ -49,7 +49,7 @@ Execute the gradle task nativeImage
 ./gradlew native-cli:nativeImage
 ```
 
-It takes several minutes so good time to take and refeel your mate.
+It takes several minutes so good time to take and refill your mate.
 
 Once it finishes you will find the `dw` binary in `native-cli/build/graal/dw`
 
