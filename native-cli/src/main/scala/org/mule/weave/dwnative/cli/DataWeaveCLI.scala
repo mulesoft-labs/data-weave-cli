@@ -480,10 +480,14 @@ class DataWeaveCLIRunner {
       } else {
         val out: OutputStream = if (config.outputPath.isDefined) {
           val outputFile = new File(config.outputPath.get)
-          if (!outputFile.getParentFile.exists()) {
-            val created = outputFile.getParentFile.mkdirs()
-            if(!created){
-              println(AnsiColor.red(s"Unable to create output file folder: `${outputFile.getParent}``"))
+          val parentFile: File = outputFile.getParentFile
+          if (parentFile == null) {
+            println(AnsiColor.red(s"Unable to detect container folder for: `${outputFile}`. If relative path used use `./<outputFileName>`"))
+            return -1
+          } else if (!parentFile.exists()) {
+            val created = parentFile.mkdirs()
+            if (!created) {
+              println(AnsiColor.red(s"Unable to create output file folder: `${outputFile.getParent}`."))
               return -1
             }
           }
@@ -534,16 +538,25 @@ class DataWeaveCLIRunner {
   }
 
   def grimoiresFolders(): File = {
-    new File(DataWeaveUtils.getDWHome(), "grimoires")
+    val file = new File(DataWeaveUtils.getDWHome(), "grimoires")
+    if (!file.exists()) {
+      file.mkdirs()
+    }
+    file
   }
 
   def cloneGrimoire(wizard: String): Unit = {
     val wizardName = if (wizard == null) "DW" else wizard
-    println(s"Fetching `$wizardName's` Grimoire.")
-    val url: String = buildRepoUrl(wizard)
-    val processBuilder = new ProcessBuilder("git", "clone", url, grimoireFolder(wizard).getAbsolutePath)
-    processBuilder.inheritIO()
-    processBuilder.start().waitFor()
+    val wizardFolder = grimoireFolder(wizard)
+    if (wizardFolder.exists()) {
+      println(red(s"Wizard `${wizard}` was already added."))
+    } else {
+      println(s"Fetching `$wizardName's` Grimoire.")
+      val url: String = buildRepoUrl(wizard)
+      val processBuilder = new ProcessBuilder("git", "clone", url, wizardFolder.getAbsolutePath)
+      processBuilder.inheritIO()
+      processBuilder.start().waitFor()
+    }
   }
 
   def updateLastUpdateTimeStamp(): Boolean = {
@@ -563,16 +576,19 @@ class DataWeaveCLIRunner {
     updateLastUpdateTimeStamp()
     val grimoires = grimoiresFolders().listFiles()
     grimoires.foreach((grimoire) => {
-      updateGrimoire(grimoire)
+      //If it is not a directory it can be the lastUpdate.txt
+      if (grimoire.isDirectory) {
+        updateGrimoire(grimoire)
+      }
     })
   }
 
   def updateGrimoire(grimoire: File): Int = {
+    println(s"Updating `${grimoire.getName}'s` Grimoire.")
     val processBuilder = new ProcessBuilder("git", "pull")
     processBuilder.directory(grimoire)
     processBuilder.inheritIO()
     processBuilder.start().waitFor()
-
   }
 
   def buildRepoUrl(user: String): String = {
