@@ -609,7 +609,7 @@ class DataWeaveCLIRunner {
     if (grimoire == null)
       "DW"
     else
-      grimoire.substring(0, grimoire.length - s"-${DATA_WEAVE_GRIMOIRE_FOLDER}")
+      grimoire.substring(0, grimoire.length - s"-${DATA_WEAVE_GRIMOIRE_FOLDER}".length)
   }
 
 }

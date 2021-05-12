@@ -74,5 +74,5 @@ jobs:
     - name: Upload generated script
       uses: actions/upload-artifact@v2
       with:
-        name: dw-${{env.NATIVE_VERSION}}-${{runner.os}}.zip
+        name: dw-${{env.NATIVE_VERSION}}-${{runner.os}}
         path: native-cli/build/distributions/native-cli-${{env.NATIVE_VERSION}}-native-distro-${{ matrix.script_name }}.zip
