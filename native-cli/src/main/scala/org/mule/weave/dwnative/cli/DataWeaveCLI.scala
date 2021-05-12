@@ -311,7 +311,7 @@ class DataWeaveCLIRunner {
     val grimoiresDirs = grimoires.listFiles()
     if (grimoiresDirs != null) {
       grimoiresDirs.foreach((g) => {
-        val name = if (g.getName.equals(DATA_WEAVE_GRIMOIRE_FOLDER)) "" else g.getName + "/"
+        val name = if (g.getName.equals(DATA_WEAVE_GRIMOIRE_FOLDER)) "" else wizardName(g.getName) + "/"
         val spells = g.listFiles()
         if (spells != null) {
           spells.foreach((s) => {
@@ -584,7 +584,7 @@ class DataWeaveCLIRunner {
   }
 
   def updateGrimoire(grimoire: File): Int = {
-    println(s"Updating `${grimoire.getName}'s` Grimoire.")
+    println(s"Updating `${wizardName(grimoire.getName)}'s` Grimoire.")
     val processBuilder = new ProcessBuilder("git", "pull")
     processBuilder.directory(grimoire)
     processBuilder.inheritIO()
@@ -603,6 +603,13 @@ class DataWeaveCLIRunner {
       DATA_WEAVE_GRIMOIRE_FOLDER
     else
       s"${user}-$DATA_WEAVE_GRIMOIRE_FOLDER"
+  }
+
+  def wizardName(grimoire: String): String = {
+    if (grimoire == null)
+      "DW"
+    else
+      grimoire.substring(0, grimoire.length - s"-${DATA_WEAVE_GRIMOIRE_FOLDER}")
   }
 
 }
