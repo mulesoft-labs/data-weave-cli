@@ -1,10 +1,57 @@
 
 graal {
     outputName 'libDw'
-    graalVersion '1.0.0-rc14'
-    option "-H:-UseServiceLoaderFeature"
+    outputName 'dw'
+    javaVersion '11'
+    graalVersion graalvmVersion
+    option "-H:+ReportExceptionStackTraces"
+    option "-J-Xmx3G"
+    option "--no-fallback"
+    option "--allow-incomplete-classpath"
+    option "-H:EnableURLProtocols=http,https"
+    option "--initialize-at-run-time=org.mule.weave.v2.module.raml.RamlModuleLoader," +
+            "io.netty,"+
+            "org.asynchttpclient,"+
+            "org.mule.weave.v2.module.http.netty.HttpAsyncClientService,"+
+            "amf.,"+
+            "org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider\$"
+    option "--initialize-at-build-time=" +
+            "sun.instrument.InstrumentationImpl," +
+            "org.mule.weave.dwnative.initializer.Startup," +
+            "org.mule.weave.dwnative.," +
+            "org.mule.weave.v2.parser.," +
+            "org.mule.weave.v2.codegen.StringCodeWriter," +
+            "org.mule.weave.v2.resources.WeaveResourceLoader\$," +
+            "org.mule.weave.v2.annotations.," +
+            "org.mule.weave.v2.ts.," +
+            "org.mule.weave.v2.scope.," +
+            "org.mule.weave.v2.scope.," +
+            "org.mule.weave.v2.grammar.,"+
+            "org.mule.weave.v2.sdk.," +
+            "org.mule.weave.v2.utils.," +
+            "org.mule.weave.v2.versioncheck.," +
+            //Parboiled
+            "scala.," +
+            "org.parboiled2.," +
+            "shapeless.syntax.," +
+            "shapeless."
+
+    //For Runtime execution
+//            "org.mule.weave.v2.interpreted.,"+
+//            "org.mule.weave.v2.model.values.,"
+//            "org.mule.weave.v2.model.types.,"
+//            "org.mule.weave.v2.core.functions."
+//    option "-H:+TraceClassInitialization"
+    option "-H:DeadlockWatchdogInterval=1000"
+    option "--report-unsupported-elements-at-runtime"
+    option "-H:CompilationExpirationPeriod=0"
+//    option "-H:+DashboardAll"
+//    option "-H:DashboardDump=/Users/mdeachaval/labs/palantir/weave-native-library/native-cli/dump"
+//    option "-H:+PrintImageObjectTree"
+    option "-J-Xmx6G"
 }
 
 dependencies{
-    compile project(':native-common')
+    compile group: 'org.mule.weave', name: 'parser', version: weaveVersion
+    compile group: 'org.graalvm.sdk', name: 'graal-sdk', version: graalvmVersion
 }
