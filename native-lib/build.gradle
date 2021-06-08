@@ -1,7 +1,6 @@
 
 graal {
     outputName 'libDw'
-    outputName 'dw'
     javaVersion '11'
     graalVersion graalvmVersion
     option "-H:+ReportExceptionStackTraces"

@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <time.h>
 
-#include "dw.h"
+#include "libDw.h"
 
 int main(int argc, char** argv) {
   graal_create_isolate_params_t isolate_params = {};
