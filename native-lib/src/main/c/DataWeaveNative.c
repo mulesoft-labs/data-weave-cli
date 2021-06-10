@@ -2,21 +2,32 @@
 #include <stdio.h>
 #include <time.h>
 
-#include "libDw.h"
+#include "libdw.h"
+
 
 int main(int argc, char** argv) {
-  graal_create_isolate_params_t isolate_params = {};
-  graal_isolate_t* isolate;
-  graal_isolatethread_t* thread;
-  if (graal_create_isolate(&isolate_params, &isolate, &thread)) {
-    return -1;
-  }
-  clock_t start, end;
-  double time_taken;
-  start = clock();
-  printf("%s\n", compilePeregrineExpression(thread, "payload.a.b"));
-  end = clock();
-  time_taken = ((double) (end - start)) / CLOCKS_PER_SEC;
-  printf("fun() took %f seconds to execute \n", time_taken);
+  compilation_result result;
+  int i = 1;
+  while (i <= 5)
+  {
+    graal_isolatethread_t* thread;
+    if (graal_create_isolate(NULL, NULL, &thread)) {
+      return -1;
+    }
+    printf("Start\n");
+    compile(thread, "attributes.headers.myParam", &result);
+//    printf("%d\n", result.f_success);
+    printf("%s\n", result.f_pel);
+    printf("Done\n");
+    freeJavaObject(thread, &result);
+//     if ( graal_detach_thread(thread) != 0){
+//       fprintf(stderr, "ditach error\n");
+//       return 1;
+//     }
+    if (graal_tear_down_isolate(thread) != 0) {
+       fprintf(stderr, "shutdown error\n");
+       return 1;
+     }
+   }
   return 0;
 }
