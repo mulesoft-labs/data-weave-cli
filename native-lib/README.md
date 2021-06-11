@@ -18,7 +18,10 @@ Then to compile it in MacOs you need clang
 
 ## How to compile on mac os
 
+First step open `native-lib/build/graal/libdw.h` and insert `#include <dw_compiler.h>`
+
+Then compile and run
+
 ```bash
-cd native-lib/src/main/c
-clang -I<RepoClone Directory>/weave-native-library/native-lib/build/graal -L<RepoClone Directory>/weave-native-library/native-lib/build/graal -lDw ./DataWeaveNative.c -o DataWeaveNative
+clang -I./native-lib/build/graal -I./native-lib/src/main/c/ -L./native-lib/build/graal  -ldw ./native-lib/src/main/c/DataWeaveNative.c -o DataWeaveNative && ./DataWeaveNative
 ```

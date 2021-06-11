@@ -29,6 +29,8 @@ import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.nativeimage.c.CContext;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
+import org.graalvm.nativeimage.c.function.CFunctionPointer;
+import org.graalvm.nativeimage.c.function.InvokeCFunctionPointer;
 import org.graalvm.nativeimage.c.struct.AllowNarrowingCast;
 import org.graalvm.nativeimage.c.struct.AllowWideningCast;
 import org.graalvm.nativeimage.c.struct.CField;
@@ -39,7 +41,6 @@ import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
 
@@ -80,15 +81,48 @@ public class CDataWeaveLib {
         @CField("f_pel")
         CCharPointer getPeregrineExpression();
 
-
         @CField("f_error_message")
         void setErrorMessage(CCharPointer errorMessage);
 
+        @CField("f_error_message")
+        CCharPointer getErrorMessage();
+
     }
 
-    /* Java function that can be called directly from C code. */
+    /* Import of a C function pointer type. */
+    interface CompilationResultFunctionPointer extends CFunctionPointer {
+
+        /*
+         * Invocation of the function pointer. A call to the function is replaced with an indirect
+         * call of the function pointer.
+         */
+        @InvokeCFunctionPointer
+        void invoke(boolean success, CCharPointer expressionOrError);
+    }
+
+
     @CEntryPoint(name = "compile")
-    public static void compile(@SuppressWarnings("unused") IsolateThread thread, CCharPointer transform, CompilationResult copy) {
+    public static void compile(@SuppressWarnings("unused") IsolateThread thread, CCharPointer transform, CompilationResultFunctionPointer callback) {
+        final String script = CTypeConversion.toJavaString(transform);
+        PeregrineCompiler peregrineCompiler = new PeregrineCompiler();
+        PeregrineCompilationResult compilationResult = peregrineCompiler.compile(script);
+        if (compilationResult instanceof SuccessPeregrineCompilationResult) {
+            String pelExpression = ((SuccessPeregrineCompilationResult) compilationResult).pelExpression();
+            try (CTypeConversion.CCharPointerHolder pelHolder = CTypeConversion.toCString(pelExpression)) {
+                callback.invoke(false, pelHolder.get());
+            }
+        } else if (compilationResult instanceof FailurePeregrineCompilationResult) {
+            String reason = ((FailurePeregrineCompilationResult) compilationResult).reason();
+            try (CTypeConversion.CCharPointerHolder reasonHolder = CTypeConversion.toCString(reason)) {
+                callback.invoke(false, reasonHolder.get());
+            }
+        }
+    }
+
+
+    /* Java function that can be called directly from C code. */
+    @CEntryPoint(name = "compileSync")
+    public static void compileSync(@SuppressWarnings("unused") IsolateThread thread, CCharPointer transform, CompilationResult copy) {
         final String script = CTypeConversion.toJavaString(transform);
         /* Allocate a C structure in our stack frame. */
         //maloc(sizeOf(compilation_result))
@@ -97,22 +131,35 @@ public class CDataWeaveLib {
         if (compilationResult instanceof SuccessPeregrineCompilationResult) {
             copy.setSuccess(true);
             String expression = ((SuccessPeregrineCompilationResult) compilationResult).pelExpression();
-            int length = 1000000;
+            int length = expression.getBytes().length;
             UnsignedWord unsignedWord = WordFactory.unsigned(length);
             CCharPointer malloc = UnmanagedMemory.malloc(unsignedWord);
             CTypeConversion.toCString(expression, malloc, unsignedWord);
             copy.setPeregrineExpression(malloc);
+
         } else if (compilationResult instanceof FailurePeregrineCompilationResult) {
             copy.setSuccess(false);
             String reason = ((FailurePeregrineCompilationResult) compilationResult).reason();
-            copy.setErrorMessage(CTypeConversion.toCString(reason).get());
+            int length = reason.getBytes().length;
+            UnsignedWord unsignedWord = WordFactory.unsigned(length);
+            CCharPointer malloc = UnmanagedMemory.malloc(unsignedWord);
+            CTypeConversion.toCString(reason, malloc, unsignedWord);
+            copy.setErrorMessage(malloc);
         }
     }
 
 
-    @CEntryPoint(name = "freeJavaObject")
-    public static void freeJavaObject(@SuppressWarnings("unused") IsolateThread thread, CompilationResult transform) {
-        UnmanagedMemory.free(transform.getPeregrineExpression());
+    @CEntryPoint(name = "freeCompilationResult")
+    public static void freeCompilationResult(@SuppressWarnings("unused") IsolateThread thread, CompilationResult transform) {
+//        if (transform.getPeregrineExpression() != null) {
+            UnmanagedMemory.free(transform.getPeregrineExpression());
+//        }
+
+//        if (transform.getErrorMessage() != null) {
+            UnmanagedMemory.free(transform.getErrorMessage());
+//        }
+
+//        UnmanagedMemory.free(transform);
     }
 
 }
