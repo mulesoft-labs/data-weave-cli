@@ -152,15 +152,13 @@ public class CDataWeaveLib {
 
     @CEntryPoint(name = "freeCompilationResult")
     public static void freeCompilationResult(@SuppressWarnings("unused") IsolateThread thread, CompilationResult transform) {
-//        if (transform.getPeregrineExpression() != null) {
+        //Free the string
+        if (transform.isSuccess()) {
             UnmanagedMemory.free(transform.getPeregrineExpression());
-//        }
-
-//        if (transform.getErrorMessage() != null) {
+        } else {
             UnmanagedMemory.free(transform.getErrorMessage());
-//        }
+        }
 
-//        UnmanagedMemory.free(transform);
     }
 
 }
