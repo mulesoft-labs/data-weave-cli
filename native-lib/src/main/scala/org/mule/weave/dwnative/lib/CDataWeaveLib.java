@@ -109,7 +109,7 @@ public class CDataWeaveLib {
         if (compilationResult instanceof SuccessPeregrineCompilationResult) {
             String pelExpression = ((SuccessPeregrineCompilationResult) compilationResult).pelExpression();
             try (CTypeConversion.CCharPointerHolder pelHolder = CTypeConversion.toCString(pelExpression)) {
-                callback.invoke(false, pelHolder.get());
+                callback.invoke(true, pelHolder.get());
             }
         } else if (compilationResult instanceof FailurePeregrineCompilationResult) {
             String reason = ((FailurePeregrineCompilationResult) compilationResult).reason();
@@ -131,6 +131,7 @@ public class CDataWeaveLib {
         if (compilationResult instanceof SuccessPeregrineCompilationResult) {
             copy.setSuccess(true);
             String expression = ((SuccessPeregrineCompilationResult) compilationResult).pelExpression();
+            //BUGG!!!! no encoding
             int length = expression.getBytes().length;
             UnsignedWord unsignedWord = WordFactory.unsigned(length);
             CCharPointer malloc = UnmanagedMemory.malloc(unsignedWord);
