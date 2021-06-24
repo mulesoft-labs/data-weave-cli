@@ -90,7 +90,7 @@ class PeregrineCompiler {
         if (name.isDefined && isSelectingAttribute(lhs, HEADERS_NAME)) {
           SuccessPeregrineCompilationResult("{\"header\": \"" + name.get + "\"}")
         } else if (name.isDefined && isSelectingAttribute(lhs, "queryParams")) {
-          SuccessPeregrineCompilationResult("{\"queryParams\": \"" + name.get + "\"")
+          SuccessPeregrineCompilationResult("{\"queryParams\": \"" + name.get + "\"}")
         } else {
           FailurePeregrineCompilationResult(s"Unable to compile: ${CodeGenerator.generate(astNode)} to PEL.")
         }
