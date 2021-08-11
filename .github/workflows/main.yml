@@ -65,7 +65,7 @@ jobs:
     - name: Upload to S3
       run: |
         ./gradlew native-cli:distro
-        ./gradlew native-cli:uploadDistro
+#        ./gradlew native-cli:uploadDistro
       env:
         AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
         AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
