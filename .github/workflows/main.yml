@@ -20,8 +20,8 @@ jobs:
 #        os: [macos-latest, ubuntu-latest, windows-latest]
         os: [macos-latest, ubuntu-latest]
         include:
-          - os: windows-latest
-            script_name: windows
+#          - os: windows-latest
+#            script_name: windows
           - os: ubuntu-latest
             script_name: linux
           - os: macos-latest
