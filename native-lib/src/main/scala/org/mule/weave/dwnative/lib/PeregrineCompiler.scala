@@ -81,23 +81,42 @@ class PeregrineCompiler {
         //Should we do a warning here? as the semantics of null unsafe are not going to remain in PEL
         compile(ns.selector)
       }
+//      case BinaryOpNode(opId, lhs, rhs) if (isValueSelector(opId, rhs)) => {
+//        val name = rhs match {
+//          case StringNode(value) => Some(value)
+//          case NameNode(StringNode(value), _) => Some(value)
+//          case _ => None
+//        }
+//        if (name.isDefined && isSelectingAttribute(lhs, HEADERS_NAME)) {
+//          SuccessPeregrineCompilationResult("{\"header\": \"" + name.get + "\"}")
+//        } else if (name.isDefined && isSelectingAttribute(lhs, "queryParams")) {
+//          SuccessPeregrineCompilationResult("{\"queryParams\": \"" + name.get + "\"}")
+//        } else {
+//          FailurePeregrineCompilationResult(s"Unable to compile: ${CodeGenerator.generate(astNode)} to PEL.")
+//        }
+//      }
+
       case BinaryOpNode(opId, lhs, rhs) if (isValueSelector(opId, rhs)) => {
-        val name = rhs match {
-          case StringNode(value) => Some(value)
-          case NameNode(StringNode(value), _) => Some(value)
-          case _ => None
-        }
-        if (name.isDefined && isSelectingAttribute(lhs, HEADERS_NAME)) {
-          SuccessPeregrineCompilationResult("{\"header\": \"" + name.get + "\"}")
-        } else if (name.isDefined && isSelectingAttribute(lhs, "queryParams")) {
-          SuccessPeregrineCompilationResult("{\"queryParams\": \"" + name.get + "\"}")
-        } else {
-          FailurePeregrineCompilationResult(s"Unable to compile: ${CodeGenerator.generate(astNode)} to PEL.")
-        }
+        val left = compileUnsafe(lhs) // TODO handle failure
+        val right = compileUnsafe(rhs)
+        SuccessPeregrineCompilationResult(s"[., $left, $right]")
       }
+
+      case vr: VariableReferenceNode => SuccessPeregrineCompilationResult(s"[:ref, ${vr.variable.name}]")
+
+      case NameNode(StringNode(x), _) => SuccessPeregrineCompilationResult(s"[:field, $x]")
+
       case _ => FailurePeregrineCompilationResult(s"Unable to compile: ${CodeGenerator.generate(astNode)} to PEL.")
     }
   }
+
+  def compileUnsafe(node: AstNode): String = {
+    compile(node) match {
+      case SuccessPeregrineCompilationResult(pelExpression) => pelExpression
+      case FailurePeregrineCompilationResult(reason) => throw new RuntimeException(s"compilation failure: $reason")
+    }
+  }
+
 }
 
 sealed trait PeregrineCompilationResult
@@ -107,12 +126,27 @@ case class SuccessPeregrineCompilationResult(pelExpression: String) extends Pere
 case class FailurePeregrineCompilationResult(reason: String) extends PeregrineCompilationResult
 
 
-//object Test extends App {
-//  private val peregrineCompiler = new PeregrineCompiler
+object Test extends App {
+  private val peregrineCompiler = new PeregrineCompiler
+
+  check("a", "[:ref, a]")
+  check("a.b", "[., [:ref, a], [:field, b]]")
+  check("a.b.c", "[., [., [:ref, a], [:field, b]], [:field, c]]")
+
 //  println(peregrineCompiler.compile("attributes.queryParams['myParam']"))
 //  println(peregrineCompiler.compile("attributes.headers['CORS']"))
 //  println(peregrineCompiler.compile("attributes.headers.myParam"))
 //  println(peregrineCompiler.compile("attributes.headers.'myParam'"))
 //  println(peregrineCompiler.compile("attributes['headers']'myParam'"))
 //  println(peregrineCompiler.compile("attributes['headers'][vars.a]"))
-//}
+
+  def check(source: String, expectedTarget: String): Unit = {
+    peregrineCompiler.compile(source) match {
+      case SuccessPeregrineCompilationResult(pelExpression) =>
+        println(if (expectedTarget.equals(pelExpression)) s"PASS: $source -> $expectedTarget"
+                  else s"FAILED: $source -> $pelExpression ///Expected/// $expectedTarget")
+
+      case FailurePeregrineCompilationResult(reason) => println(s"FAILED: $source -> compilation failure: $reason")
+    }
+  }
+}
