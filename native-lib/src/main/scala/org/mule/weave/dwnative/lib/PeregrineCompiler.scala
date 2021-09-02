@@ -22,6 +22,7 @@ class PeregrineCompiler {
 
   val ATTRIBUTES_NAME = "attributes"
   val HEADERS_NAME = "headers"
+  val Q = "\""
 
   def compile(script: String): PeregrineCompilationResult = {
     val parse = MappingParser.parse(MappingParser.parsingPhase, WeaveResource.anonymous(script), ParsingContextFactory.createParsingContext)
@@ -98,21 +99,21 @@ class PeregrineCompiler {
       case BinaryOpNode(opId, lhs, rhs) if (isValueSelector(opId, rhs)) => {
         val left = compileUnsafe(lhs) // TODO handle failure
         val right = compileUnsafe(rhs)
-        SuccessPeregrineCompilationResult(s"[., $left, $right]")
+        SuccessPeregrineCompilationResult(s"[$Q.$Q, $left, $right]")
       }
 
       case FunctionCallNode(VariableReferenceNode(fun), FunctionCallParametersNode(args)) => {
         val params = args.map(compileUnsafe).mkString(", ")
-        SuccessPeregrineCompilationResult(s"[${fun.name}, $params]")
+        SuccessPeregrineCompilationResult(s"[$Q${fun.name}$Q, $params]")
       }
 
-      case vr: VariableReferenceNode => SuccessPeregrineCompilationResult(s"[:ref, ${vr.variable.name}]")
+      case vr: VariableReferenceNode => SuccessPeregrineCompilationResult(s"[$Q:ref$Q, $Q${vr.variable.name}$Q]")
 
-      case NameNode(StringNode(x), _) => SuccessPeregrineCompilationResult(s"[:field, $x]")
+      case NameNode(StringNode(x), _) => SuccessPeregrineCompilationResult(s"[$Q:field$Q, $Q$x$Q]")
 
-      case NumberNode(n) => SuccessPeregrineCompilationResult(s"[:nbr, $n]")
+      case NumberNode(n) => SuccessPeregrineCompilationResult(s"[$Q:nbr$Q, $Q$n$Q]")
 
-      case StringNode(s) => SuccessPeregrineCompilationResult(s"[:str, $s]")
+      case StringNode(s) => SuccessPeregrineCompilationResult(s"[$Q:str$Q, $Q$s$Q]")
 
       case _ => FailurePeregrineCompilationResult(s"Unable to compile: ${CodeGenerator.generate(astNode)} to PEL.")
     }
@@ -138,19 +139,19 @@ object Test extends App {
   private val peregrineCompiler = new PeregrineCompiler
 
   // selectors
-  check("a", "[:ref, a]")
-  check("a.b", "[., [:ref, a], [:field, b]]")
-  check("a.b.c", "[., [., [:ref, a], [:field, b]], [:field, c]]")
+  check("a", "[\":ref\", \"a\"]")
+  check("a.b", "[\".\", [\":ref\", \"a\"], [\":field\", \"b\"]]")
+  check("a.b.c", "[\".\", [\".\", [\":ref\", \"a\"], [\":field\", \"b\"]], [\":field\", \"c\"]]")
 
   // literals
-  check("123", "[:nbr, 123]")
-  check("\"hi\"", "[:str, hi]")
+  check("123", "[\":nbr\", \"123\"]")
+  check("\"hi\"", "[\":str\", \"hi\"]")
 
   // functions
-  check("upper(\"hi\")", "[upper, [:str, hi]]")
-  check("\"hi\" ++ \"by\"", "[++, [:str, hi], [:str, by]]")
-  check("upper(\"hi\" ++ \"by\")", "[upper, [++, [:str, hi], [:str, by]]]")
-  check("upper(\"hi\" ++ a.b.c)", "[upper, [++, [:str, hi], [., [., [:ref, a], [:field, b]], [:field, c]]]]")
+  check("upper(\"hi\")", "[\"upper\", [\":str\", \"hi\"]]")
+  check("\"hi\" ++ \"by\"", "[\"++\", [\":str\", \"hi\"], [\":str\", \"by\"]]")
+  check("upper(\"hi\" ++ \"by\")", "[\"upper\", [\"++\", [\":str\", \"hi\"], [\":str\", \"by\"]]]")
+  check("upper(\"hi\" ++ a.b.c)", "[\"upper\", [\"++\", [\":str\", \"hi\"], [\".\", [\".\", [\":ref\", \"a\"], [\":field\", \"b\"]], [\":field\", \"c\"]]]]")
 
 //  println(peregrineCompiler.compile("attributes.queryParams['myParam']"))
 //  println(peregrineCompiler.compile("attributes.headers['CORS']"))
@@ -163,7 +164,7 @@ object Test extends App {
     peregrineCompiler.compile(source) match {
       case SuccessPeregrineCompilationResult(pelExpression) =>
         println(if (expectedTarget.equals(pelExpression)) s"PASS: $source -> $expectedTarget"
-                  else s"FAILED: $source -> $pelExpression ///Expected/// $expectedTarget")
+        else s"FAILED: $source -> $pelExpression ///Expected/// $expectedTarget")
 
       case FailurePeregrineCompilationResult(reason) => println(s"FAILED: $source -> compilation failure: $reason")
     }
