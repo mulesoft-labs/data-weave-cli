@@ -149,6 +149,8 @@ object Test extends App {
   // functions
   check("upper(\"hi\")", "[upper, [:str, hi]]")
   check("\"hi\" ++ \"by\"", "[++, [:str, hi], [:str, by]]")
+  check("upper(\"hi\" ++ \"by\")", "[upper, [++, [:str, hi], [:str, by]]]")
+  check("upper(\"hi\" ++ a.b.c)", "[upper, [++, [:str, hi], [., [., [:ref, a], [:field, b]], [:field, c]]]]")
 
 //  println(peregrineCompiler.compile("attributes.queryParams['myParam']"))
 //  println(peregrineCompiler.compile("attributes.headers['CORS']"))
