@@ -36,7 +36,7 @@ class PeregrineCompiler {
 
   def isValueSelector(opId: BinaryOpIdentifier, rhs: AstNode): Boolean = {
     opId match {
-      case DynamicSelectorOpId => rhs.isInstanceOf[StringNode]
+      case DynamicSelectorOpId => rhs.isInstanceOf[StringNode] || rhs.isInstanceOf[NumberNode]
       case ValueSelectorOpId => true
       case _ => false
     }
@@ -81,20 +81,6 @@ class PeregrineCompiler {
         //Should we do a warning here? as the semantics of null unsafe are not going to remain in PEL
         compile(ns.selector)
       }
-//      case BinaryOpNode(opId, lhs, rhs) if (isValueSelector(opId, rhs)) => {
-//        val name = rhs match {
-//          case StringNode(value) => Some(value)
-//          case NameNode(StringNode(value), _) => Some(value)
-//          case _ => None
-//        }
-//        if (name.isDefined && isSelectingAttribute(lhs, HEADERS_NAME)) {
-//          SuccessPeregrineCompilationResult("{\"header\": \"" + name.get + "\"}")
-//        } else if (name.isDefined && isSelectingAttribute(lhs, "queryParams")) {
-//          SuccessPeregrineCompilationResult("{\"queryParams\": \"" + name.get + "\"}")
-//        } else {
-//          FailurePeregrineCompilationResult(s"Unable to compile: ${CodeGenerator.generate(astNode)} to PEL.")
-//        }
-//      }
 
       case BinaryOpNode(opId, lhs, rhs) if (isValueSelector(opId, rhs)) => {
         val left = compileUnsafe(lhs) // TODO handle failure
@@ -109,7 +95,7 @@ class PeregrineCompiler {
 
       case vr: VariableReferenceNode => SuccessPeregrineCompilationResult(s"[$Q:ref$Q, $Q${vr.variable.name}$Q]")
 
-      case NameNode(StringNode(x), _) => SuccessPeregrineCompilationResult(s"[$Q:field$Q, $Q$x$Q]")
+      case NameNode(node, _) => compile(node)
 
       case NumberNode(n) => SuccessPeregrineCompilationResult(s"[$Q:nbr$Q, $Q$n$Q]")
 
@@ -140,8 +126,10 @@ object Test extends App {
 
   // selectors
   check("a", "[\":ref\", \"a\"]")
-  check("a.b", "[\".\", [\":ref\", \"a\"], [\":field\", \"b\"]]")
-  check("a.b.c", "[\".\", [\".\", [\":ref\", \"a\"], [\":field\", \"b\"]], [\":field\", \"c\"]]")
+  check("a.b", "[\".\", [\":ref\", \"a\"], [\":str\", \"b\"]]")
+  check("a.b.c", "[\".\", [\".\", [\":ref\", \"a\"], [\":str\", \"b\"]], [\":str\", \"c\"]]")
+  check("a[0]", "[\".\", [\":ref\", \"a\"], [\":nbr\", \"0\"]]")
+  check("a['b'][0]", "[\".\", [\".\", [\":ref\", \"a\"], [\":str\", \"b\"]], [\":nbr\", \"0\"]]")
 
   // literals
   check("123", "[\":nbr\", \"123\"]")
@@ -151,7 +139,7 @@ object Test extends App {
   check("upper(\"hi\")", "[\"upper\", [\":str\", \"hi\"]]")
   check("\"hi\" ++ \"by\"", "[\"++\", [\":str\", \"hi\"], [\":str\", \"by\"]]")
   check("upper(\"hi\" ++ \"by\")", "[\"upper\", [\"++\", [\":str\", \"hi\"], [\":str\", \"by\"]]]")
-  check("upper(\"hi\" ++ a.b.c)", "[\"upper\", [\"++\", [\":str\", \"hi\"], [\".\", [\".\", [\":ref\", \"a\"], [\":field\", \"b\"]], [\":field\", \"c\"]]]]")
+  check("upper(\"hi\" ++ a.b.c)", "[\"upper\", [\"++\", [\":str\", \"hi\"], [\".\", [\".\", [\":ref\", \"a\"], [\":str\", \"b\"]], [\":str\", \"c\"]]]]")
 
 //  println(peregrineCompiler.compile("attributes.queryParams['myParam']"))
 //  println(peregrineCompiler.compile("attributes.headers['CORS']"))
