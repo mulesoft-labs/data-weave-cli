@@ -6,14 +6,13 @@ import org.mule.weave.v2.grammar.DynamicSelectorOpId
 import org.mule.weave.v2.grammar.ValueSelectorOpId
 import org.mule.weave.v2.parser.MappingParser
 import org.mule.weave.v2.parser.ast.AstNode
+import org.mule.weave.v2.parser.ast.functions.{FunctionCallNode, FunctionCallParametersNode}
 import org.mule.weave.v2.parser.ast.header.directives.ImportDirective
 import org.mule.weave.v2.parser.ast.header.directives.VersionDirective
 import org.mule.weave.v2.parser.ast.operators.BinaryOpNode
 import org.mule.weave.v2.parser.ast.selectors.NullSafeNode
 import org.mule.weave.v2.parser.ast.selectors.NullUnSafeNode
-import org.mule.weave.v2.parser.ast.structure.DocumentNode
-import org.mule.weave.v2.parser.ast.structure.NameNode
-import org.mule.weave.v2.parser.ast.structure.StringNode
+import org.mule.weave.v2.parser.ast.structure.{DocumentNode, NameNode, NumberNode, StringNode}
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.ast.variables.VariableReferenceNode
 import org.mule.weave.v2.sdk.ParsingContextFactory
@@ -102,9 +101,18 @@ class PeregrineCompiler {
         SuccessPeregrineCompilationResult(s"[., $left, $right]")
       }
 
+      case FunctionCallNode(VariableReferenceNode(fun), FunctionCallParametersNode(args)) => {
+        val params = args.map(compileUnsafe).mkString(", ")
+        SuccessPeregrineCompilationResult(s"[${fun.name}, $params]")
+      }
+
       case vr: VariableReferenceNode => SuccessPeregrineCompilationResult(s"[:ref, ${vr.variable.name}]")
 
       case NameNode(StringNode(x), _) => SuccessPeregrineCompilationResult(s"[:field, $x]")
+
+      case NumberNode(n) => SuccessPeregrineCompilationResult(s"[:nbr, $n]")
+
+      case StringNode(s) => SuccessPeregrineCompilationResult(s"[:str, $s]")
 
       case _ => FailurePeregrineCompilationResult(s"Unable to compile: ${CodeGenerator.generate(astNode)} to PEL.")
     }
@@ -129,9 +137,18 @@ case class FailurePeregrineCompilationResult(reason: String) extends PeregrineCo
 object Test extends App {
   private val peregrineCompiler = new PeregrineCompiler
 
+  // selectors
   check("a", "[:ref, a]")
   check("a.b", "[., [:ref, a], [:field, b]]")
   check("a.b.c", "[., [., [:ref, a], [:field, b]], [:field, c]]")
+
+  // literals
+  check("123", "[:nbr, 123]")
+  check("\"hi\"", "[:str, hi]")
+
+  // functions
+  check("upper(\"hi\")", "[upper, [:str, hi]]")
+  check("\"hi\" ++ \"by\"", "[++, [:str, hi], [:str, by]]")
 
 //  println(peregrineCompiler.compile("attributes.queryParams['myParam']"))
 //  println(peregrineCompiler.compile("attributes.headers['CORS']"))
