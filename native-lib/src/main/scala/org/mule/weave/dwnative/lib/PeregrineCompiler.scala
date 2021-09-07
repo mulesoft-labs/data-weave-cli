@@ -9,7 +9,7 @@ import org.mule.weave.v2.parser.ast.header.directives.{ImportDirective, VersionD
 import org.mule.weave.v2.parser.ast.logical.{AndNode, OrNode}
 import org.mule.weave.v2.parser.ast.operators.{BinaryOpNode, UnaryOpNode}
 import org.mule.weave.v2.parser.ast.selectors.{NullSafeNode, NullUnSafeNode}
-import org.mule.weave.v2.parser.ast.structure.{ArrayNode, BooleanNode, DocumentNode, LocalDateNode, LocalTimeNode, NameNode, NumberNode, StringNode}
+import org.mule.weave.v2.parser.ast.structure.{ArrayNode, BooleanNode, DateTimeNode, DocumentNode, LocalDateNode, LocalDateTimeNode, LocalTimeNode, NameNode, NumberNode, StringNode, TimeNode}
 import org.mule.weave.v2.parser.ast.variables.{NameIdentifier, VariableReferenceNode}
 import org.mule.weave.v2.sdk.{ParsingContextFactory, WeaveResource}
 
@@ -67,28 +67,28 @@ class PeregrineCompiler {
     case AndNode(lhs, rhs) =>
       val left = compileUnsafe(lhs)
       val right = compileUnsafe(rhs)
-      SuccessPeregrineCompilationResult(s"[${Q}and$Q, $left, $right]")
+      SuccessPeregrineCompilationResult(s"[${Q}&&$Q, $left, $right]")
 
     case OrNode(lhs, rhs) =>
       val left = compileUnsafe(lhs)
       val right = compileUnsafe(rhs)
-      SuccessPeregrineCompilationResult(s"[${Q}or$Q, $left, $right]")
+      SuccessPeregrineCompilationResult(s"[${Q}||$Q, $left, $right]")
 
-    case FunctionCallNode(VariableReferenceNode(fun), FunctionCallParametersNode(args)) =>
+    case FunctionCallNode(astNode, FunctionCallParametersNode(args)) =>
+      val fun = compileUnsafe(astNode)
       val params = args.map(compileUnsafe).mkString(", ")
-      val separator = if (params.isEmpty) "" else ", "
-      SuccessPeregrineCompilationResult(s"[$Q${fun.name}$Q$separator$params]")
+      SuccessPeregrineCompilationResult(s"[${Q}:apply$Q, $fun, [$params]]")
 
     case IfNode(ifExpr, condition, elseExpr) =>
       val ife = compileUnsafe(ifExpr)
       val cond = compileUnsafe(condition)
       val elsee = compileUnsafe(elseExpr)
-      SuccessPeregrineCompilationResult(s"[${Q}if$Q, $cond, $ife, $elsee]")
+      SuccessPeregrineCompilationResult(s"[${Q}:if$Q, $cond, $ife, $elsee]")
 
     case DefaultNode(lhs, rhs) =>
       val left = compileUnsafe(lhs)
       val right = compileUnsafe(rhs)
-      SuccessPeregrineCompilationResult(s"[${Q}default$Q, $left, $right]")
+      SuccessPeregrineCompilationResult(s"[${Q}:default$Q, $left, $right]")
 
     case NameNode(node, _) => compile(node)
 
@@ -101,8 +101,11 @@ class PeregrineCompiler {
     case NumberNode(n) => SuccessPeregrineCompilationResult(s"[$Q:nbr$Q, $Q$n$Q]")
     case StringNode(s) => SuccessPeregrineCompilationResult(s"[$Q:str$Q, $Q$s$Q]")
     case BooleanNode(b) => SuccessPeregrineCompilationResult(s"[$Q:bool$Q, $Q$b$Q]")
-    case LocalDateNode(d, _) => SuccessPeregrineCompilationResult(s"[$Q:dt$Q, $Q$d$Q]")
-    case LocalTimeNode(t) => SuccessPeregrineCompilationResult(s"[$Q:dt$Q, $Q$t$Q]")
+    case LocalDateNode(d, _) => SuccessPeregrineCompilationResult(s"[$Q:ldate$Q, $Q$d$Q]")
+    case LocalTimeNode(t) => SuccessPeregrineCompilationResult(s"[$Q:ltime$Q, $Q$t$Q]")
+    case TimeNode(t) => SuccessPeregrineCompilationResult(s"[$Q:time$Q, $Q$t$Q]")
+    case LocalDateTimeNode(t) => SuccessPeregrineCompilationResult(s"[$Q:ldatetime$Q, $Q$t$Q]")
+    case DateTimeNode(t) => SuccessPeregrineCompilationResult(s"[$Q:datetime$Q, $Q$t$Q]")
 
     case _ => FailurePeregrineCompilationResult(s"Unable to compile: ${CodeGenerator.generate(astNode)} to PEL.")
   }
@@ -128,51 +131,55 @@ object Test extends App {
   private var pass = 0
   private var fail = 0
 
-  println("\n// literals")
+  println("\n// PEL Iteration #1 support\n")
+  check("attributes.queryParams.q", "[\".\", [\".\", [\":ref\", \"attributes\"], [\":str\", \"queryParams\"]], [\":str\", \"q\"]]")
+  check("attributes.queryParams['q']", "[\".\", [\".\", [\":ref\", \"attributes\"], [\":str\", \"queryParams\"]], [\":str\", \"q\"]]")
+  check("uuid()", "[\":apply\", [\":ref\", \"uuid\"], []]")
+  check("\"hi\" ++ \"by\"", "[\":apply\", [\":ref\", \"++\"], [[\":str\", \"hi\"], [\":str\", \"by\"]]]")
+
+  println("\n///////////\n// TCK\n///////////")
+  println("\n// literals\n")
   check("\"hi\"", "[\":str\", \"hi\"]")
   check("123", "[\":nbr\", \"123\"]")
   check("-12.34", "[\":nbr\", \"-12.34\"]")
   check("true", "[\":bool\", \"true\"]")
   check("false", "[\":bool\", \"false\"]")
-  check("|2021-09-02|", "[\":dt\", \"2021-09-02\"]")
-  check("|23:57:59|", "[\":dt\", \"23:57:59\"]")
+  check("|2021-09-06|", "[\":ldate\", \"2021-09-06\"]")
+  check("|23:57:59|", "[\":ltime\", \"23:57:59\"]")
+  check("|23:57:59Z|", "[\":time\", \"23:57:59Z\"]")
+  check("|2021-09-06T23:57:59|", "[\":ldatetime\", \"2021-09-06T23:57:59\"]")
+  check("|2021-09-06T23:57:59Z|", "[\":datetime\", \"2021-09-06T23:57:59Z\"]")
   check("[\"one\", 2, three]", "[\":array\", [\":str\", \"one\"], [\":nbr\", \"2\"], [\":ref\", \"three\"]]")
 
-  println("\n// operators")
+  println("\n// operators\n")
   check("a > b", "[\">\", [\":ref\", \"a\"], [\":ref\", \"b\"]]")
   check("a < b", "[\"<\", [\":ref\", \"a\"], [\":ref\", \"b\"]]")
   check("a >= b", "[\">=\", [\":ref\", \"a\"], [\":ref\", \"b\"]]")
   check("a <= b", "[\"<=\", [\":ref\", \"a\"], [\":ref\", \"b\"]]")
   check("a == b", "[\"==\", [\":ref\", \"a\"], [\":ref\", \"b\"]]")
   check("a != b", "[\"!=\", [\":ref\", \"a\"], [\":ref\", \"b\"]]")
-  check("a ~= b", "[\"~=\", [\":ref\", \"a\"], [\":ref\", \"b\"]]")
-  check("a and b", "[\"and\", [\":ref\", \"a\"], [\":ref\", \"b\"]]")
-  check("a or b", "[\"or\", [\":ref\", \"a\"], [\":ref\", \"b\"]]")
+  check("a and b", "[\"&&\", [\":ref\", \"a\"], [\":ref\", \"b\"]]")
+  check("a or b", "[\"||\", [\":ref\", \"a\"], [\":ref\", \"b\"]]")
   check("!a", "[\"!\", [\":ref\", \"a\"]]")
   check("not a", "[\"!\", [\":ref\", \"a\"]]")
 
-  println("\n// selectors")
+  println("\n// selectors\n")
   check("a", "[\":ref\", \"a\"]")
   check("a.b", "[\".\", [\":ref\", \"a\"], [\":str\", \"b\"]]")
   check("a.b.c", "[\".\", [\".\", [\":ref\", \"a\"], [\":str\", \"b\"]], [\":str\", \"c\"]]")
   check("a[0]", "[\".\", [\":ref\", \"a\"], [\":nbr\", \"0\"]]")
   check("a['b'][0]", "[\".\", [\".\", [\":ref\", \"a\"], [\":str\", \"b\"]], [\":nbr\", \"0\"]]")
 
-  println("\n// functions")
-  check("uuid()", "[\"uuid\"]")
-  check("upper(\"hi\")", "[\"upper\", [\":str\", \"hi\"]]")
-  check("1 to 5", "[\"to\", [\":nbr\", \"1\"], [\":nbr\", \"5\"]]")
-  check("\"hi\" ++ \"by\"", "[\"++\", [\":str\", \"hi\"], [\":str\", \"by\"]]")
-  check("upper(\"hi\" ++ [1, false])", "[\"upper\", [\"++\", [\":str\", \"hi\"], [\":array\", [\":nbr\", \"1\"], [\":bool\", \"false\"]]]]")
+  println("\n// functions\n")
+  check("uuid()", "[\":apply\", [\":ref\", \"uuid\"], []]")
+  check("upper(\"hi\")", "[\":apply\", [\":ref\", \"upper\"], [[\":str\", \"hi\"]]]")
+  check("\"hi\" ++ \"by\"", "[\":apply\", [\":ref\", \"++\"], [[\":str\", \"hi\"], [\":str\", \"by\"]]]")
 
-  println("\n// flow control")
-  check("if (false) \"a\" else \"b\"", "[\"if\", [\":bool\", \"false\"], [\":str\", \"a\"], [\":str\", \"b\"]]")
+  println("\n// flow control\n")
+  check("if (false) \"a\" else \"b\"", "[\":if\", [\":bool\", \"false\"], [\":str\", \"a\"], [\":str\", \"b\"]]")
 
-  println("\n// misc")
-  check("a default \"b\"", "[\"default\", [\":ref\", \"a\"], [\":str\", \"b\"]]")
-
-  println("\n// mixed")
-  check("upper(\"hi\" ++ a.b.c ++ now())", "[\"upper\", [\"++\", [\"++\", [\":str\", \"hi\"], [\".\", [\".\", [\":ref\", \"a\"], [\":str\", \"b\"]], [\":str\", \"c\"]]], [\"now\"]]]")
+  println("\n// misc\n")
+  check("a default \"b\"", "[\":default\", [\":ref\", \"a\"], [\":str\", \"b\"]]")
 
   println()
   println("=" * 30)
