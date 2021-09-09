@@ -1,0 +1,25 @@
+// PEL pseudo-grammar
+//  it deliberately misses quotes surrounding strings,
+//  and commas separating list items for the sake of readability
+
+expression := scalar-cmd | list-cmd
+
+scalar-cmd := '[' scmd string ']'
+scmd       := ':ref'|':str'|':nbr'|':bool'|datetime-family
+string     := .*
+
+list-cmd   := unary | binary | ternary | unbounded | apply
+
+unary      := '[' unary-op expression ']'
+unary-op   := '!'
+
+binary     := '[' binary-op expression expression ']'
+binary-op  := && | || | . | < | > | <= | >= | == | != | ':default'
+
+ternary    := '[' ternary-op expression expression expression ']'
+ternary-op := ':if'
+
+unbounded  := '[' ':array' expression* ']'
+
+apply      := '[' ':apply', expression, arg-list '']'
+arg-list   := '[' expression* ']''
