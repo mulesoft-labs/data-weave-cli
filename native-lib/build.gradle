@@ -1,43 +1,10 @@
 
 graal {
-    outputName 'libdw'
-    javaVersion '11'
-    graalVersion graalvmVersion
-    option "-H:+ReportExceptionStackTraces"
-    option "-J-Xmx3G"
-    option "--no-fallback"
-    option "-H:CLibraryPath=${project.projectDir}/src/main/c"
-
-//    option "--initialize-at-build-time=" +
-//            "org.mule.weave.v2.parser.," +
-//            "org.mule.weave.v2.codegen.StringCodeWriter," +
-//            "org.mule.weave.v2.resources.WeaveResourceLoader\$," +
-//            "org.mule.weave.v2.annotations.," +
-//            "org.mule.weave.v2.ts.," +
-//            "org.mule.weave.v2.scope.," +
-//            "org.mule.weave.v2.scope.," +
-//            "org.mule.weave.v2.grammar.,"+
-//            "org.mule.weave.v2.sdk.," +
-//            "org.mule.weave.v2.utils.," +
-//            "org.mule.weave.v2.versioncheck.," +
-//            //Parboiled
-//            "scala.," +
-//            "org.parboiled2.," +
-//            "shapeless.syntax.," +
-//            "shapeless."
-
-//    option "-H:+TraceClassInitialization"
-    option "-H:DeadlockWatchdogInterval=1000"
-    option "--report-unsupported-elements-at-runtime"
-    option "-H:CompilationExpirationPeriod=0"
-//    option "-H:+DashboardAll"
-//    option "-H:DashboardDump=/Users/mdeachaval/labs/palantir/weave-native-library/native-cli/dump"
-//    option "-H:+PrintImageObjectTree"
-    option "-J-Xmx6G"
+    outputName 'libDw'
+    graalVersion '1.0.0-rc14'
+    option "-H:-UseServiceLoaderFeature"
 }
 
 dependencies{
-    compile group: 'org.mule.weave', name: 'parser', version: weaveVersion
-    compileOnly group: 'org.graalvm.sdk', name: 'graal-sdk', version: graalvmVersion
-    compileOnly group: 'org.graalvm.nativeimage', name: 'svm', version: graalvmVersion
+    compile project(':native-common')
 }
