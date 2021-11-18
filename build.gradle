@@ -6,7 +6,7 @@ buildscript {
         }
     }
     dependencies {
-        classpath "com.palantir.graal:gradle-graal:0.7.2"
+        classpath "gradle.plugin.com.palantir.graal:gradle-graal:0.10.0"
     }
 }
 

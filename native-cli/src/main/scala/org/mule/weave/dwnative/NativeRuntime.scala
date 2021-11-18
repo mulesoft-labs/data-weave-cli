@@ -1,19 +1,17 @@
 package org.mule.weave.dwnative
 
 import io.netty.util.internal.PlatformDependent
+import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.dwnative.initializer.NativeSystemModuleComponents
-import org.mule.weave.v2.deps.Artifact
-import org.mule.weave.v2.deps.MavenDependencyAnnotationProcessor
-import org.mule.weave.v2.deps.ResourceDependencyAnnotationProcessor
 import org.mule.weave.v2.exception.InvalidLocationException
 import org.mule.weave.v2.interpreted.CustomRuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.RuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
+import org.mule.weave.v2.model.service.LoggingService
 import org.mule.weave.v2.model.service.ProtocolUrlSourceProviderResolverService
 import org.mule.weave.v2.model.service.ReadFunctionProtocolHandler
-import org.mule.weave.v2.model.service.StdOutputLoggingService
 import org.mule.weave.v2.model.service.UrlProtocolHandler
 import org.mule.weave.v2.model.service.UrlSourceProviderResolverService
 import org.mule.weave.v2.model.values.BinaryValue
@@ -48,47 +46,14 @@ import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ExecutorService
-import scala.concurrent.Await
-import scala.concurrent.Future
-import scala.concurrent.duration.Duration
 
-class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], executor: ExecutorService) {
+class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], executor: ExecutorService, console: Console) {
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
   private val weaveScriptingEngine: DataWeaveScriptingEngine = {
     setupEnv()
-    val resourceDependencyAnnotationProcessor = ResourceDependencyAnnotationProcessor(
-      new File(resourcesCacheDir, "resources"),
-      (id: String, kind: String, artifact: Future[Seq[Artifact]]) => {
-        pathBasedResourceResolver.addContent(new LazyContentResolver(() => {
-          new CompositeContentResolver(Await.result(artifact, Duration.Inf).map((artifact) => {
-            ContentResolver(artifact.file)
-          }))
-        })
-        )
-      }, executor
-    )
-
-    val mavenDependencyAnnotationProcessor =
-      MavenDependencyAnnotationProcessor(
-        new File(resourcesCacheDir, "maven"),
-        (id: String, kind: String, artifact: Future[Seq[Artifact]]) => {
-          pathBasedResourceResolver.addContent(new LazyContentResolver(() => {
-            Await.result(artifact, Duration.Inf) match {
-              case Seq(artifact: Artifact) => {
-                ContentResolver(artifact.file)
-              }
-              case Seq() => EmptyContentResolver
-            }
-          })
-          )
-        }, executor)
-
-    val annotationProcessors: Seq[(String, AnnotationProcessor)] = Seq(
-      (ResourceDependencyAnnotationProcessor.ANNOTATION_NAME.name, resourceDependencyAnnotationProcessor),
-      (MavenDependencyAnnotationProcessor.ANNOTATION_NAME.name, mavenDependencyAnnotationProcessor)
-    )
+    val annotationProcessors: Seq[(String, AnnotationProcessor)] = Seq()
 
     DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration(parsingAnnotationProcessors = annotationProcessors))
   }
@@ -106,12 +71,7 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
     pathBasedResourceResolver.resolve(ni).map(_.content())
   }
 
-  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings): WeaveExecutionResult = {
-    run(script, nameIdentifier, inputs, None)
-  }
-
-
-  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: Option[OutputStream], defaultOutputMimeType: String = "application/json", profile: Boolean = false, remoteDebug: Boolean = false, telemetry: Boolean = false): WeaveExecutionResult = {
+  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false, remoteDebug: Boolean = false, telemetry: Boolean = false): WeaveExecutionResult = {
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), defaultOutputMimeType, profile)
       if (remoteDebug) {
@@ -124,11 +84,11 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
       val serviceManager: ServiceManager = createServiceManager()
       val result: DataWeaveResult =
         if (profile) {
-          time(() => dataWeaveScript.write(inputs, serviceManager, out), "Execution")
+          time(() => dataWeaveScript.write(inputs, serviceManager, Option(out)), "Execution")
         } else {
-          dataWeaveScript.write(inputs, serviceManager, out)
+          dataWeaveScript.write(inputs, serviceManager, Option(out))
         }
-      WeaveSuccessResult(out.get, result.getCharset().name())
+      WeaveSuccessResult(out, result.getCharset().name())
     } catch {
       case cr: CompilationException => {
         WeaveFailureResult(cr.getMessage())
@@ -164,10 +124,14 @@ class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], ex
     }
   }
 
+
   private def createServiceManager() = {
-    val serviceManager = ServiceManager(StdOutputLoggingService, Map(
-      classOf[UrlSourceProviderResolverService] -> new ProtocolUrlSourceProviderResolverService(Seq(UrlProtocolHandler, WeavePathProtocolHandler(pathBasedResourceResolver)))
-    ))
+    val serviceManager = ServiceManager(
+      new ConsoleLogger(console),
+      Map(
+        classOf[UrlSourceProviderResolverService] -> new ProtocolUrlSourceProviderResolverService(Seq(UrlProtocolHandler, WeavePathProtocolHandler(pathBasedResourceResolver)))
+      )
+    )
     serviceManager
   }
 
@@ -224,6 +188,16 @@ class WeavePathProtocolHandler(path: PathBasedResourceResolver) extends ReadFunc
       case None => throw new InvalidLocationException(locatable.location(), uri)
     }
   }
+}
+
+class ConsoleLogger(console: Console) extends LoggingService {
+  override def isInfoEnabled(): Boolean = true
+
+  override def logInfo(msg: String): Unit = console.info(msg)
+
+  override def logError(msg: String): Unit = console.error(msg)
+
+  override def logWarn(msg: String): Unit = console.warn(msg)
 }
 
 object WeavePathProtocolHandler {
@@ -289,5 +263,3 @@ class CustomWeaveDataFormat(moduleManager: ModuleLoaderManager) extends WeaveDat
   override def createModuleLoader(): ModuleLoaderManager = moduleManager
 }
 
-
-case class WeaveRunnerConfig(path: Array[String], debug: Boolean, scriptToRun: Option[String], main: Option[String], inputs: Map[String, SourceProvider], outputPath: Option[String])

@@ -21,6 +21,7 @@ object NativeSystemModuleComponents {
 
   def start(): Unit = {
     systemModuleParser.typeCheckModule(NameIdentifier.CORE_MODULE, ParsingContext(NameIdentifier.anonymous, systemModuleParser))
+    systemModuleParser.typeCheckModule(NameIdentifier("dw::core::Strings"), ParsingContext(NameIdentifier.anonymous, systemModuleParser))
     systemModuleParser.typeCheckModule(NameIdentifier.ARRAYS_MODULE, ParsingContext(NameIdentifier.anonymous, systemModuleParser))
     systemModuleParser.typeCheckModule(NameIdentifier.OBJECTS_MODULE, ParsingContext(NameIdentifier.anonymous, systemModuleParser))
     systemModuleParser.typeCheckModule(NameIdentifier.RUNTIME_MODULE, ParsingContext(NameIdentifier.anonymous, systemModuleParser))

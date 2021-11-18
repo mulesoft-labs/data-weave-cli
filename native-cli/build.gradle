@@ -4,22 +4,37 @@ buildscript {
             url "https://plugins.gradle.org/m2/"
         }
     }
-    dependencies {
-        classpath "com.monochromeroad.gradle-plugins:gradle-aws-s3-sync:0.10"
-    }
 }
 
 plugins {
-    id 'com.github.johnrengelman.shadow' version '5.2.0'
+//    id 'com.github.johnrengelman.shadow' version '5.2.0'
     id 'application'
 }
+
+sourceSets {
+    main {
+        scala {
+            srcDirs = ['src/main/scala', 'build/genresource']
+        }
+    }
+}
+
 
 mainClassName = 'org.mule.weave.dwnative.cli.DataWeaveCLI'
 
 
 dependencies{
-    compile project(path: ':native-common', configuration: 'shadow')
-//    compile project(path: ':native-common')
+    compile group: 'org.mule.weave', name: 'runtime', version: weaveVersion
+    compile group: 'org.graalvm.sdk', name: 'graal-sdk', version: '1.0.0-rc12'
+    compile group: 'org.mule.weave', name: 'core-modules', version: weaveVersion
+    compile group: 'org.mule.weave', name: 'yaml-module', version: weaveVersion
+//    compile group: 'org.mule.weave', name: 'dependency-manager', version: weaveVersion
+//    compile(group: 'org.mule.weave', name: 'raml-module', version: ioVersion){
+//        exclude group: 'org.slf4j'
+//        exclude group: 'org.topbraid.shacl'
+//    }
+    compile group: 'org.mule.weave', name: 'http-module', version: ioVersion
+    compile group: 'org.mule.weave', name: 'http-netty-module', version: ioVersion
     compile group: 'org.mule.weave', name: 'ndjson-module', version: weaveVersion
     testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
 }
@@ -31,10 +46,44 @@ ext {
     ]
 }
 
-// Merging Service Files
-shadowJar {
-    mergeServiceFiles()
+
+def genDirectory = new File("$project.buildDir/genresource")
+
+
+task genVersions() {
+    println("Generating Versions File.")
+    def componentVersion = new File(genDirectory, "org/mule/weave/v2/version/ComponentVersion.scala")
+    def parentFile = componentVersion.getParentFile()
+    if (!parentFile.exists()) {
+        parentFile.mkdirs()
+    }
+    final PrintWriter outputPrinter = new PrintWriter(new FileWriter(componentVersion))
+    def properties = new Properties()
+    def gradleProperties = new File(project.projectDir, "../gradle.properties")
+    println(gradleProperties)
+    properties.load(new FileInputStream(gradleProperties))
+    outputPrinter.println("package org.mule.weave.v2.version")
+    outputPrinter.println()
+    outputPrinter.println("object ComponentVersion {")
+    def entrySet = properties.entrySet()
+    for (Map.Entry entry : entrySet) {
+        outputPrinter.println("\tvar " + entry.getKey() + " = \"" + entry.getValue() + "\"")
+    }
+    outputPrinter.println("}")
+    outputPrinter.close()
 }
+
+
+defaultTasks += genVersions
+
+compileScala {
+    dependsOn genVersions
+}
+
+//// Merging Service Files
+//shadowJar {
+//    mergeServiceFiles()
+//}
 
 
 import org.apache.tools.ant.taskdefs.condition.Os
@@ -114,18 +163,6 @@ graal {
 //    option "-H:DashboardDump=/Users/mdeachaval/labs/palantir/weave-native-library/native-cli/dump"
 //    option "-H:+PrintImageObjectTree"
     option "-J-Xmx6G"
-}
-
-import com.monochromeroad.gradle.plugin.aws.s3.S3Sync
-
-task uploadDistro(type: S3Sync) {
-    description = "Deploy native-distro-" + getOsName()
-    accessKey aws.accessKey
-    secretKey aws.secretKey
-    noDelete true
-    acl com.monochromeroad.gradle.plugin.aws.s3.ACL.PublicRead
-    from "build/distributions/"
-    into "weave-cli"
 }
 
 

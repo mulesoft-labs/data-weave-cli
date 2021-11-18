@@ -1,4 +1,3 @@
-include 'native-common'
 include 'native-cli'
 include 'native-cli-integration-tests'
 

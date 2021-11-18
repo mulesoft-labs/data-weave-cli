@@ -1,16 +1,15 @@
 package org.mule.weave.dwnative
 
-import java.io.File
-import java.io.FileInputStream
-import java.io.InputStream
-import java.nio.charset.StandardCharsets
-import java.util.zip.ZipFile
-
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.sdk.NameIdentifierHelper
 import org.mule.weave.v2.sdk.WeaveResource
 import org.mule.weave.v2.sdk.WeaveResourceResolver
 
+import java.io.File
+import java.io.FileInputStream
+import java.io.InputStream
+import java.nio.charset.StandardCharsets
+import java.util.zip.ZipFile
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
