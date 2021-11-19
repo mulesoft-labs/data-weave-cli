@@ -109,7 +109,7 @@ jobs:
 
       # Runs a set of commands using the runners shell
       - name: Create Native Image
-        run: gradlew --stacktrace --debug native-cli:nativeImage
+        run: .\gradlew --stacktrace --debug native-cli:nativeImage
         shell: powershell
         env:
           AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
