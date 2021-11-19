@@ -1,13 +1,17 @@
 package org.mule.weave.dwnative.cli.utils
 
-import org.mule.weave.dwnative.utils.DataWeaveUtils
+import org.mule.weave.dwnative.cli.Console
+import org.mule.weave.dwnative.cli.utils.SpellsUtils.DATA_WEAVE_GRIMOIRE_FOLDER
+import org.mule.weave.dwnative.utils
 
 import java.io.File
 import java.nio.file.Files
 
 object SpellsUtils {
-
   val DATA_WEAVE_GRIMOIRE_FOLDER = "data-weave-grimoire"
+}
+
+class SpellsUtils(console: Console) {
 
   def grimoireName(user: String): String = {
     if (user == null)
@@ -35,15 +39,12 @@ object SpellsUtils {
   }
 
   def grimoiresFolders(): File = {
-    val file = new File(DataWeaveUtils.getDWHome(), "grimoires")
+    val file = new File(new utils.DataWeaveUtils(console).getDWHome(), "grimoires")
     if (!file.exists()) {
       file.mkdirs()
     }
     file
   }
-
-
-
 
   def buildRepoUrl(user: String): String = {
     val domain = if (user == null) "mulesoft-labs" else user
@@ -51,7 +52,6 @@ object SpellsUtils {
     val url = s"https://github.com/${domain}/${repo}.git"
     url
   }
-
 
   def updateLastUpdateTimeStamp(): Boolean = {
     val lastUpdate: File = lastUpdatedMarkFile()

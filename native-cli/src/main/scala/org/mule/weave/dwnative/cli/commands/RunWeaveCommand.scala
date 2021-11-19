@@ -5,7 +5,7 @@ import org.mule.weave.dwnative.WeaveExecutionResult
 import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.dwnative.cli.FileWatcher
 import org.mule.weave.dwnative.utils.DataWeaveUtils
-import org.mule.weave.v2.io.FileHelper.deleteDirectory
+import org.mule.weave.dwnative.utils.DataWeaveUtils._
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.values.StringValue
 import org.mule.weave.v2.module.DataFormatManager
@@ -19,12 +19,11 @@ import java.io.FileOutputStream
 import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
-import java.util.concurrent.Executors
 import scala.util.Try
 
 class RunWeaveCommand(config: WeaveRunnerConfig, console: Console) extends WeaveCommand {
-  private val DW_DEFAULT_INPUT_MIMETYPE_VAR: String = "DW_DEFAULT_INPUT_MIMETYPE"
-  private val DW_DEFAULT_OUTPUT_MIMETYPE_VAR: String = "DW_DEFAULT_OUTPUT_MIMETYPE"
+  val weaveUtils = new DataWeaveUtils(console)
+
   private val DEFAULT_MIME_TYPE: String = "application/json"
 
   private val monitor = new Object()
@@ -33,12 +32,7 @@ class RunWeaveCommand(config: WeaveRunnerConfig, console: Console) extends Weave
 
   def exec(): Int = {
     val path: Array[File] = config.path.map(new File(_))
-    val cacheDirectory: File = DataWeaveUtils.getCacheHome()
-    if (config.cleanCache) {
-      deleteDirectory(cacheDirectory)
-      cacheDirectory.mkdirs()
-    }
-    val nativeRuntime: NativeRuntime = new NativeRuntime(cacheDirectory, DataWeaveUtils.getLibPathHome(), path, Executors.newCachedThreadPool(), console)
+    val nativeRuntime: NativeRuntime = new NativeRuntime(weaveUtils.getLibPathHome(), path, console)
 
     if (config.watch) {
       console.clear()

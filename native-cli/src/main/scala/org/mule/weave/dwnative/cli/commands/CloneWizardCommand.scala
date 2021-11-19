@@ -1,21 +1,23 @@
 package org.mule.weave.dwnative.cli.commands
 
 import org.mule.weave.dwnative.cli.Console
-import org.mule.weave.dwnative.cli.utils.SpellsUtils.buildRepoUrl
-import org.mule.weave.dwnative.cli.utils.SpellsUtils.grimoireFolder
+import org.mule.weave.dwnative.cli.utils.SpellsUtils
 
-class CloneWizardCommand(config: CloneWizardConfig, logger: Console) extends WeaveCommand {
+class CloneWizardCommand(config: CloneWizardConfig, console: Console) extends WeaveCommand {
+
+  private val utils = new SpellsUtils(console)
+
   override def exec(): Int = {
     val wizard = config.wizardName
-    logger.info(s"Downloading Grimoire From The Wise: `$wizard`.")
+    console.info(s"Downloading Grimoire From The Wise: `$wizard`.")
     val wizardName = if (wizard == null) "DW" else wizard
-    val wizardFolder = grimoireFolder(wizard)
+    val wizardFolder = utils.grimoireFolder(wizard)
     if (wizardFolder.exists()) {
-      logger.error(s"Wizard `${wizard}` was already added.")
+      console.error(s"Wizard `${wizard}` was already added.")
       -1
     } else {
-      logger.info(s"Fetching `$wizardName's` Grimoire.")
-      val url: String = buildRepoUrl(wizard)
+      console.info(s"Fetching `$wizardName's` Grimoire.")
+      val url: String = utils.buildRepoUrl(wizard)
       val processBuilder = new ProcessBuilder("git", "clone", url, wizardFolder.getAbsolutePath)
       processBuilder.inheritIO()
       processBuilder.start().waitFor()

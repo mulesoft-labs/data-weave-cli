@@ -45,26 +45,27 @@ import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.charset.StandardCharsets
-import java.util.concurrent.ExecutorService
 
-class NativeRuntime(resourcesCacheDir: File, libDir: File, path: Array[File], executor: ExecutorService, console: Console) {
+class NativeRuntime(libDir: File, path: Array[File], console: Console) {
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
   private val weaveScriptingEngine: DataWeaveScriptingEngine = {
     setupEnv()
     val annotationProcessors: Seq[(String, AnnotationProcessor)] = Seq()
-
     DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration(parsingAnnotationProcessors = annotationProcessors))
   }
 
+  if (console.isDebugEnabled()) {
+    weaveScriptingEngine.enableProfileParsing()
+  }
 
   /**
     * Setup initialization properties
     */
   private def setupEnv(): Unit = {
-    System.setProperty("io.netty.processId", Math.abs(PlatformDependent.threadLocalRandom.nextInt).toString);
-    System.setProperty("io.netty.noUnsafe", true.toString);
+    System.setProperty("io.netty.processId", Math.abs(PlatformDependent.threadLocalRandom.nextInt).toString)
+    System.setProperty("io.netty.noUnsafe", true.toString)
   }
 
   def getResourceContent(ni: NameIdentifier): Option[String] = {

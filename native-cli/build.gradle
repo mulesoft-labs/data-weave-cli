@@ -100,7 +100,7 @@ task distro(dependsOn: nativeImage, type: Zip) {
 
 
 private static String getOsName() {
-    String prefix = ""
+    String prefix
     if (Os.isFamily(Os.FAMILY_MAC))
         prefix = "osx"
     else if (Os.isFamily(Os.FAMILY_UNIX))
@@ -121,11 +121,10 @@ graal {
     option "--no-fallback"
     option "--allow-incomplete-classpath"
     option "-H:EnableURLProtocols=http,https"
-    option "--initialize-at-run-time=org.mule.weave.v2.module.raml.RamlModuleLoader," +
+    option "--initialize-at-run-time=" +
             "io.netty,"+
             "org.asynchttpclient,"+
             "org.mule.weave.v2.module.http.netty.HttpAsyncClientService,"+
-            "amf.,"+
             "scala.util.Random," +
             "org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider\$"
     option "--initialize-at-build-time=" +
@@ -146,8 +145,7 @@ graal {
             //Parboiled
             "scala.," +
             "org.parboiled2.," +
-            "shapeless.syntax.," +
-            "shapeless."
+            "shapeless.syntax."
 
             //For Runtime execution
 //            "org.mule.weave.v2.interpreted.,"+

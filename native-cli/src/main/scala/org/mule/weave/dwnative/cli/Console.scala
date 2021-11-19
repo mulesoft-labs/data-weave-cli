@@ -11,9 +11,25 @@ import scala.util.Try
   */
 trait Console {
 
+  private var debugEnabled = false
+
+  /**
+    * Returns true if the debug is enabled
+    *
+    * @return
+    */
+  def isDebugEnabled(): Boolean = debugEnabled
+
   def in: InputStream
 
   def out: OutputStream
+
+  def enableDebug(): Console = {
+    debugEnabled = true
+    this
+  }
+
+  def debug(message: String): Unit
 
   def info(message: String): Unit
 
@@ -56,4 +72,9 @@ object DefaultConsole extends Console {
   }
 
   override def envVar(name: String): Option[String] = Option(System.getenv(name))
+
+  override def debug(message: String): Unit = {
+    if (isDebugEnabled())
+      println(AnsiColor.green(message))
+  }
 }

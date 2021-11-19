@@ -1,27 +1,30 @@
 package org.mule.weave.dwnative.cli.commands
 
 import org.mule.weave.dwnative.cli.Console
+import org.mule.weave.dwnative.cli.utils.SpellsUtils
 import org.mule.weave.dwnative.cli.utils.SpellsUtils._
 
 import java.io.File
 import scala.io.Source
 
-class ListSpellsCommand(logger: Console) extends WeaveCommand {
+class ListSpellsCommand(console: Console) extends WeaveCommand {
+
+  private val utils = new SpellsUtils(console)
 
   def exec(): Int = {
     val spells: String = listSpells()
-    logger.info(spells)
+    console.info(spells)
     0
   }
 
   private def listSpells(): String = {
     val builder = new StringBuilder()
     builder.append("Spells:\n")
-    val grimoires: File = grimoiresFolders()
+    val grimoires: File = utils.grimoiresFolders()
     val grimoiresDirs: Array[File] = grimoires.listFiles()
     if (grimoiresDirs != null) {
       grimoiresDirs.foreach((g) => {
-        val name = if (g.getName.equals(DATA_WEAVE_GRIMOIRE_FOLDER)) "" else wizardName(g.getName) + "/"
+        val name = if (g.getName.equals(DATA_WEAVE_GRIMOIRE_FOLDER)) "" else utils.wizardName(g.getName) + "/"
         val spells = g.listFiles()
         if (spells != null) {
           spells.foreach((s) => {

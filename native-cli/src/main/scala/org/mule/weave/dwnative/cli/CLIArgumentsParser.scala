@@ -13,8 +13,7 @@ import org.mule.weave.dwnative.cli.commands.VersionCommand
 import org.mule.weave.dwnative.cli.commands.WeaveCommand
 import org.mule.weave.dwnative.cli.commands.WeaveModule
 import org.mule.weave.dwnative.cli.commands.WeaveRunnerConfig
-import org.mule.weave.dwnative.cli.utils.SpellsUtils._
-import org.mule.weave.dwnative.utils.WeaveProperties
+import org.mule.weave.dwnative.cli.utils.SpellsUtils
 import org.mule.weave.v2.io.FileHelper
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.runtime.utils.AnsiColor.red
@@ -24,7 +23,9 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 
-class CLIArgumentsParser(logger: Console) {
+class CLIArgumentsParser(console: Console) {
+
+  private val utils = new SpellsUtils(console)
 
   def parse(args: Array[String]): Either[WeaveCommand, String] = {
     var i = 0
@@ -68,22 +69,22 @@ class CLIArgumentsParser(logger: Console) {
           i = i + 2
         }
         case "-v" | "--verbose" => {
-          WeaveProperties.verbose = true
+          console.enableDebug()
         }
         case "-h" | "--help" => {
-          return Left(new UsageCommand(logger))
+          return Left(new UsageCommand(console))
         }
         case "--version" => {
-          return Left(new VersionCommand(logger))
+          return Left(new VersionCommand(console))
         }
         case "--update-grimoires" => {
-          return Left(new UpdateAllGrimoires(logger))
+          return Left(new UpdateAllGrimoires(console))
         }
         case "--add-wizard" => {
           if (i + 1 < args.length) {
             i = i + 1
             val wizardName = args(i)
-            return Left(new CloneWizardCommand(CloneWizardConfig(wizardName), logger))
+            return Left(new CloneWizardCommand(CloneWizardConfig(wizardName), console))
           } else {
             return Right("Missing <outputPath>")
           }
@@ -95,7 +96,7 @@ class CLIArgumentsParser(logger: Console) {
           watch = true
         }
         case "--list-spells" => {
-          return Left(new ListSpellsCommand(logger))
+          return Left(new ListSpellsCommand(console))
         }
         case "-s" | "--spell" => {
           if (i + 1 < args.length) {
@@ -111,17 +112,17 @@ class CLIArgumentsParser(logger: Console) {
             } else {
               spell
             }
-            val lastUpdate = hoursSinceLastUpdate()
+            val lastUpdate = utils.hoursSinceLastUpdate()
             //Update grimoires every day
             if (lastUpdate > 24) {
-              new UpdateAllGrimoires(logger).exec()
+              new UpdateAllGrimoires(console).exec()
             }
 
-            var wizardGrimoire: File = grimoireFolder(wizard)
+            var wizardGrimoire: File = utils.grimoireFolder(wizard)
             if (!wizardGrimoire.exists()) {
-              new CloneWizardCommand(CloneWizardConfig(wizard), logger).exec()
+              new CloneWizardCommand(CloneWizardConfig(wizard), console).exec()
             }
-            wizardGrimoire = grimoireFolder(wizard)
+            wizardGrimoire = utils.grimoireFolder(wizard)
             val wizardName = if (wizard == null) "Weave" else wizard
             if (!wizardGrimoire.exists()) {
               return Right(s"Unable to get Wise `$wizardName's` Grimoire.")
@@ -129,7 +130,7 @@ class CLIArgumentsParser(logger: Console) {
 
             val spellFolder = new File(wizardGrimoire, spellName)
             if (!spellFolder.exists()) {
-              new UpdateGrimoireCommand(UpdateGrimoireConfig(wizardGrimoire), logger).exec()
+              new UpdateGrimoireCommand(UpdateGrimoireConfig(wizardGrimoire), console).exec()
             }
 
             if (!spellFolder.exists()) {
@@ -188,7 +189,7 @@ class CLIArgumentsParser(logger: Console) {
               if (maybeString.isDefined) {
                 WeaveModule(maybeString.get, args(i))
               } else {
-                logger.error(s"Unable to resolve `${mainScriptName}` in the specified classpath.")
+                console.error(s"Unable to resolve `${mainScriptName}` in the specified classpath.")
                 WeaveModule("", args(i))
               }
             })
@@ -234,7 +235,7 @@ class CLIArgumentsParser(logger: Console) {
       Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath> or --spell ")
     } else {
       val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun.get, properties.toMap, inputs.toMap, output, filesToWatch, watch, remoteDebug, telemetry)
-      Left(new RunWeaveCommand(config, logger))
+      Left(new RunWeaveCommand(config, console))
     }
   }
 
