@@ -15,11 +15,11 @@ jobs:
   RELEASE_EXTENSION:
     strategy:
       matrix:
-#        os: [macos-latest, ubuntu-latest, windows-latest]
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
+#        os: [macos-latest, ubuntu-latest]
         include:
-#          - os: windows-2019
-#            script_name: windows
+          - os: windows-2019
+            script_name: windows
           - os: ubuntu-latest
             script_name: linux
           - os: macos-latest
