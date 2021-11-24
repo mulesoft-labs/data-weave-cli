@@ -35,6 +35,8 @@ trait Console {
 
   def error(message: String): Unit
 
+  def fatal(message: String): Unit
+
   def warn(message: String): Unit
 
   def clear(): Unit
@@ -49,7 +51,11 @@ object DefaultConsole extends Console {
   }
 
   override def error(message: String): Unit = {
-    System.err.println(AnsiColor.red(message))
+    System.err.println(AnsiColor.red("[ERROR] " + message))
+  }
+
+  override def fatal(message: String): Unit = {
+    System.err.println(AnsiColor.red("[FATAL] " + message))
   }
 
   override def clear(): Unit = {

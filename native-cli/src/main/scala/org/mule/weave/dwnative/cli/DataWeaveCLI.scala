@@ -2,6 +2,9 @@ package org.mule.weave.dwnative.cli
 
 import org.mule.weave.dwnative.cli.commands.UsageCommand
 
+import java.io.PrintWriter
+import java.io.StringWriter
+
 
 object DataWeaveCLI extends App {
   {
@@ -23,7 +26,18 @@ class DataWeaveCLIRunner {
         -1
       }
       case Left(weaveCommand) => {
-        weaveCommand.exec()
+        try {
+          weaveCommand.exec()
+        } catch {
+          case exception: Exception => {
+            val exceptionString = new StringWriter()
+            exception.printStackTrace(new PrintWriter(exceptionString))
+            console.error("Unexpected exception happened while executing command. " +
+              "Please report this as an issue in https://github.com/mulesoft-labs/data-weave-cli/issues with all the details to reproduce.\n" +
+              s"Stacktrace is: ${exceptionString}")
+            -1
+          }
+        }
       }
       case _ => {
         0

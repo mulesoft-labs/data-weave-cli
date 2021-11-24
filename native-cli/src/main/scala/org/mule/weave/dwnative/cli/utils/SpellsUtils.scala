@@ -23,8 +23,15 @@ class SpellsUtils(console: Console) {
   def wizardName(grimoire: String): String = {
     if (grimoire == null)
       "DW"
-    else
-      grimoire.substring(0, grimoire.length - s"-${DATA_WEAVE_GRIMOIRE_FOLDER}".length)
+    else {
+      val length = grimoire.length - s"-${DATA_WEAVE_GRIMOIRE_FOLDER}".length
+      if (length <= 0) {
+        console.error("Invalid grimoire name: `" + grimoire + "`")
+        grimoire
+      } else {
+        grimoire.substring(0, length)
+      }
+    }
   }
 
   def hoursSinceLastUpdate(): Int = {

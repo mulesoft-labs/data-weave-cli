@@ -20,6 +20,13 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
 
 
   "should take into account the env variable for default output" in {
+    val console = new TestConsole(System.in, System.out, Map())
+    new DataWeaveCLIRunner().run(Array("--list-spells"), console)
+
+    console.fatalMessages.isEmpty shouldBe (true)
+  }
+
+  "should work when listing all the spells" in {
     val stream = new ByteArrayOutputStream()
     new DataWeaveCLIRunner().run(Array("root: 'Mariano'"), new TestConsole(System.in, stream, Map(DataWeaveUtils.DW_DEFAULT_OUTPUT_MIMETYPE_VAR -> "application/xml")))
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")

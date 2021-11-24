@@ -23,7 +23,7 @@ sourceSets {
 mainClassName = 'org.mule.weave.dwnative.cli.DataWeaveCLI'
 
 
-dependencies{
+dependencies {
     compile group: 'org.mule.weave', name: 'runtime', version: weaveVersion
     compile group: 'org.graalvm.sdk', name: 'graal-sdk', version: '1.0.0-rc12'
     compile group: 'org.mule.weave', name: 'core-modules', version: weaveVersion
@@ -41,8 +41,8 @@ dependencies{
 
 ext {
     aws = [
-        accessKey: System.getenv("AWS_ACCESS_KEY_ID"),
-        secretKey: System.getenv("AWS_SECRET_KEY")
+            accessKey: System.getenv("AWS_ACCESS_KEY_ID"),
+            secretKey: System.getenv("AWS_SECRET_KEY")
     ]
 }
 
@@ -58,17 +58,12 @@ task genVersions() {
         parentFile.mkdirs()
     }
     final PrintWriter outputPrinter = new PrintWriter(new FileWriter(componentVersion))
-    def properties = new Properties()
-    def gradleProperties = new File(project.projectDir, "../gradle.properties")
-    println(gradleProperties)
-    properties.load(new FileInputStream(gradleProperties))
+
     outputPrinter.println("package org.mule.weave.v2.version")
     outputPrinter.println()
     outputPrinter.println("object ComponentVersion {")
-    def entrySet = properties.entrySet()
-    for (Map.Entry entry : entrySet) {
-        outputPrinter.println("\tvar " + entry.getKey() + " = \"" + entry.getValue() + "\"")
-    }
+    outputPrinter.println("\tval weaveVersion = \"" + weaveVersion + "\"")
+    outputPrinter.println("\tval nativeVersion = \"" + nativeVersion + "\"")
     outputPrinter.println("}")
     outputPrinter.close()
 }
@@ -91,7 +86,7 @@ import org.apache.tools.ant.taskdefs.condition.Os
 task distro(dependsOn: nativeImage, type: Zip) {
     classifier = "native-distro-" + getOsName()
     into("libs") {
-        from { configurations.runtime.filter {it.getName().contains("ndjson-module")} }
+        from { configurations.runtime.filter { it.getName().contains("ndjson-module") } }
     }
     into("bin") {
         from 'build/graal/'
@@ -122,9 +117,9 @@ graal {
     option "--allow-incomplete-classpath"
     option "-H:EnableURLProtocols=http,https"
     option "--initialize-at-run-time=" +
-            "io.netty,"+
-            "org.asynchttpclient,"+
-            "org.mule.weave.v2.module.http.netty.HttpAsyncClientService,"+
+            "io.netty," +
+            "org.asynchttpclient," +
+            "org.mule.weave.v2.module.http.netty.HttpAsyncClientService," +
             "scala.util.Random," +
             "org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider\$"
     option "--initialize-at-build-time=" +
@@ -138,7 +133,7 @@ graal {
             "org.mule.weave.v2.ts.," +
             "org.mule.weave.v2.scope.," +
             "org.mule.weave.v2.scope.," +
-            "org.mule.weave.v2.grammar.,"+
+            "org.mule.weave.v2.grammar.," +
             "org.mule.weave.v2.sdk.," +
             "org.mule.weave.v2.utils.," +
             "org.mule.weave.v2.versioncheck.," +
@@ -147,7 +142,7 @@ graal {
             "org.parboiled2.," +
             "shapeless.syntax."
 
-            //For Runtime execution
+    //For Runtime execution
 //            "org.mule.weave.v2.interpreted.,"+
 //            "org.mule.weave.v2.model.values.,"
 //            "org.mule.weave.v2.model.types.,"

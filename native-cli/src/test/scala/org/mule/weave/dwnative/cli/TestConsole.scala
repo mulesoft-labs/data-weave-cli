@@ -1,14 +1,32 @@
 package org.mule.weave.dwnative.cli
+
 import java.io.InputStream
 import java.io.OutputStream
+import scala.collection.mutable.ArrayBuffer
 
-class TestConsole(val in: InputStream,val out: OutputStream, val envVars: Map[String,String] = Map()) extends Console {
+class TestConsole(val in: InputStream, val out: OutputStream, val envVars: Map[String, String] = Map()) extends Console {
 
-  override def info(message: String): Unit = DefaultConsole.info(message)
+  val infoMessages = new ArrayBuffer[String]()
+  val errorMessages = new ArrayBuffer[String]()
+  val fatalMessages = new ArrayBuffer[String]()
+  val warnMessages = new ArrayBuffer[String]()
 
-  override def error(message: String): Unit = DefaultConsole.error(message)
 
-  override def warn(message: String): Unit = DefaultConsole.warn(message)
+  override def info(message: String): Unit = {
+    infoMessages +=(message)
+  }
+
+  override def error(message: String): Unit = {
+    errorMessages +=(message)
+  }
+
+  override def fatal(message: String): Unit = {
+    fatalMessages +=(message)
+  }
+
+  override def warn(message: String): Unit = {
+    warnMessages +=(message)
+  }
 
   override def clear(): Unit = DefaultConsole.clear()
 
