@@ -3,7 +3,7 @@ package org.mule.weave.dwnative.cli.commands
 import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.dwnative.cli.utils.SpellsUtils
 
-class CloneWizardCommand(config: CloneWizardConfig, console: Console) extends WeaveCommand {
+class AddWizardCommand(config: CloneWizardConfig, console: Console) extends WeaveCommand {
 
   private val utils = new SpellsUtils(console)
 

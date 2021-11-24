@@ -1,7 +1,7 @@
 package org.mule.weave.dwnative.cli
 
 import org.mule.weave.dwnative.NativeRuntime
-import org.mule.weave.dwnative.cli.commands.CloneWizardCommand
+import org.mule.weave.dwnative.cli.commands.AddWizardCommand
 import org.mule.weave.dwnative.cli.commands.CloneWizardConfig
 import org.mule.weave.dwnative.cli.commands.ListSpellsCommand
 import org.mule.weave.dwnative.cli.commands.RunWeaveCommand
@@ -84,9 +84,9 @@ class CLIArgumentsParser(console: Console) {
           if (i + 1 < args.length) {
             i = i + 1
             val wizardName = args(i)
-            return Left(new CloneWizardCommand(CloneWizardConfig(wizardName), console))
+            return Left(new AddWizardCommand(CloneWizardConfig(wizardName), console))
           } else {
-            return Right("Missing <outputPath>")
+            return Right("Missing <wizard-name>")
           }
         }
         case "--clean-cache" => {
@@ -120,7 +120,7 @@ class CLIArgumentsParser(console: Console) {
 
             var wizardGrimoire: File = utils.grimoireFolder(wizard)
             if (!wizardGrimoire.exists()) {
-              new CloneWizardCommand(CloneWizardConfig(wizard), console).exec()
+              new AddWizardCommand(CloneWizardConfig(wizard), console).exec()
             }
             wizardGrimoire = utils.grimoireFolder(wizard)
             val wizardName = if (wizard == null) "Weave" else wizard
