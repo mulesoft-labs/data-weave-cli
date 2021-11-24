@@ -5,9 +5,6 @@ on:
     tags:
       - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
-env:
-  NATIVE_VERSION: 1.0.9
 
 jobs:
 
@@ -15,11 +12,11 @@ jobs:
   RELEASE_EXTENSION:
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-#        os: [macos-latest, ubuntu-latest]
+#        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, ubuntu-latest]
         include:
-          - os: windows-2019
-            script_name: windows
+#          - os: windows-2019
+#            script_name: windows
           - os: ubuntu-latest
             script_name: linux
           - os: macos-latest
@@ -35,33 +32,23 @@ jobs:
         with:
           java-version: 11
 
+      - name: Guess Extension Version
+        run: |
+          echo "NATIVE_VERSION=$(echo '${{github.ref}}' | sed -e 's,.*/v\(.*\),\1,')" >> $GITHUB_ENV
+
       # Runs a single command using the runners shell
       - name: Run Build on native
-        run: |
-          if [ "$RUNNER_OS" == 'Windows' ]; then
-              ./gradlew native-cli:build -PgraalvmVersion=20.2.0
-          else
-              ./gradlew native-cli:build
-          fi
+        run: ./gradlew native-cli:build -PnativeVersion=${{env.NATIVE_VERSION}}
         shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
-          AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
 
       # Runs a set of commands using the runners shell
       - name: Create Native Image
-        run: |
-          if [ "$RUNNER_OS" == 'Windows' ]; then
-            ./gradlew native-cli:nativeImage -PgraalvmVersion=20.2.0
-            ./gradlew native-cli:distro
-          else
-            ./gradlew native-cli:nativeImage
-            ./gradlew native-cli:distro
-          fi
+        run: ./gradlew native-cli:nativeImage -PnativeVersion=${{env.NATIVE_VERSION}}
         shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
-          AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
+
+      - name: Create Distro
+        run: ./gradlew native-cli:distro -PnativeVersion=${{env.NATIVE_VERSION}}
+        shell: bash
 
       # Upload the artifact file
       - name: Upload binaries to release
