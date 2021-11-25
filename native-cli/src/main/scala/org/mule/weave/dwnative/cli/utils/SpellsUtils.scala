@@ -14,16 +14,17 @@ object SpellsUtils {
 class SpellsUtils(console: Console) {
 
   def grimoireName(user: String): String = {
-    if (user == null)
+    if (user == null) {
       DATA_WEAVE_GRIMOIRE_FOLDER
-    else
+    } else {
       s"${user}-$DATA_WEAVE_GRIMOIRE_FOLDER"
+    }
   }
 
   def wizardName(grimoire: String): String = {
-    if (grimoire == null)
+    if (grimoire == null || DATA_WEAVE_GRIMOIRE_FOLDER.equals(grimoire)) {
       "DW"
-    else {
+    } else {
       val length = grimoire.length - s"-${DATA_WEAVE_GRIMOIRE_FOLDER}".length
       if (length <= 0) {
         console.error("Invalid grimoire name: `" + grimoire + "`")
