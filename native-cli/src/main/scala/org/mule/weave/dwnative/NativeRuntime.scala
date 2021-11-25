@@ -3,6 +3,8 @@ package org.mule.weave.dwnative
 import io.netty.util.internal.PlatformDependent
 import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.dwnative.initializer.NativeSystemModuleComponents
+import org.mule.weave.v2.deps.Artifact
+import org.mule.weave.v2.deps.ResourceDependencyAnnotationProcessor
 import org.mule.weave.v2.exception.InvalidLocationException
 import org.mule.weave.v2.interpreted.CustomRuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.RuntimeModuleNodeCompiler
@@ -45,14 +47,34 @@ import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ExecutorService
+import scala.concurrent.Await
+import scala.concurrent.Future
+import scala.concurrent.duration.Duration
 
-class NativeRuntime(libDir: File, path: Array[File], console: Console) {
+class NativeRuntime(resourcesCacheDir: File, executor: ExecutorService, libDir: File, path: Array[File], console: Console) {
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
+
+  private val resourceDependencyAnnotationProcessor = ResourceDependencyAnnotationProcessor(
+    new File(resourcesCacheDir, "resources"),
+    (id: String, kind: String, artifact: Future[Seq[Artifact]]) => {
+      pathBasedResourceResolver.addContent(new LazyContentResolver(() => {
+        new CompositeContentResolver(Await.result(artifact, Duration.Inf)
+          .map((artifact) => {
+            ContentResolver(artifact.file)
+          }))
+      })
+      )
+    }, executor
+  )
+
+  private val annotationProcessors: Seq[(String, AnnotationProcessor)] = Seq(
+    (ResourceDependencyAnnotationProcessor.ANNOTATION_NAME.name, resourceDependencyAnnotationProcessor)
+  )
   private val weaveScriptingEngine: DataWeaveScriptingEngine = {
     setupEnv()
-    val annotationProcessors: Seq[(String, AnnotationProcessor)] = Seq()
     DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration(parsingAnnotationProcessors = annotationProcessors))
   }
 

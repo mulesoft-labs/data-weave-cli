@@ -6,6 +6,7 @@ import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.dwnative.cli.FileWatcher
 import org.mule.weave.dwnative.utils.DataWeaveUtils
 import org.mule.weave.dwnative.utils.DataWeaveUtils._
+import org.mule.weave.v2.io.FileHelper.deleteDirectory
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.values.StringValue
 import org.mule.weave.v2.module.DataFormatManager
@@ -19,6 +20,7 @@ import java.io.FileOutputStream
 import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.util.concurrent.Executors
 import scala.util.Try
 
 class RunWeaveCommand(config: WeaveRunnerConfig, console: Console) extends WeaveCommand {
@@ -32,8 +34,12 @@ class RunWeaveCommand(config: WeaveRunnerConfig, console: Console) extends Weave
 
   def exec(): Int = {
     val path: Array[File] = config.path.map(new File(_))
-    val nativeRuntime: NativeRuntime = new NativeRuntime(weaveUtils.getLibPathHome(), path, console)
-
+    val cacheDirectory: File = weaveUtils.getCacheHome()
+    if (config.cleanCache) {
+      deleteDirectory(cacheDirectory)
+      cacheDirectory.mkdirs()
+    }
+    val nativeRuntime: NativeRuntime = new NativeRuntime(cacheDirectory, Executors.newCachedThreadPool(), weaveUtils.getLibPathHome(), path, console)
     if (config.watch) {
       console.clear()
       val fileWatcher = FileWatcher(config.filesToWatch)
