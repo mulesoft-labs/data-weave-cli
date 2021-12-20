@@ -49,6 +49,7 @@ import java.io.File
 import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ExecutorService
 import scala.concurrent.Await
@@ -202,7 +203,7 @@ class WeavePathProtocolHandler(path: PathBasedResourceResolver) extends ReadFunc
     url.startsWith("classpath://")
   }
 
-  override def createSourceProvider(url: String, locatable: LocationCapable): SourceProvider = {
+  override def createSourceProvider(url: String, locatable: LocationCapable, charset: Charset): SourceProvider = {
     val uri = url.stripPrefix("classpath://")
     val wellFormedUri = if (uri.startsWith("/")) {
       uri.substring(1)
@@ -212,7 +213,7 @@ class WeavePathProtocolHandler(path: PathBasedResourceResolver) extends ReadFunc
     val maybeResource = path.resolve(wellFormedUri)
     maybeResource match {
       case Some(value) => {
-        SourceProvider(value, StandardCharsets.UTF_8)
+        SourceProvider(value, charset)
       }
       case None => throw new InvalidLocationException(locatable.location(), uri)
     }
