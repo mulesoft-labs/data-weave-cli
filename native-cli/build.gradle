@@ -29,6 +29,7 @@ dependencies {
     compile group: 'org.mule.weave', name: 'core-modules', version: weaveVersion
     compile group: 'org.mule.weave', name: 'yaml-module', version: weaveVersion
     compile group: 'org.mule.weave', name: 'dependency-manager', version: weaveVersion
+    compile group: 'org.mule.weave', name: 'telemetry-service', version: weaveVersion
 //    compile(group: 'org.mule.weave', name: 'raml-module', version: ioVersion){
 //        exclude group: 'org.slf4j'
 //        exclude group: 'org.topbraid.shacl'

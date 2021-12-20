@@ -88,7 +88,11 @@ class DataWeaveUtils(console: Console) {
       }
       home
     } else {
-      new File(getDWHome(), "tmp")
+      val tmpDirectory = new File(getDWHome(), "tmp")
+      if (!tmpDirectory.exists()) {
+        tmpDirectory.mkdirs()
+      }
+      tmpDirectory
     }
   }
 

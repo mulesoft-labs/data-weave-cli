@@ -3,12 +3,15 @@ package org.mule.weave.dwnative
 import io.netty.util.internal.PlatformDependent
 import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.dwnative.initializer.NativeSystemModuleComponents
+import org.mule.weave.dwnative.utils.DataWeaveUtils
 import org.mule.weave.v2.deps.Artifact
 import org.mule.weave.v2.deps.ResourceDependencyAnnotationProcessor
 import org.mule.weave.v2.exception.InvalidLocationException
 import org.mule.weave.v2.interpreted.CustomRuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.RuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
+import org.mule.weave.v2.io.service.CustomWorkingDirectoryService
+import org.mule.weave.v2.io.service.WorkingDirectoryService
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
 import org.mule.weave.v2.model.service.LoggingService
@@ -53,6 +56,8 @@ import scala.concurrent.Future
 import scala.concurrent.duration.Duration
 
 class NativeRuntime(resourcesCacheDir: File, executor: ExecutorService, libDir: File, path: Array[File], console: Console) {
+
+  private val dataWeaveUtils = new DataWeaveUtils(console)
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
@@ -102,7 +107,7 @@ class NativeRuntime(resourcesCacheDir: File, executor: ExecutorService, libDir: 
       }
       if (telemetry) {
         dataWeaveScript.enableTelemetry()
-        dataWeaveScript.enableMemoryTelemetry()
+//        dataWeaveScript.enableMemoryTelemetry()
       }
       val serviceManager: ServiceManager = createServiceManager()
       val result: DataWeaveResult =
@@ -152,7 +157,8 @@ class NativeRuntime(resourcesCacheDir: File, executor: ExecutorService, libDir: 
     val serviceManager = ServiceManager(
       new ConsoleLogger(console),
       Map(
-        classOf[UrlSourceProviderResolverService] -> new ProtocolUrlSourceProviderResolverService(Seq(UrlProtocolHandler, WeavePathProtocolHandler(pathBasedResourceResolver)))
+        classOf[UrlSourceProviderResolverService] -> new ProtocolUrlSourceProviderResolverService(Seq(UrlProtocolHandler, WeavePathProtocolHandler(pathBasedResourceResolver))),
+        classOf[WorkingDirectoryService] -> new CustomWorkingDirectoryService(dataWeaveUtils.getWorkingHome(), true)
       )
     )
     serviceManager

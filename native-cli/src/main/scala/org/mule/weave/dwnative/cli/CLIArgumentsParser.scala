@@ -154,6 +154,32 @@ class CLIArgumentsParser(console: Console) {
             return Right("Missing <spellName>")
           }
         }
+        case "--local-spell" => {
+          if (i + 1 < args.length) {
+            i = i + 1
+            console.info("Running local spell")
+            val spell: String = args(i)
+            val spellFolder: File = new File(spell)
+            if (!spellFolder.exists()) {
+              return Right(s"Unable find `${spell}` folder.")
+            }
+            val srcFolder = new File(spellFolder, "src")
+            val mainFile = new File(srcFolder, "Main.dwl")
+            if (!mainFile.isFile) {
+              return Right(s"Unable find `Main.dwl` in the spell: `${spell}`.")
+            }
+            if (path.isEmpty) {
+              path = srcFolder.getAbsolutePath
+            } else {
+              path = path + File.pathSeparator + srcFolder.getAbsolutePath
+            }
+            scriptToRun = Some((_) => {
+              WeaveModule(fileToString(mainFile), "Main")
+            })
+          } else {
+            return Right("Missing <spell-folder>")
+          }
+        }
         case "-i" | "--input" => {
           if (i + 2 < args.length) {
             val input: File = new File(args(i + 2))
