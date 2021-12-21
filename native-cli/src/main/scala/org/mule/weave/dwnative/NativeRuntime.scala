@@ -50,7 +50,6 @@ import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.charset.Charset
-import java.nio.charset.StandardCharsets
 import java.util.concurrent.ExecutorService
 import scala.concurrent.Await
 import scala.concurrent.Future
@@ -199,12 +198,14 @@ class NativeRuntime(resourcesCacheDir: File, executor: ExecutorService, libDir: 
 
 class WeavePathProtocolHandler(path: PathBasedResourceResolver) extends ReadFunctionProtocolHandler {
 
+  private val CLASSPATH_PREFIX = "classpath://"
+
   override def handles(url: String): Boolean = {
-    url.startsWith("classpath://")
+    url.startsWith(CLASSPATH_PREFIX)
   }
 
   override def createSourceProvider(url: String, locatable: LocationCapable, charset: Charset): SourceProvider = {
-    val uri = url.stripPrefix("classpath://")
+    val uri = url.stripPrefix(CLASSPATH_PREFIX)
     val wellFormedUri = if (uri.startsWith("/")) {
       uri.substring(1)
     } else {

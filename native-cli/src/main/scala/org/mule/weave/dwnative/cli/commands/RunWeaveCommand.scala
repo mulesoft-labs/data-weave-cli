@@ -23,7 +23,7 @@ import java.io.StringWriter
 import java.util.concurrent.Executors
 import scala.util.Try
 
-class RunWeaveCommand(config: WeaveRunnerConfig, console: Console) extends WeaveCommand {
+class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends WeaveCommand {
   val weaveUtils = new DataWeaveUtils(console)
 
   private val DEFAULT_MIME_TYPE: String = "application/json"

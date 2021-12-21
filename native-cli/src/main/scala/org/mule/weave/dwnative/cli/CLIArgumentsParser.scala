@@ -3,6 +3,7 @@ package org.mule.weave.dwnative.cli
 import org.mule.weave.dwnative.NativeRuntime
 import org.mule.weave.dwnative.cli.commands.AddWizardCommand
 import org.mule.weave.dwnative.cli.commands.CloneWizardConfig
+import org.mule.weave.dwnative.cli.commands.CreateSpellCommand
 import org.mule.weave.dwnative.cli.commands.ListSpellsCommand
 import org.mule.weave.dwnative.cli.commands.RunWeaveCommand
 import org.mule.weave.dwnative.cli.commands.UpdateAllGrimoires
@@ -14,6 +15,7 @@ import org.mule.weave.dwnative.cli.commands.WeaveCommand
 import org.mule.weave.dwnative.cli.commands.WeaveModule
 import org.mule.weave.dwnative.cli.commands.WeaveRunnerConfig
 import org.mule.weave.dwnative.cli.utils.SpellsUtils
+import org.mule.weave.dwnative.utils.FileUtils
 import org.mule.weave.v2.io.FileHelper
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.runtime.utils.AnsiColor.red
@@ -95,6 +97,15 @@ class CLIArgumentsParser(console: Console) {
         case "--watch" => {
           watch = true
         }
+        case "--new-spell" => {
+          if (i + 1 < args.length) {
+            i = i + 1
+            val spellName = args(i)
+            return Left(new CreateSpellCommand(spellName, console))
+          } else {
+            return Right("Missing <spell-name>")
+          }
+        }
         case "--list-spells" => {
           return Left(new ListSpellsCommand(console))
         }
@@ -168,6 +179,8 @@ class CLIArgumentsParser(console: Console) {
             if (!mainFile.isFile) {
               return Right(s"Unable find `Main.dwl` in the spell: `${spell}`.")
             }
+            //Watch all files in the src folder
+            filesToWatch ++= FileUtils.tree(srcFolder)
             if (path.isEmpty) {
               path = srcFolder.getAbsolutePath
             } else {

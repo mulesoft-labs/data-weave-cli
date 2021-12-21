@@ -1,11 +1,15 @@
 package org.mule.weave.dwnative.cli
 
 import org.mule.weave.dwnative.utils.DataWeaveUtils
+import org.mule.weave.dwnative.utils.FileUtils
 import org.scalatest.FreeSpec
 import org.scalatest.Matchers
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.Path
 import scala.io.Source
 
 class DataWeaveCLITest extends FreeSpec with Matchers {
@@ -35,6 +39,27 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
       """<?xml version='1.0' encoding='UTF-8'?>
         |<root>Mariano</root>""".stripMargin
     result.trim shouldBe expected
+  }
+
+
+
+  "should be able to run a local spell" in {
+    val stream = new ByteArrayOutputStream()
+    val localSpell: File = TestUtils.getMyLocalSpell
+    val i = new DataWeaveCLIRunner().run(Array("--local-spell", localSpell.getAbsolutePath), new TestConsole(System.in, stream))
+    val source = Source.fromBytes(stream.toByteArray, "UTF-8")
+    val result: String = source.mkString
+    result.trim shouldBe "\"DW Rules\""
+  }
+
+
+  "should be able to run a local spell with a library" in {
+    val stream = new ByteArrayOutputStream()
+    val localSpell: File = TestUtils.getMyLocalSpellWithLib
+    val i = new DataWeaveCLIRunner().run(Array("--local-spell", localSpell.getAbsolutePath), new TestConsole(System.in, stream))
+    val source = Source.fromBytes(stream.toByteArray, "UTF-8")
+    val result: String = source.mkString
+    result.trim shouldBe "\"DW Rules\""
   }
 
 
