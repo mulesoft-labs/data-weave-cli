@@ -14,6 +14,7 @@ public interface Marker extends Serializable {
     boolean remove(Marker var1);
 
     /** @deprecated */
+    @Deprecated
     boolean hasChildren();
 
     boolean hasReferences();

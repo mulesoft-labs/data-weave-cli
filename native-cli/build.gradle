@@ -7,7 +7,7 @@ buildscript {
 }
 
 plugins {
-//    id 'com.github.johnrengelman.shadow' version '5.2.0'
+    id 'com.github.johnrengelman.shadow' version '5.2.0'
     id 'application'
 }
 
@@ -79,9 +79,9 @@ compileScala {
 }
 
 //// Merging Service Files
-//shadowJar {
-//    mergeServiceFiles()
-//}
+shadowJar {
+    mergeServiceFiles()
+}
 
 
 import org.apache.tools.ant.taskdefs.condition.Os
@@ -115,7 +115,7 @@ graal {
     javaVersion '11'
     graalVersion graalvmVersion
     option "-H:+ReportExceptionStackTraces"
-    option "-J-Xmx3G"
+    option "-J-Xmx4G"
     option "--no-fallback"
     option "--allow-incomplete-classpath"
     option "-H:EnableURLProtocols=http,https"
