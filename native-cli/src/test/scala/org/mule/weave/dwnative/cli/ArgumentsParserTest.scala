@@ -1,7 +1,10 @@
 package org.mule.weave.dwnative.cli
 
+import org.mule.weave.dwnative.NativeRuntime
 import org.mule.weave.dwnative.cli.commands.CreateSpellCommand
 import org.mule.weave.dwnative.cli.commands.RunWeaveCommand
+import org.mule.weave.dwnative.cli.commands.WeaveCommand
+import org.mule.weave.dwnative.cli.commands.WeaveModule
 import org.scalatest.FreeSpec
 
 class ArgumentsParserTest extends FreeSpec {
@@ -50,6 +53,14 @@ class ArgumentsParserTest extends FreeSpec {
     assert(commandToRun.isInstanceOf[CreateSpellCommand])
     val runWeaveCommand = commandToRun.asInstanceOf[CreateSpellCommand]
     assert(runWeaveCommand.spellName == "Test")
+  }
+
+  "should parse correctly a main " in {
+    val parser: CLIArgumentsParser = new CLIArgumentsParser(new TestConsole())
+    val value: Either[WeaveCommand, String] = parser.parse(Array("--main", "Test.dwl"))
+    assert(value.isLeft)
+    val commandToRun = value.left.get
+    assert(commandToRun.isInstanceOf[RunWeaveCommand])
   }
 
 }

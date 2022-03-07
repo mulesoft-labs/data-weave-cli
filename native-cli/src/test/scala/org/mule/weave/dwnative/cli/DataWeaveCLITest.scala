@@ -1,15 +1,12 @@
 package org.mule.weave.dwnative.cli
 
 import org.mule.weave.dwnative.utils.DataWeaveUtils
-import org.mule.weave.dwnative.utils.FileUtils
 import org.scalatest.FreeSpec
 import org.scalatest.Matchers
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.Path
 import scala.io.Source
 
 class DataWeaveCLITest extends FreeSpec with Matchers {

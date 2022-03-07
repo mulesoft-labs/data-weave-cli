@@ -1,6 +1,7 @@
 package org.mule.weave.dwnative.cli
 
 import org.mule.weave.dwnative.cli.commands.UsageCommand
+import org.mule.weave.dwnative.cli.exceptions.CLIException
 
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -29,6 +30,10 @@ class DataWeaveCLIRunner {
         try {
           weaveCommand.exec()
         } catch {
+          case exception: CLIException => {
+            console.error(exception.getMessage)
+            -1
+          }
           case exception: Exception => {
             val exceptionString = new StringWriter()
             exception.printStackTrace(new PrintWriter(exceptionString))

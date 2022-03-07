@@ -14,6 +14,7 @@ import org.mule.weave.dwnative.cli.commands.VersionCommand
 import org.mule.weave.dwnative.cli.commands.WeaveCommand
 import org.mule.weave.dwnative.cli.commands.WeaveModule
 import org.mule.weave.dwnative.cli.commands.WeaveRunnerConfig
+import org.mule.weave.dwnative.cli.exceptions.ResourceNotFoundException
 import org.mule.weave.dwnative.cli.utils.SpellsUtils
 import org.mule.weave.dwnative.utils.FileUtils
 import org.mule.weave.v2.io.FileHelper
@@ -219,17 +220,16 @@ class CLIArgumentsParser(console: Console) {
         case "--telemetry" => {
           telemetry = true
         }
-        case "-main" | "-m" => {
+        case "--main" | "-m" => {
           if (i + 1 < args.length) {
             i = i + 1
+            val mainScriptName: String = args(i)
             scriptToRun = Some((nativeRuntime) => {
-              val mainScriptName = args(i)
               val maybeString = nativeRuntime.getResourceContent(NameIdentifier(mainScriptName))
               if (maybeString.isDefined) {
-                WeaveModule(maybeString.get, args(i))
+                WeaveModule(maybeString.get, mainScriptName)
               } else {
-                console.error(s"Unable to resolve `${mainScriptName}` in the specified classpath.")
-                WeaveModule("", args(i))
+                throw new ResourceNotFoundException(mainScriptName)
               }
             })
           } else {
