@@ -20,6 +20,7 @@ import org.mule.weave.dwnative.utils.FileUtils
 import org.mule.weave.v2.io.FileHelper
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.runtime.utils.AnsiColor.red
+import org.mule.weave.v2.sdk.NameIdentifierHelper
 
 import java.io.File
 import scala.collection.mutable
@@ -119,11 +120,22 @@ class CLIArgumentsParser(console: Console) {
             } else {
               null
             }
-            val spellName = if (spell.contains("/")) {
+            var spellName = if (spell.contains("/")) {
               spell.split("/")(1)
             } else {
               spell
             }
+
+            var fileName = "Main.dwl"
+            var nameIdentifier = NameIdentifier("Main")
+
+            if (spellName.contains("@")) {
+              val spellParts = spellName.split("@")
+              spellName = spellParts.head
+              nameIdentifier = NameIdentifier(spellParts.last)
+              fileName = NameIdentifierHelper.toWeaveFilePath(nameIdentifier, File.pathSeparator)
+            }
+
             val lastUpdate = utils.hoursSinceLastUpdate()
             //Update grimoires every day
             if (lastUpdate > 24) {
@@ -150,9 +162,9 @@ class CLIArgumentsParser(console: Console) {
             }
 
             val srcFolder = new File(spellFolder, "src")
-            val mainFile = new File(srcFolder, "Main.dwl")
+            val mainFile = new File(srcFolder, fileName)
             if (!mainFile.isFile) {
-              return Right(s"Unable find `Main.dwl` in the spell: `${spellName}` inside Wise `${wizardName}'s` Grimoire.")
+              return Right(s"Unable find `${fileName}` in the spell: `${spellName}` inside Wise `${wizardName}'s` Grimoire.")
             }
             if (path.isEmpty) {
               path = srcFolder.getAbsolutePath
@@ -160,7 +172,7 @@ class CLIArgumentsParser(console: Console) {
               path = path + File.pathSeparator + srcFolder.getAbsolutePath
             }
             scriptToRun = Some((_) => {
-              WeaveModule(fileToString(mainFile), "Main")
+              WeaveModule(fileToString(mainFile), nameIdentifier.toString())
             })
           } else {
             return Right("Missing <spellName>")
@@ -171,14 +183,26 @@ class CLIArgumentsParser(console: Console) {
             i = i + 1
             console.info("Running local spell")
             val spell: String = args(i)
-            val spellFolder: File = new File(spell)
+
+            var fileName = "Main.dwl"
+            var nameIdentifier = NameIdentifier("Main")
+            var spellName = spell
+            if (spell.contains("@")) {
+              val spellParts = spell.split("@")
+              spellName = spellParts.head
+              nameIdentifier = NameIdentifier(spellParts.last)
+              fileName = NameIdentifierHelper.toWeaveFilePath(nameIdentifier, File.separator)
+            }
+
+            val spellFolder: File = new File(spellName)
             if (!spellFolder.exists()) {
-              return Right(s"Unable find `${spell}` folder.")
+              return Right(s"Unable find `${spellName}` folder.")
             }
             val srcFolder = new File(spellFolder, "src")
-            val mainFile = new File(srcFolder, "Main.dwl")
+
+            val mainFile = new File(srcFolder, fileName)
             if (!mainFile.isFile) {
-              return Right(s"Unable find `Main.dwl` in the spell: `${spell}`.")
+              return Right(s"Unable find `${fileName}` in the spell: `${spell}`.")
             }
             //Watch all files in the src folder
             filesToWatch ++= FileUtils.tree(srcFolder)
@@ -188,7 +212,7 @@ class CLIArgumentsParser(console: Console) {
               path = path + File.pathSeparator + srcFolder.getAbsolutePath
             }
             scriptToRun = Some((_) => {
-              WeaveModule(fileToString(mainFile), "Main")
+              WeaveModule(fileToString(mainFile), nameIdentifier.toString())
             })
           } else {
             return Right("Missing <spell-folder>")
