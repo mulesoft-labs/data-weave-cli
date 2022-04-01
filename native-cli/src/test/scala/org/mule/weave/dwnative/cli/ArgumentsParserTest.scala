@@ -1,10 +1,8 @@
 package org.mule.weave.dwnative.cli
 
-import org.mule.weave.dwnative.NativeRuntime
 import org.mule.weave.dwnative.cli.commands.CreateSpellCommand
 import org.mule.weave.dwnative.cli.commands.RunWeaveCommand
 import org.mule.weave.dwnative.cli.commands.WeaveCommand
-import org.mule.weave.dwnative.cli.commands.WeaveModule
 import org.scalatest.FreeSpec
 
 class ArgumentsParserTest extends FreeSpec {
@@ -16,21 +14,15 @@ class ArgumentsParserTest extends FreeSpec {
     assert(value.isLeft)
     val commandToRun = value.left.get
     assert(commandToRun.isInstanceOf[RunWeaveCommand])
-    val runWeaveCommand = commandToRun.asInstanceOf[RunWeaveCommand]
-    assert(runWeaveCommand.config.filesToWatch.size == 2)
-    assert(!runWeaveCommand.config.watch)
   }
 
   "should set the watch command correctly" in {
     val parser = new CLIArgumentsParser(new TestConsole())
     val lib = TestUtils.getMyLocalSpellWithLib
-    val value = parser.parse(Array("--watch","--local-spell", lib.getAbsolutePath))
+    val value = parser.parse(Array("--local-spell", lib.getAbsolutePath))
     assert(value.isLeft)
     val commandToRun = value.left.get
     assert(commandToRun.isInstanceOf[RunWeaveCommand])
-    val runWeaveCommand = commandToRun.asInstanceOf[RunWeaveCommand]
-    assert(runWeaveCommand.config.filesToWatch.size == 2)
-    assert(runWeaveCommand.config.watch)
   }
 
 
@@ -40,9 +32,6 @@ class ArgumentsParserTest extends FreeSpec {
     assert(value.isLeft)
     val commandToRun = value.left.get
     assert(commandToRun.isInstanceOf[RunWeaveCommand])
-    val runWeaveCommand = commandToRun.asInstanceOf[RunWeaveCommand]
-    assert(runWeaveCommand.config.filesToWatch.isEmpty)
-    assert(!runWeaveCommand.config.watch)
   }
 
   "should parse new-spell correctly" in {

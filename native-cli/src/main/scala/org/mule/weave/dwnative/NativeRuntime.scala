@@ -4,8 +4,6 @@ import io.netty.util.internal.PlatformDependent
 import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.dwnative.initializer.NativeSystemModuleComponents
 import org.mule.weave.dwnative.utils.DataWeaveUtils
-import org.mule.weave.v2.deps.Artifact
-import org.mule.weave.v2.deps.ResourceDependencyAnnotationProcessor
 import org.mule.weave.v2.exception.InvalidLocationException
 import org.mule.weave.v2.interpreted.CustomRuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.RuntimeModuleNodeCompiler
@@ -25,7 +23,6 @@ import org.mule.weave.v2.module.reader.SourceProvider
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.exception.LocatableException
 import org.mule.weave.v2.parser.location.LocationCapable
-import org.mule.weave.v2.parser.phase.AnnotationProcessor
 import org.mule.weave.v2.parser.phase.CompilationException
 import org.mule.weave.v2.parser.phase.CompositeModuleParsingPhasesManager
 import org.mule.weave.v2.parser.phase.ModuleLoader
@@ -50,37 +47,16 @@ import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.charset.Charset
-import java.util.concurrent.ExecutorService
-import scala.concurrent.Await
-import scala.concurrent.Future
-import scala.concurrent.duration.Duration
 
-class NativeRuntime(resourcesCacheDir: File, executor: ExecutorService, libDir: File, path: Array[File], console: Console) {
+class NativeRuntime(libDir: File, path: Array[File], console: Console) {
 
   private val dataWeaveUtils = new DataWeaveUtils(console)
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
-
-
-  private val resourceDependencyAnnotationProcessor = ResourceDependencyAnnotationProcessor(
-    new File(resourcesCacheDir, "resources"),
-    (id: String, kind: String, artifact: Future[Seq[Artifact]]) => {
-      pathBasedResourceResolver.addContent(new LazyContentResolver(() => {
-        new CompositeContentResolver(Await.result(artifact, Duration.Inf)
-          .map((artifact) => {
-            ContentResolver(artifact.file)
-          }))
-      })
-      )
-    }, executor
-  )
-
-  private val annotationProcessors: Seq[(String, AnnotationProcessor)] = Seq(
-    (ResourceDependencyAnnotationProcessor.ANNOTATION_NAME.name, resourceDependencyAnnotationProcessor)
-  )
+  
   private val weaveScriptingEngine: DataWeaveScriptingEngine = {
     setupEnv()
-    DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration(parsingAnnotationProcessors = annotationProcessors))
+    DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration())
   }
 
   if (console.isDebugEnabled()) {
@@ -99,16 +75,9 @@ class NativeRuntime(resourcesCacheDir: File, executor: ExecutorService, libDir: 
     pathBasedResourceResolver.resolve(ni).map(_.content())
   }
 
-  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false, remoteDebug: Boolean = false, telemetry: Boolean = false): WeaveExecutionResult = {
+  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false): WeaveExecutionResult = {
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), defaultOutputMimeType, profile)
-      if (remoteDebug) {
-        dataWeaveScript.enableDebug()
-      }
-      if (telemetry) {
-        dataWeaveScript.enableTelemetry()
-//        dataWeaveScript.enableMemoryTelemetry()
-      }
       val serviceManager: ServiceManager = createServiceManager()
       val result: DataWeaveResult =
         if (profile) {
@@ -164,16 +133,9 @@ class NativeRuntime(resourcesCacheDir: File, executor: ExecutorService, libDir: 
     serviceManager
   }
 
-  def eval(script: String, inputs: ScriptingBindings, nameIdentifier: String, profile: Boolean, debug: Boolean = false, telemetry: Boolean = false): ExecuteResult = {
+  def eval(script: String, inputs: ScriptingBindings, nameIdentifier: String, profile: Boolean): ExecuteResult = {
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), "application/dw", profile)
-      if (debug) {
-        dataWeaveScript.enableDebug()
-      }
-      if (telemetry) {
-        dataWeaveScript.enableTelemetry()
-        dataWeaveScript.enableMemoryTelemetry()
-      }
       val serviceManager: ServiceManager = createServiceManager()
       if (profile) {
         time(() => dataWeaveScript.exec(inputs, serviceManager), "Execution")

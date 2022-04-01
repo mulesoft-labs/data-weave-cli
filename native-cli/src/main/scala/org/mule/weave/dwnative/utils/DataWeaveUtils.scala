@@ -15,20 +15,6 @@ object DataWeaveUtils {
 
 class DataWeaveUtils(console: Console) {
 
-
-  def getCacheHome(): File = {
-    val weavehome = console.envVar("DW_CACHE_PATH")
-    if (weavehome.nonEmpty) {
-      val home = new File(weavehome.get)
-      if (!home.exists()) {
-        console.error(s" Weave Cache Home Directory `${weavehome}` declared on environment variable `DW_CACHE_PATH` does not exists.")
-      }
-      home
-    } else {
-      new File(getDWHome(), "cache")
-    }
-  }
-
   /**
     * Returns the DW home directory if exists it can be overwritten with env variable DW_HOME
     *

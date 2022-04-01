@@ -97,7 +97,6 @@ Arguments Detail:
  --file or -f     | Path to the file
  --eval          | Evaluates the script instead of writing it
  --version       | The version of the CLI and Runtime
- --clean-cache   | Cleans the cache where all artifacts are being downloaded this force to download all artifacts every time
 
  Example:
 

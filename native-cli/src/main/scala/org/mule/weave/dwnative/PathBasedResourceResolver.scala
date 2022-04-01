@@ -69,10 +69,6 @@ trait ContentResolver {
   def resolve(path: String): Option[InputStream]
 }
 
-object EmptyContentResolver extends ContentResolver {
-  override def resolve(path: String): Option[InputStream] = None
-}
-
 class CompositeContentResolver(contents: Seq[ContentResolver]) extends ContentResolver {
   override def resolve(path: String): Option[InputStream] = {
     contents
@@ -81,15 +77,6 @@ class CompositeContentResolver(contents: Seq[ContentResolver]) extends ContentRe
         content.resolve(path)
       })
       .headOption
-  }
-}
-
-class LazyContentResolver(resolver: () => ContentResolver) extends ContentResolver {
-
-  private lazy val theResolver = resolver()
-
-  override def resolve(path: String): Option[InputStream] = {
-    theResolver.resolve(path)
   }
 }
 
