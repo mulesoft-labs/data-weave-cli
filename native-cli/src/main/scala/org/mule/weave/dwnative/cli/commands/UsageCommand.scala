@@ -44,7 +44,6 @@ class UsageCommand(console: Console) extends WeaveCommand {
       | --clean-cache      | Cleans the cache where all artifacts are being downloaded this force to download all artifacts every time
       | --remote-debug     | Enables remote debugging
       | --verbose or -v    | Enable Verbose Mode.
-      | --telemetry        | Enables telemetry reporting
       |
       | Example:
       |
