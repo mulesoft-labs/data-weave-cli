@@ -42,7 +42,6 @@ class CLIArgumentsParser(console: Console) {
     var watch: Boolean = false
     val filesToWatch: ArrayBuffer[File] = ArrayBuffer()
     var cleanCache: Boolean = false
-    var remoteDebug: Boolean = false
 
     val inputs: mutable.Map[String, File] = mutable.Map()
     val properties: mutable.Map[String, String] = mutable.Map()
@@ -256,9 +255,6 @@ class CLIArgumentsParser(console: Console) {
             return Right("Missing main name identifier")
           }
         }
-        case "--remote-debug" => {
-          remoteDebug = true
-        }
         case "-f" | "--file" => {
           if (i + 1 < args.length) {
             i = i + 1
@@ -293,7 +289,7 @@ class CLIArgumentsParser(console: Console) {
     if (scriptToRun.isEmpty) {
       Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath> or --spell ")
     } else {
-      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun.get, properties.toMap, inputs.toMap, output, filesToWatch, watch, remoteDebug)
+      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun.get, properties.toMap, inputs.toMap, output, filesToWatch, watch)
       Left(new RunWeaveCommand(config, console))
     }
   }
