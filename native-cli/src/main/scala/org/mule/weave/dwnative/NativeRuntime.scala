@@ -4,8 +4,6 @@ import io.netty.util.internal.PlatformDependent
 import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.dwnative.initializer.NativeSystemModuleComponents
 import org.mule.weave.dwnative.utils.DataWeaveUtils
-import org.mule.weave.v2.deps.Artifact
-import org.mule.weave.v2.deps.ResourceDependencyAnnotationProcessor
 import org.mule.weave.v2.exception.InvalidLocationException
 import org.mule.weave.v2.interpreted.CustomRuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.RuntimeModuleNodeCompiler
@@ -25,7 +23,6 @@ import org.mule.weave.v2.module.reader.SourceProvider
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.exception.LocatableException
 import org.mule.weave.v2.parser.location.LocationCapable
-import org.mule.weave.v2.parser.phase.AnnotationProcessor
 import org.mule.weave.v2.parser.phase.CompilationException
 import org.mule.weave.v2.parser.phase.CompositeModuleParsingPhasesManager
 import org.mule.weave.v2.parser.phase.ModuleLoader
@@ -50,37 +47,16 @@ import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.charset.Charset
-import java.util.concurrent.ExecutorService
-import scala.concurrent.Await
-import scala.concurrent.Future
-import scala.concurrent.duration.Duration
 
-class NativeRuntime(resourcesCacheDir: File, executor: ExecutorService, libDir: File, path: Array[File], console: Console) {
+class NativeRuntime(libDir: File, path: Array[File], console: Console) {
 
   private val dataWeaveUtils = new DataWeaveUtils(console)
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
-
-
-  private val resourceDependencyAnnotationProcessor = ResourceDependencyAnnotationProcessor(
-    new File(resourcesCacheDir, "resources"),
-    (id: String, kind: String, artifact: Future[Seq[Artifact]]) => {
-      pathBasedResourceResolver.addContent(new LazyContentResolver(() => {
-        new CompositeContentResolver(Await.result(artifact, Duration.Inf)
-          .map((artifact) => {
-            ContentResolver(artifact.file)
-          }))
-      })
-      )
-    }, executor
-  )
-
-  private val annotationProcessors: Seq[(String, AnnotationProcessor)] = Seq(
-    (ResourceDependencyAnnotationProcessor.ANNOTATION_NAME.name, resourceDependencyAnnotationProcessor)
-  )
+  
   private val weaveScriptingEngine: DataWeaveScriptingEngine = {
     setupEnv()
-    DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration(parsingAnnotationProcessors = annotationProcessors))
+    DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration())
   }
 
   if (console.isDebugEnabled()) {

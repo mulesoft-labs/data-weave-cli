@@ -37,7 +37,6 @@ class CLIArgumentsParser(console: Console) {
     var output: Option[String] = None
     var profile: Boolean = false
     var eval: Boolean = false
-    var cleanCache: Boolean = false
 
     val inputs: mutable.Map[String, File] = mutable.Map()
     val properties: mutable.Map[String, String] = mutable.Map()
@@ -86,9 +85,6 @@ class CLIArgumentsParser(console: Console) {
           } else {
             return Right("Missing <wizard-name>")
           }
-        }
-        case "--clean-cache" => {
-          cleanCache = true
         }
         case "--new-spell" => {
           if (i + 1 < args.length) {
@@ -278,7 +274,7 @@ class CLIArgumentsParser(console: Console) {
     if (scriptToRun.isEmpty) {
       Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath> or --spell ")
     } else {
-      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun.get, properties.toMap, inputs.toMap, output)
+      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, profile, eval, scriptToRun.get, properties.toMap, inputs.toMap, output)
       Left(new RunWeaveCommand(config, console))
     }
   }

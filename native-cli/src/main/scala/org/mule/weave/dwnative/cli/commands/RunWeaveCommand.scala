@@ -4,8 +4,8 @@ import org.mule.weave.dwnative.NativeRuntime
 import org.mule.weave.dwnative.WeaveExecutionResult
 import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.dwnative.utils.DataWeaveUtils
-import org.mule.weave.dwnative.utils.DataWeaveUtils._
-import org.mule.weave.v2.io.FileHelper.deleteDirectory
+import org.mule.weave.dwnative.utils.DataWeaveUtils.DW_DEFAULT_INPUT_MIMETYPE_VAR
+import org.mule.weave.dwnative.utils.DataWeaveUtils.DW_DEFAULT_OUTPUT_MIMETYPE_VAR
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.values.StringValue
 import org.mule.weave.v2.module.DataFormatManager
@@ -19,7 +19,6 @@ import java.io.FileOutputStream
 import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
-import java.util.concurrent.Executors
 import scala.util.Try
 
 class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends WeaveCommand {
@@ -32,12 +31,7 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
 
   def exec(): Int = {
     val path: Array[File] = config.path.map(new File(_))
-    val cacheDirectory: File = weaveUtils.getCacheHome()
-    if (config.cleanCache) {
-      deleteDirectory(cacheDirectory)
-      cacheDirectory.mkdirs()
-    }
-    val nativeRuntime: NativeRuntime = new NativeRuntime(cacheDirectory, Executors.newCachedThreadPool(), weaveUtils.getLibPathHome(), path, console)
+    val nativeRuntime: NativeRuntime = new NativeRuntime(weaveUtils.getLibPathHome(), path, console)
     doRun(config, nativeRuntime)
   }
 
@@ -131,15 +125,12 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
     }
     exitCode
   }
-
 }
-
 
 case class WeaveRunnerConfig(path: Array[String],
                              profile: Boolean,
                              eval: Boolean,
-                             cleanCache: Boolean,
-                             scriptToRun: (NativeRuntime) => WeaveModule,
+                             scriptToRun: NativeRuntime => WeaveModule,
                              properties: Map[String, String],
                              inputs: Map[String, File],
                              outputPath: Option[String])
