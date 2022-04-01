@@ -26,7 +26,6 @@ class UsageCommand(console: Console) extends WeaveCommand {
       |
       |Arguments Detail:
       |
-      | --watch            | Keep the cli up and watch the used files for modifications and re execute
       | --path             | Path of jars or directories where weave files are being searched.
       | --prop or -p       | Property to be passed.
       | --input or -i      | Declares a new input.

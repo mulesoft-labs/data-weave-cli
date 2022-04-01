@@ -16,7 +16,6 @@ import org.mule.weave.dwnative.cli.commands.WeaveModule
 import org.mule.weave.dwnative.cli.commands.WeaveRunnerConfig
 import org.mule.weave.dwnative.cli.exceptions.ResourceNotFoundException
 import org.mule.weave.dwnative.cli.utils.SpellsUtils
-import org.mule.weave.dwnative.utils.FileUtils
 import org.mule.weave.v2.io.FileHelper
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.runtime.utils.AnsiColor.red
@@ -24,7 +23,6 @@ import org.mule.weave.v2.sdk.NameIdentifierHelper
 
 import java.io.File
 import scala.collection.mutable
-import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 
 class CLIArgumentsParser(console: Console) {
@@ -39,8 +37,6 @@ class CLIArgumentsParser(console: Console) {
     var output: Option[String] = None
     var profile: Boolean = false
     var eval: Boolean = false
-    var watch: Boolean = false
-    val filesToWatch: ArrayBuffer[File] = ArrayBuffer()
     var cleanCache: Boolean = false
 
     val inputs: mutable.Map[String, File] = mutable.Map()
@@ -93,9 +89,6 @@ class CLIArgumentsParser(console: Console) {
         }
         case "--clean-cache" => {
           cleanCache = true
-        }
-        case "--watch" => {
-          watch = true
         }
         case "--new-spell" => {
           if (i + 1 < args.length) {
@@ -202,8 +195,6 @@ class CLIArgumentsParser(console: Console) {
             if (!mainFile.isFile) {
               return Right(s"Unable find `${fileName}` in the spell: `${spell}`.")
             }
-            //Watch all files in the src folder
-            filesToWatch ++= FileUtils.tree(srcFolder)
             if (path.isEmpty) {
               path = srcFolder.getAbsolutePath
             } else {
@@ -221,7 +212,6 @@ class CLIArgumentsParser(console: Console) {
             val input: File = new File(args(i + 2))
             val inputName: String = args(i + 1)
             if (input.exists()) {
-              filesToWatch.+=(input)
               inputs.put(inputName, input)
             } else {
               return Right(red(s"Invalid input file $inputName ${input.getAbsolutePath}."))
@@ -260,7 +250,6 @@ class CLIArgumentsParser(console: Console) {
             i = i + 1
             val scriptFile = new File(args(i))
             if (scriptFile.exists()) {
-              filesToWatch.+=(scriptFile)
               scriptToRun = Some((_) => WeaveModule(fileToString(scriptFile), FileHelper.baseName(scriptFile)))
             } else {
               return Right(s"File `${args(i)}` was not found.")
@@ -289,7 +278,7 @@ class CLIArgumentsParser(console: Console) {
     if (scriptToRun.isEmpty) {
       Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath> or --spell ")
     } else {
-      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun.get, properties.toMap, inputs.toMap, output, filesToWatch, watch)
+      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, profile, eval, cleanCache, scriptToRun.get, properties.toMap, inputs.toMap, output)
       Left(new RunWeaveCommand(config, console))
     }
   }
