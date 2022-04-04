@@ -43,18 +43,6 @@ class CLIArgumentsParser(console: Console) {
 
     while (i < args.length) {
       args(i) match {
-        case "--path" => {
-          if (i + 1 < args.length) {
-            i = i + 1
-            if (path.isEmpty) {
-              path = args(i)
-            } else {
-              path = path + File.pathSeparator + args(i)
-            }
-          } else {
-            return Right("Missing path expression")
-          }
-        }
         case "-p" | "--property" => {
           if (i + 2 < args.length) {
             val propName: String = args(i + 1)
@@ -225,22 +213,6 @@ class CLIArgumentsParser(console: Console) {
             return Right("Missing <outputPath>")
           }
         }
-        case "--main" | "-m" => {
-          if (i + 1 < args.length) {
-            i = i + 1
-            val mainScriptName: String = args(i)
-            scriptToRun = Some((nativeRuntime) => {
-              val maybeString = nativeRuntime.getResourceContent(NameIdentifier(mainScriptName))
-              if (maybeString.isDefined) {
-                WeaveModule(maybeString.get, mainScriptName)
-              } else {
-                throw new ResourceNotFoundException(mainScriptName)
-              }
-            })
-          } else {
-            return Right("Missing main name identifier")
-          }
-        }
         case "-f" | "--file" => {
           if (i + 1 < args.length) {
             i = i + 1
@@ -272,7 +244,7 @@ class CLIArgumentsParser(console: Console) {
 
     val paths = if (path.isEmpty) Array[String]() else path.split(File.pathSeparatorChar)
     if (scriptToRun.isEmpty) {
-      Right(s"Missing <scriptContent> or -m <nameIdentifier> of -f <filePath> or --spell ")
+      Right(s"Missing <scriptContent> or -f <filePath> or --spell ")
     } else {
       val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, profile, eval, scriptToRun.get, properties.toMap, inputs.toMap, output)
       Left(new RunWeaveCommand(config, console))

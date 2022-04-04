@@ -22,11 +22,10 @@ class UsageCommand(console: Console) extends WeaveCommand {
       |
       |Usage:
       |
-      |dw [-p <weavePath>]? [-i <name> <path>]* [-v]? [-o <outputPath>]? [[-f <filePath>] | [-m <nameIdentifier>] | <scriptContent>]
+      |dw [-p <weavePath>]? [-i <name> <path>]* [-v]? [-o <outputPath>]? [[-f <filePath>] | <scriptContent>]
       |
       |Arguments Detail:
       |
-      | --path             | Path of jars or directories where weave files are being searched.
       | --prop or -p       | Property to be passed.
       | --input or -i      | Declares a new input.
       | --list-spells      | List all the available spells
@@ -36,7 +35,6 @@ class UsageCommand(console: Console) extends WeaveCommand {
       | --local-spell      | Executes a local folder spell
       | --new-spell        | Create a new spell
       | --output or -o     | Specifies output file for the transformation if not standard output will be used.
-      | --main or -m       | The full qualified name of the mapping to be execute.
       | --file or -f       | Path to the file
       | --eval             | Evaluates the script instead of writing it
       | --version          | The version of the CLI and Runtime

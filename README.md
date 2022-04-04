@@ -89,11 +89,9 @@ Arguments Detail:
  --spell | Runs a spell. Use the <spellName> or <wizard>/<spellName> for spells from a given wizard.
  --update-grimoires | Update all wizard grimoires
  --add-wizard    | Downloads wizard grimoire so that its spell are accessible
- --path or -p    | Path of jars or directories where weave files are being searched.
  --input or -i   | Declares a new input.
  --verbose or -v | Enable Verbose Mode.
  --output or -o  | Specifies output file for the transformation if not standard output will be used.
- --main or -m    | The full qualified name of the mapping to be execute.
  --file or -f     | Path to the file
  --eval          | Evaluates the script instead of writing it
  --version       | The version of the CLI and Runtime
@@ -159,22 +157,6 @@ Let's query users old enough to drink alcohol:
 * *DW_LIB_PATH* = The directory where libraries are going to be search by default. If not defined `${DW_HOME}/libs` will be used
 * *DW_DEFAULT_INPUT_MIMETYPE* = The default mimeType that is going to be used for the standard input. If not defined `application/json` will be used
 * *DW_DEFAULT_OUTPUT_MIMETYPE* = The default output mimeType that is going to be if not defined. If not defined `application/json` will be used
-
-
-### Using external DW Modules with --path
-
-This specifies the path where to search it will also search on the `DW_LIB_PATH` env directory path.
-
-```bash
-DIRECTORY=<pick a directory>
-
-cd $DIRECTORY
-
-echo '%dw 2.0
-fun addUnderscore(s: String): String = s ++ "_"' > utils.dwl
-
-dw --path $DIRECTORY 'output application/json import * from utils --- {underscored: addUnderscore("hello")}'
-```
 
 
 ## CURL + DW => Power API Playground
