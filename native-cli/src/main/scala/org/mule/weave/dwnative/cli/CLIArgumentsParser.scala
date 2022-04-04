@@ -14,7 +14,6 @@ import org.mule.weave.dwnative.cli.commands.VersionCommand
 import org.mule.weave.dwnative.cli.commands.WeaveCommand
 import org.mule.weave.dwnative.cli.commands.WeaveModule
 import org.mule.weave.dwnative.cli.commands.WeaveRunnerConfig
-import org.mule.weave.dwnative.cli.exceptions.ResourceNotFoundException
 import org.mule.weave.dwnative.cli.utils.SpellsUtils
 import org.mule.weave.v2.io.FileHelper
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
@@ -33,7 +32,7 @@ class CLIArgumentsParser(console: Console) {
     var i = 0
     //Use the current directory as the path
     var path: String = ""
-    var scriptToRun: Option[(NativeRuntime) => WeaveModule] = None
+    var scriptToRun: Option[NativeRuntime => WeaveModule] = None
     var output: Option[String] = None
     var profile: Boolean = false
     var eval: Boolean = false
@@ -43,7 +42,7 @@ class CLIArgumentsParser(console: Console) {
 
     while (i < args.length) {
       args(i) match {
-        case "-p" | "--property" => {
+        case "-p" | "--property" =>
           if (i + 2 < args.length) {
             val propName: String = args(i + 1)
             val propValue: String = args(i + 2)
@@ -52,20 +51,20 @@ class CLIArgumentsParser(console: Console) {
             return Right(red("Invalid amount of arguments on `Property`."))
           }
           i = i + 2
-        }
-        case "-v" | "--verbose" => {
+        
+        case "-v" | "--verbose" =>
           console.enableDebug()
-        }
-        case "-h" | "--help" => {
+        
+        case "-h" | "--help" =>
           return Left(new UsageCommand(console))
-        }
-        case "--version" => {
+        
+        case "--version" =>
           return Left(new VersionCommand(console))
-        }
-        case "--update-grimoires" => {
+        
+        case "--update-grimoires" =>
           return Left(new UpdateAllGrimoires(console))
-        }
-        case "--add-wizard" => {
+        
+        case "--add-wizard" =>
           if (i + 1 < args.length) {
             i = i + 1
             val wizardName = args(i)
@@ -73,8 +72,8 @@ class CLIArgumentsParser(console: Console) {
           } else {
             return Right("Missing <wizard-name>")
           }
-        }
-        case "--new-spell" => {
+        
+        case "--new-spell" =>
           if (i + 1 < args.length) {
             i = i + 1
             val spellName = args(i)
@@ -82,11 +81,11 @@ class CLIArgumentsParser(console: Console) {
           } else {
             return Right("Missing <spell-name>")
           }
-        }
-        case "--list-spells" => {
+        
+        case "--list-spells" =>
           return Left(new ListSpellsCommand(console))
-        }
-        case "-s" | "--spell" => {
+        
+        case "-s" | "--spell" =>
           if (i + 1 < args.length) {
             i = i + 1
             val spell = args(i)
@@ -133,27 +132,27 @@ class CLIArgumentsParser(console: Console) {
             }
 
             if (!spellFolder.exists()) {
-              return Right(s"Unable find ${spellName} in Wise `${wizardName}'s` Grimoire.")
+              return Right(s"Unable find $spellName in Wise `$wizardName's` Grimoire.")
             }
 
             val srcFolder = new File(spellFolder, "src")
             val mainFile = new File(srcFolder, fileName)
             if (!mainFile.isFile) {
-              return Right(s"Unable find `${fileName}` in the spell: `${spellName}` inside Wise `${wizardName}'s` Grimoire.")
+              return Right(s"Unable find `$fileName` in the spell: `$spellName` inside Wise `$wizardName's` Grimoire.")
             }
             if (path.isEmpty) {
               path = srcFolder.getAbsolutePath
             } else {
               path = path + File.pathSeparator + srcFolder.getAbsolutePath
             }
-            scriptToRun = Some((_) => {
+            scriptToRun = Some(_ => {
               WeaveModule(fileToString(mainFile), nameIdentifier.toString())
             })
           } else {
             return Right("Missing <spellName>")
           }
-        }
-        case "--local-spell" => {
+        
+        case "--local-spell" =>
           if (i + 1 < args.length) {
             i = i + 1
             console.info("Running local spell")
@@ -171,27 +170,27 @@ class CLIArgumentsParser(console: Console) {
 
             val spellFolder: File = new File(spellName)
             if (!spellFolder.exists()) {
-              return Right(s"Unable find `${spellName}` folder.")
+              return Right(s"Unable find `$spellName` folder.")
             }
             val srcFolder = new File(spellFolder, "src")
 
             val mainFile = new File(srcFolder, fileName)
             if (!mainFile.isFile) {
-              return Right(s"Unable find `${fileName}` in the spell: `${spell}`.")
+              return Right(s"Unable find `$fileName` in the spell: `$spell`.")
             }
             if (path.isEmpty) {
               path = srcFolder.getAbsolutePath
             } else {
               path = path + File.pathSeparator + srcFolder.getAbsolutePath
             }
-            scriptToRun = Some((_) => {
+            scriptToRun = Some(_ => {
               WeaveModule(fileToString(mainFile), nameIdentifier.toString())
             })
           } else {
             return Right("Missing <spell-folder>")
           }
-        }
-        case "-i" | "--input" => {
+        
+        case "-i" | "--input" =>
           if (i + 2 < args.length) {
             val input: File = new File(args(i + 2))
             val inputName: String = args(i + 1)
@@ -204,40 +203,39 @@ class CLIArgumentsParser(console: Console) {
             return Right(red("Invalid amount of arguments on input."))
           }
           i = i + 2
-        }
-        case "-o" | "--output" => {
+        
+        case "-o" | "--output" =>
           if (i + 1 < args.length) {
             i = i + 1
             output = Some(args(i))
           } else {
             return Right("Missing <outputPath>")
           }
-        }
-        case "-f" | "--file" => {
+        
+        case "-f" | "--file" =>
           if (i + 1 < args.length) {
             i = i + 1
             val scriptFile = new File(args(i))
             if (scriptFile.exists()) {
-              scriptToRun = Some((_) => WeaveModule(fileToString(scriptFile), FileHelper.baseName(scriptFile)))
+              scriptToRun = Some(_ => WeaveModule(fileToString(scriptFile), FileHelper.baseName(scriptFile)))
             } else {
               return Right(s"File `${args(i)}` was not found.")
             }
           } else {
             return Right("Missing script file path.")
           }
-        }
-        case "--profile" => {
+        
+        case "--profile" =>
           profile = true
-        }
-        case "--eval" => {
+        
+        case "--eval" =>
           eval = true
-        }
-        case script if (i + 1 == args.length) => {
-          scriptToRun = Some((_) => WeaveModule(script, NameIdentifier.ANONYMOUS_NAME.toString()))
-        }
-        case arg => {
-          return Right(s"Invalid argument ${arg}")
-        }
+        
+        case script if i + 1 == args.length =>
+          scriptToRun = Some(_ => WeaveModule(script, NameIdentifier.ANONYMOUS_NAME.toString()))
+
+        case arg =>
+          return Right(s"Invalid argument $arg")
       }
       i = i + 1
     }
