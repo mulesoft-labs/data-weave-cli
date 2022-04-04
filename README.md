@@ -59,12 +59,14 @@ Once it finishes you will find the `dw` binary in `native-cli/build/graal/dw`
 
 ## How to use it
 
-If the directory containing the `dw` executable is in your **PATH**, you can run `dw` from anywhere. If it is not, go to the `bin` directory referenced in the installation instructions and run `dw` from there.
+If the directory containing the `dw` executable is in your **PATH**, you can run `dw` from anywhere. 
+
+If it is not, go to the `bin` directory referenced in the installation instructions and run `dw` from there.
  
 
-### Show documentation
+### Show Documentation
 
-`dw`
+`dw --help`
 
 ```bash
 .........................................................................
