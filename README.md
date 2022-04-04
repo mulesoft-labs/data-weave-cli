@@ -1,14 +1,13 @@
 # DataWeave CLI
 
-**DataWeave CLI** allows executing queries and generate data directly from the command line.
+**DataWeave CLI** is a command-line interface which enables you `querying`, `filtering`, and `mapping` structured data from different data sources like `JSON`, `XML`, `CSV`, `YML` to another data format.
 
-**DataWeave CLI is** compiled with [Graal AOT](https://www.graalvm.org/docs/reference-manual/aot-compilation/) for fast bootstrap so download the one for your target OS.
+For more info about `DataWeave language `visit the [documenation site](https://docs.mulesoft.com/mule-runtime/latest/dataweave)
 
-## What is included?
+## What is Included?
+The binary distribution already ships with a set of modules and data format that makes this useful for very interesting broad of use cases.
 
-The binary already ships with a set of modules and data-format that makes this useful for very interesting broad of use cases.
-
-### Included Module
+### Included Modules
 - [DataWeave Standard Library](https://github.com/mulesoft/data-weave/tree/master/wlang)
 
 ### Supported Data Formats
@@ -26,17 +25,16 @@ The binary already ships with a set of modules and data-format that makes this u
 | `text/plain`                        |    `text`    |                        [Text Plain Format](https://docs.mulesoft.com/dataweave/latest/dataweave-formats-text) |
 | `text/x-java-properties`            | `properties` |               [Text Java Properties](https://docs.mulesoft.com/dataweave/latest/dataweave-formats-properties) |
 
-## How to install it? 
+## Installation 
 
-### Using Homebrew:
+### Homebrew (Mac)
 
-```
+```bash
 brew tap mulesoft-labs/data-weave
 brew install dw
 ```
 
-### Manually
-
+### Manual Installation
 1. Download the zip 
    1. [Mac](https://github.com/mulesoft-labs/data-weave-cli/releases/download/v1.0.16/dw-1.0.16-macOS)
    2. [Linux](https://github.com/mulesoft-labs/data-weave-cli/releases/download/v1.0.16/dw-1.0.16-Linux)
@@ -44,11 +42,10 @@ brew install dw
 2. Unzip the file on your `<user.home>/.dw`
 3. Add `<user.home>/.dw/bin` to your **PATH**
 
-### From code
+### Build and Install
+Execute the gradle task `nativeImage`
 
-Execute the gradle task nativeImage
-
-```
+```bash
 ./gradlew native-cli:nativeImage
 ```
 
@@ -56,17 +53,16 @@ It takes several minutes so good time to take and refill your mate.
 
 Once it finishes you will find the `dw` binary in `native-cli/build/graal/dw`
 
+## How to Use It
 
-## How to use it
-
-If the directory containing the `dw` executable is in your **PATH**, you can run `dw` from anywhere. 
+If the directory containing the `dw` executable is in your _PATH_, you can run `dw` from anywhere. 
 
 If it is not, go to the `bin` directory referenced in the installation instructions and run `dw` from there.
- 
 
-### Show Documentation
-
-`dw --help`
+The following example shows the DataWeave CLI documentation 
+```bash
+dw --help
+```
 
 ```bash
 .........................................................................
@@ -109,9 +105,9 @@ Arguments Detail:
  https://docs.mulesoft.com/dataweave/latest/
 ```
 
-### Query Content From a File
+### Querying the Content From a File
 
-Input file `users.json`
+Giving the following input file `users.json`
 
 ```json
 [
@@ -137,51 +133,71 @@ Input file `users.json`
   }
 ]
 ```
- 
+
 Let's query users old enough to drink alcohol:
 
-`dw -i payload <fullpathToUsers.json> "output application/json --- payload filter (item) -> item.age > 17"`
-
+```bash
+dw -i payload <fullpathToUsers.json> "output application/json --- payload filter (item) -> item.age > 17"
+```
+####Output
+```json
+[
+  {
+    "name": "User1",
+    "age": 19
+  },
+  {
+    "name": "User2",
+    "age": 18
+  }
+]
+```
 
 ### Query Content From Standard Input
 
-`cat <fullpathToUser.json> | dw "output application/json --- payload filter (item) -> item.age > 17"`
+```bash
+cat <fullpathToUser.json> | dw "output application/json --- payload filter (item) -> item.age > 17"
+```
 
 
 ### Redirecting the Output to a File
 
-`dw "output application/xml --- users: {( 1 to 100 map (item) -> {user: "User" ++ item} )}" >> out.xml`
+```bash 
+dw "output application/xml --- users: {( 1 to 100 map (item) -> {user: "User" ++ item} )}" >> out.xml
+```
 
 ### DataWeave CLI Environment Variables
 
-* *DW_HOME* = The directory where the home will be found if not defined `~/.dw` will be used
-* *DW_DEFAULT_INPUT_MIMETYPE* = The default mimeType that is going to be used for the standard input. If not defined `application/json` will be used
-* *DW_DEFAULT_OUTPUT_MIMETYPE* = The default output mimeType that is going to be if not defined. If not defined `application/json` will be used
+| Environment Variable         | Description                                                                                                             |
+|------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| `DW_HOME`                    | The directory where the home will be found if not defined `~/.dw` will be used.                                         |
+| `DW_DEFAULT_INPUT_MIMETYPE`  | The default `mimeType` that is going to be used for the standard input. If not defined `application/json` will be used. |
+| `DW_DEFAULT_OUTPUT_MIMETYPE` | The default output `mimeType` that is going to be if not defined. If not defined `application/json` will be used.       |
 
-## CURL + DataWeave CLI => Power API Playground
+## Power API Playground
 
-An interesting use case for the DataWeave CLI is to combine it with [curl](https://curl.haxx.se/)  
+An interesting use case for the DataWeave CLI is to combine it with [curl](https://curl.haxx.se/)
 
-
-### Example Query GitHub Commits
+### Query GitHub Commits
 
 We can use the GitHub API to query commits of a repo.
 
 We can easily get the first commit by doing:
 
-`curl "https://api.github.com/repos/mulesoft/mule/commits?per_page=5" | dw "payload[0]"`
+```bash
+curl "https://api.github.com/repos/mulesoft/mule/commits?per_page=5" | dw "payload[0]"
+```
 
 or we can get the message by doing:
 
-`curl "https://api.github.com/repos/mulesoft/mule/commits?per_page=5" | dw "{message: payload[0].commit.message}"` 
-
+```bash 
+curl "https://api.github.com/repos/mulesoft/mule/commits?per_page=5" | dw "{message: payload[0].commit.message}"
+``` 
 
 ### HTTP POST Data Generated by DataWeave
 
 This example will create a very big csv and stream it to the HTTP server on localhost.
 
-`dw "output application/csv --- (1 to 10000000000000000000000) map (item) -> {name: 'User \$(item)'}" | curl -X POST  -T "/dev/stdin" http://localhost:8081/`
-
-
-## Documentation
-For more info about the language see the [docs site](https://docs.mulesoft.com/mule-runtime/latest/dataweave)
+```bash
+dw "output application/csv --- (1 to 10000000000000000000000) map (item) -> {name: 'User \$(item)'}" | curl -X POST  -T "/dev/stdin" http://localhost:8081/
+```
