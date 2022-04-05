@@ -139,7 +139,9 @@ Let's query users old enough to drink alcohol:
 ```bash
 dw -i payload <fullpathToUsers.json> "output application/json --- payload filter (item) -> item.age > 17"
 ```
-####Output
+
+#### Output
+
 ```json
 [
   {
