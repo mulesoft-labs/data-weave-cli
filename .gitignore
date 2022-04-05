@@ -1,7 +1,19 @@
+# Gradle files
 build/
 out/
-.idea
+.gradle
+
+# Eclipse files
+.classpath
+.project
+.settings
+/workspace/
+
+# IntelliJ Idea files
 *.iml
 *.ipr
-.gradle
+*.iws
+*.idea
+
+# Mac
 .DS_Store
