@@ -185,7 +185,7 @@ An interesting use case for the DataWeave CLI is to combine it with [curl](https
 
 ### Query a GET Response
 
-We can use the GitHub API to query commits of a repo.
+We can use the GitHub API to query commits of a repository.
 
 We can easily get the first commit by doing:
 
@@ -199,10 +199,24 @@ or we can get the message by doing:
 curl "https://api.github.com/repos/mulesoft/mule/commits?per_page=5" | dw "{message: payload[0].commit.message}"
 ``` 
 
-### Generate a POST Body
+### Generate a Request with Body
+This example uses the [jsonplaceholder API](https://jsonplaceholder.typicode.com/) to update a resource.
 
-This example will create a very big csv and stream it to the HTTP server on localhost.
+Steps:
+1. Search the post resource with the `id = 1`.
+2. Use DataWeave CLI to create a JSON output changing the post title `My new title`.
+3. Finally, update the post resource.
 
 ```bash
-dw "output application/csv --- (1 to 10000000000000000000000) map (item) -> {name: 'User \$(item)'}" | curl -X POST  -T "/dev/stdin" http://localhost:8081/
+curl https://jsonplaceholder.typicode.com/posts/1 | dw "output application/json --- { id: payload.id, title: 'My new title', body: payload.body, userId: payload.userId }" | curl -X PUT -H "Content-type: application/json; charset=UTF-8" -T "/dev/stdin" https://jsonplaceholder.typicode.com/posts/1 -v
+```
+
+#### Output
+```json
+{
+  "id": 1,
+  "title": "My new title",
+  "body": "quia et suscipit\nsuscipit recusandae consequuntur expedita et cum\nreprehenderit molestiae ut ut quas totam\nnostrum rerum est autem sunt rem eveniet architecto",
+  "userId": 1
+}
 ```
