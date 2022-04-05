@@ -2,7 +2,7 @@
 
 **DataWeave CLI** is a command-line interface which enables you `querying`, `filtering`, and `mapping` structured data from different data sources like `JSON`, `XML`, `CSV`, `YML` to another data format.
 
-For more info about `DataWeave language `visit the [documenation site](https://docs.mulesoft.com/mule-runtime/latest/dataweave)
+For more info about `DataWeave language` visit the [documenation site](https://docs.mulesoft.com/mule-runtime/latest/dataweave)
 
 ## What is Included?
 The binary distribution already ships with a set of modules and data format that makes this useful for very interesting broad of use cases.
