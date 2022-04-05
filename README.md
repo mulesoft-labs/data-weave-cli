@@ -105,7 +105,7 @@ Arguments Detail:
  https://docs.mulesoft.com/dataweave/latest/
 ```
 
-### Querying the Content From a File
+### Querying Content From a File
 
 Giving the following input file `users.json`
 
