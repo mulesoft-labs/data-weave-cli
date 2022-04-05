@@ -5,7 +5,7 @@
 For more info about the `DataWeave` language visit the [documenation site](https://docs.mulesoft.com/mule-runtime/latest/dataweave)
 
 ## What is Included?
-The binary distribution already ships with a set of modules and data format that makes this useful for very interesting broad of use cases.
+The binary distribution already ships with a set of modules and data formats that makes this useful for a very interesting and broad set of use cases.
 
 ### Included Modules
 - [DataWeave Standard Library](https://github.com/mulesoft/data-weave/tree/master/wlang)
