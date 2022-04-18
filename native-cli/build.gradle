@@ -33,6 +33,7 @@ dependencies {
         exclude group: 'org.slf4j'
     }
     compile group: 'org.mule.weave', name: 'ndjson-module', version: weaveVersion
+    compile group: 'commons-cli', name: 'commons-cli', version: '1.4'
     testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
 }
 

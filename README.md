@@ -65,6 +65,14 @@ dw --help
 ```
 
 ```bash
+usage: dw [--eval] [-f <file-path>] [--help] [-i <input-name input-path>]
+       [-o <output-path>] [-p <property-name property-value>]
+       [--privileges <privileges>] [--untrusted-code] [-v] [--version]
+       [--add-wizard <wizard-name>] [--list-spells] [--local-spell
+       <spell-folder>] [--new-spell <spell-name>] [-s <spell-name>]
+       [--update-grimoires]
+
+
 .........................................................................
 .%%%%%....%%%%...%%%%%%...%%%%...%%...%%..%%%%%%...%%%%...%%..%%..%%%%%%.
 .%%..%%..%%..%%....%%....%%..%%..%%...%%..%%......%%..%%..%%..%%..%%.....
@@ -73,32 +81,51 @@ dw --help
 .%%%%%...%%..%%....%%....%%..%%...%%.%%...%%%%%%..%%..%%....%%....%%%%%%.
 .........................................................................
 
-
-Usage:
-
-dw [-p <weavePath>]? [-i <name> <path>]* [-v]? [-o <outputPath>]? [[-f <filePath>] | <scriptContent>]
-
-Arguments Detail:
-
- --prop or -p       | Property to be passed.
- --input or -i      | Declares a new input.
- --output or -o     | Specifies output file for the transformation if not standard output will be used.
- --file or -f       | Path to the file.
- --eval             | Evaluates the script instead of writing it.
- --version          | The version of the CLI and Runtime.
- --verbose or -v    | Enable Verbose Mode.
- --list-spells      | [Experimental] List all the available spells.
- --spell or -s      | [Experimental] Runs a spell. Use the <spellName> or <wizard>/<spellName> for spells from a given wizard.
- --local-spell      | [Experimental] Executes a local folder spell.
- --new-spell        | [Experimental] Create a new spell.
- --add-wizard       | [Experimental] Downloads wizard grimoire so that its spell are accessible.
- --remove-wizard    | [Experimental] Remove a wizard from your local repository.
- --update-grimoires | [Experimental] Update all wizard grimoires.
+    --eval                                      Evaluates the script
+                                                instead of writing it.
+ -f,--file <file-path>                          Specifies output file for
+                                                the transformation if not
+                                                standard output will be
+                                                used.
+    --help                                      Shows the help.
+ -i,--input <input-name input-path>             Declares a new input.
+ -o,--output <output-path>                      Specifies output file for
+                                                the transformation if not
+                                                standard output will be
+                                                used.
+ -p,--property <property-name property-value>   Property to be passed.
+    --privileges <privileges>                   A comma separated set of
+                                                the privileges for the
+                                                script execution.
+    --untrusted-code                            Run the script as
+                                                untrusted, which means
+                                                that the script has no
+                                                privileges.
+ -v,--verbose                                   Enable verbose mode.
+    --version                                   The version of the CLI and
+                                                Runtime.
+    --add-wizard <wizard-name>                  [Experimental] Downloads
+                                                wizard grimoire so that
+                                                its spell are accessible.
+    --list-spells                               [Experimental] List all
+                                                the available spells.
+    --local-spell <spell-folder>                [Experimental] Executes a
+                                                local folder spell.
+    --new-spell <spell-name>                    [Experimental] Create a
+                                                new spell.
+ -s,--spell <spell-name>                        [Experimental] Runs a
+                                                spell. Use the <spellName>
+                                                or <wizard>/<spellName>
+                                                for spells from a given
+                                                wizard.
+    --update-grimoires                          [Experimental] Update all
+                                                wizard grimoires.
 
 
  Example:
 
- dw -i payload <fullpathToUser.json> "output application/json --- payload filter (item) -> item.age > 17"
+ dw -i payload <fullPathToUser.json> "output application/json --- payload
+filter (item) -> item.age > 17"
 
  Documentation reference:
 

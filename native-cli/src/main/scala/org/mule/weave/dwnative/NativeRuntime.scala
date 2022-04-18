@@ -12,11 +12,14 @@ import org.mule.weave.v2.io.service.CustomWorkingDirectoryService
 import org.mule.weave.v2.io.service.WorkingDirectoryService
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
+import org.mule.weave.v2.model.service.DefaultSecurityManagerService
 import org.mule.weave.v2.model.service.LoggingService
 import org.mule.weave.v2.model.service.ProtocolUrlSourceProviderResolverService
 import org.mule.weave.v2.model.service.ReadFunctionProtocolHandler
+import org.mule.weave.v2.model.service.SecurityManagerService
 import org.mule.weave.v2.model.service.UrlProtocolHandler
 import org.mule.weave.v2.model.service.UrlSourceProviderResolverService
+import org.mule.weave.v2.model.service.WeaveRuntimePrivilege
 import org.mule.weave.v2.model.values.BinaryValue
 import org.mule.weave.v2.module.reader.AutoPersistedOutputStream
 import org.mule.weave.v2.module.reader.SourceProvider
@@ -75,85 +78,49 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
     pathBasedResourceResolver.resolve(ni).map(_.content())
   }
 
-  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false): WeaveExecutionResult = {
+  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", maybePrivileges: Option[Seq[String]] = None): WeaveExecutionResult = {
     try {
-      val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), defaultOutputMimeType, profile)
-      val serviceManager: ServiceManager = createServiceManager()
-      val result: DataWeaveResult =
-        if (profile) {
-          time(() => dataWeaveScript.write(inputs, serviceManager, Option(out)), "Execution")
-        } else {
-          dataWeaveScript.write(inputs, serviceManager, Option(out))
-        }
+      val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), defaultOutputMimeType)
+      val serviceManager: ServiceManager = createServiceManager(maybePrivileges)
+      val result: DataWeaveResult = dataWeaveScript.write(inputs, serviceManager, Option(out))
       WeaveSuccessResult(out, result.getCharset().name())
     } catch {
-      case cr: CompilationException => {
+      case cr: CompilationException =>
         WeaveFailureResult(cr.getMessage())
-      }
-      case le: LocatableException => {
+      case le: LocatableException =>
         WeaveFailureResult(le.getMessage() + " at:\n" + le.location.locationString)
-      }
-      case se: ScriptingEngineSetupException => {
+      case se: ScriptingEngineSetupException =>
         WeaveFailureResult(se.getMessage)
-      }
-      case le: Exception => {
+      case le: Exception =>
         val writer = new StringWriter()
         le.printStackTrace(new PrintWriter(writer))
         WeaveFailureResult("Internal error : " + le.getClass.getName + " : " + le.getMessage + "\n" + writer.toString)
-      }
-    } finally {
-      if (profile) {
-        weaveScriptingEngine.disableProfileParsing()
-      }
     }
   }
 
-  private def compileScript(script: String, inputs: ScriptingBindings, nameIdentifier: NameIdentifier, defaultOutputMimeType: String, profile: Boolean) = {
-    if (profile) {
-      weaveScriptingEngine.enableProfileParsing()
-    }
-    if (profile) {
-      time(() => {
-        weaveScriptingEngine.compile(script, nameIdentifier, inputs.entries().map((wi) => new InputType(wi, None)).toArray, defaultOutputMimeType)
-      }, s"Compile ${nameIdentifier}")
-    } else {
-      weaveScriptingEngine.compile(script, nameIdentifier, inputs.entries().map((wi) => new InputType(wi, None)).toArray, defaultOutputMimeType)
-    }
+  private def compileScript(script: String, inputs: ScriptingBindings, nameIdentifier: NameIdentifier, defaultOutputMimeType: String) = {
+    weaveScriptingEngine.compile(script, nameIdentifier, inputs.entries().map(wi => new InputType(wi, None)).toArray, defaultOutputMimeType)
   }
-
-
-  private def createServiceManager() = {
-    val serviceManager = ServiceManager(
-      new ConsoleLogger(console),
-      Map(
-        classOf[UrlSourceProviderResolverService] -> new ProtocolUrlSourceProviderResolverService(Seq(UrlProtocolHandler, WeavePathProtocolHandler(pathBasedResourceResolver))),
-        classOf[WorkingDirectoryService] -> new CustomWorkingDirectoryService(dataWeaveUtils.getWorkingHome(), true)
-      )
+  
+  private def createServiceManager(maybePrivileges: Option[Seq[String]] = None): ServiceManager = {
+    
+    var customServices: Map[Class[_], _] = Map(
+      classOf[UrlSourceProviderResolverService] -> new ProtocolUrlSourceProviderResolverService(Seq(UrlProtocolHandler, WeavePathProtocolHandler(pathBasedResourceResolver))),
+      classOf[WorkingDirectoryService] -> new CustomWorkingDirectoryService(dataWeaveUtils.getWorkingHome(), true)
     )
-    serviceManager
-  }
 
-  def eval(script: String, inputs: ScriptingBindings, nameIdentifier: String, profile: Boolean): ExecuteResult = {
-    try {
-      val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), "application/dw", profile)
-      val serviceManager: ServiceManager = createServiceManager()
-      if (profile) {
-        time(() => dataWeaveScript.exec(inputs, serviceManager), "Execution")
-      } else {
-        dataWeaveScript.exec(inputs, serviceManager)
-      }
-    } finally {
-      if (profile) {
-        weaveScriptingEngine.disableProfileParsing()
-      }
+    if (maybePrivileges.isDefined) {
+      val privileges = maybePrivileges.get
+      val weaveRuntimePrivileges = privileges.map(WeaveRuntimePrivilege(_)).toArray
+      customServices = customServices + (classOf[SecurityManagerService] -> new DefaultSecurityManagerService(weaveRuntimePrivileges)) 
     }
+    ServiceManager(new ConsoleLogger(console), customServices)
   }
 
-  def time[T](callback: () => T, label: String): T = {
-    val start = System.currentTimeMillis()
-    val result = callback()
-    println(s"Time taken by ${label}: ${(System.currentTimeMillis() - start)}ms")
-    result
+  def eval(script: String, inputs: ScriptingBindings, nameIdentifier: String, maybePrivileges: Option[Seq[String]] = None): ExecuteResult = {
+    val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), "application/dw")
+    val serviceManager: ServiceManager = createServiceManager(maybePrivileges)
+    dataWeaveScript.exec(inputs, serviceManager)
   }
 }
 
