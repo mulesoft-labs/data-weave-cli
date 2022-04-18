@@ -59,7 +59,7 @@ subprojects {
     }
 
     repositories {
-//        mavenLocal()
+        mavenLocal()
         mavenCentral()
         maven {
             name "mule-releases"

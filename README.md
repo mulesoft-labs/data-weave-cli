@@ -92,7 +92,6 @@ Arguments Detail:
  --local-spell      | [Experimental] Executes a local folder spell.
  --new-spell        | [Experimental] Create a new spell.
  --add-wizard       | [Experimental] Downloads wizard grimoire so that its spell are accessible.
- --remove-wizard    | [Experimental] Remove a wizard from your local repository.
  --update-grimoires | [Experimental] Update all wizard grimoires.
 
 

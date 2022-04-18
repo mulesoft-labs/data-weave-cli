@@ -12,11 +12,14 @@ import org.mule.weave.v2.io.service.CustomWorkingDirectoryService
 import org.mule.weave.v2.io.service.WorkingDirectoryService
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
+import org.mule.weave.v2.model.service.DefaultSecurityManagerService
 import org.mule.weave.v2.model.service.LoggingService
 import org.mule.weave.v2.model.service.ProtocolUrlSourceProviderResolverService
 import org.mule.weave.v2.model.service.ReadFunctionProtocolHandler
+import org.mule.weave.v2.model.service.SecurityManagerService
 import org.mule.weave.v2.model.service.UrlProtocolHandler
 import org.mule.weave.v2.model.service.UrlSourceProviderResolverService
+import org.mule.weave.v2.model.service.WeaveRuntimePrivilege
 import org.mule.weave.v2.model.values.BinaryValue
 import org.mule.weave.v2.module.reader.AutoPersistedOutputStream
 import org.mule.weave.v2.module.reader.SourceProvider
@@ -75,10 +78,10 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
     pathBasedResourceResolver.resolve(ni).map(_.content())
   }
 
-  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false): WeaveExecutionResult = {
+  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", profile: Boolean = false, maybePrivileges: Option[Seq[String]] = None): WeaveExecutionResult = {
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), defaultOutputMimeType, profile)
-      val serviceManager: ServiceManager = createServiceManager()
+      val serviceManager: ServiceManager = createServiceManager(maybePrivileges)
       val result: DataWeaveResult =
         if (profile) {
           time(() => dataWeaveScript.write(inputs, serviceManager, Option(out)), "Execution")
@@ -120,23 +123,26 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
       weaveScriptingEngine.compile(script, nameIdentifier, inputs.entries().map((wi) => new InputType(wi, None)).toArray, defaultOutputMimeType)
     }
   }
-
-
-  private def createServiceManager() = {
-    val serviceManager = ServiceManager(
-      new ConsoleLogger(console),
-      Map(
-        classOf[UrlSourceProviderResolverService] -> new ProtocolUrlSourceProviderResolverService(Seq(UrlProtocolHandler, WeavePathProtocolHandler(pathBasedResourceResolver))),
-        classOf[WorkingDirectoryService] -> new CustomWorkingDirectoryService(dataWeaveUtils.getWorkingHome(), true)
-      )
+  
+  private def createServiceManager(maybePrivileges: Option[Seq[String]] = None): ServiceManager = {
+    
+    var customServices: Map[Class[_], _] = Map(
+      classOf[UrlSourceProviderResolverService] -> new ProtocolUrlSourceProviderResolverService(Seq(UrlProtocolHandler, WeavePathProtocolHandler(pathBasedResourceResolver))),
+      classOf[WorkingDirectoryService] -> new CustomWorkingDirectoryService(dataWeaveUtils.getWorkingHome(), true)
     )
-    serviceManager
+
+    if (maybePrivileges.isDefined) {
+      val privileges = maybePrivileges.get
+      val weaveRuntimePrivileges = privileges.map(WeaveRuntimePrivilege(_)).toArray
+      customServices = customServices + (classOf[SecurityManagerService] -> new DefaultSecurityManagerService(weaveRuntimePrivileges)) 
+    }
+    ServiceManager(new ConsoleLogger(console), customServices)
   }
 
-  def eval(script: String, inputs: ScriptingBindings, nameIdentifier: String, profile: Boolean): ExecuteResult = {
+  def eval(script: String, inputs: ScriptingBindings, nameIdentifier: String, profile: Boolean, maybePrivileges: Option[Seq[String]] = None): ExecuteResult = {
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), "application/dw", profile)
-      val serviceManager: ServiceManager = createServiceManager()
+      val serviceManager: ServiceManager = createServiceManager(maybePrivileges)
       if (profile) {
         time(() => dataWeaveScript.exec(inputs, serviceManager), "Execution")
       } else {

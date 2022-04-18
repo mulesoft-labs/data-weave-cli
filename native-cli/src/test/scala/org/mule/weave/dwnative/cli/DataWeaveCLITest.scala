@@ -19,7 +19,6 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     result.trim shouldBe "1"
   }
 
-
   "should take into account the env variable for default output" in {
     val console = new TestConsole(System.in, System.out, Map())
     new DataWeaveCLIRunner().run(Array("--list-spells"), console)
@@ -37,8 +36,6 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
         |<root>Mariano</root>""".stripMargin
     result.trim shouldBe expected
   }
-
-
 
   "should be able to run a local spell" in {
     val stream = new ByteArrayOutputStream()
@@ -117,5 +114,46 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     result.trim shouldBe "1,2,3"
   }
 
+  "should work running a script with requires privileges" in {
+    val stream = new ByteArrayOutputStream()
+    val script = """import props from dw::Runtime output application/json --- {isEmpty: isEmpty(props())}""".stripMargin
+    val testConsole = new TestConsole(System.in, stream)
+    val exitCode = new DataWeaveCLIRunner().run(Array(script), testConsole)
+    exitCode shouldBe 0
+    val source = Source.fromBytes(stream.toByteArray, "UTF-8")
+    val result = source.mkString.trim
+    source.close()
+    val expected = """
+               |{
+               |  "isEmpty": false
+               |}""".stripMargin.trim
+    result shouldBe expected
+  }
+
+  "should running a script with the requires privileges" in {
+    val stream = new ByteArrayOutputStream()
+    val script = """import props from dw::Runtime output application/json --- {isEmpty: isEmpty(props())}""".stripMargin
+    val testConsole = new TestConsole(System.in, stream)
+    val exitCode = new DataWeaveCLIRunner().run(Array("--privileges", "fs::Read,Properties", script), testConsole)
+    exitCode shouldBe 0
+    val source = Source.fromBytes(stream.toByteArray, "UTF-8")
+    val result = source.mkString.trim
+    source.close()
+    val expected = """
+                     |{
+                     |  "isEmpty": false
+                     |}""".stripMargin.trim
+    result shouldBe expected
+  }
+  
+  "should fail running a script with requires privileges in untrusted mode" in {
+    val stream = new ByteArrayOutputStream()
+    val script = """import props from dw::Runtime output application/json --- {isEmpty: isEmpty(props())}""".stripMargin
+    val testConsole = new TestConsole(System.in, stream)
+    val exitCode = new DataWeaveCLIRunner().run(Array("--untrusted-code", script), testConsole)
+    exitCode shouldBe -1
+    val maybeError = testConsole.errorMessages.find(msg => msg.contains("The given required privilege: `Properties` was not being granted for this execution."))
+    maybeError.isEmpty shouldBe false
+  }
 
 }

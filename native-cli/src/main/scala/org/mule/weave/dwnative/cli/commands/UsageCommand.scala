@@ -33,12 +33,13 @@ class UsageCommand(console: Console) extends WeaveCommand {
       | --eval             | Evaluates the script instead of writing it.
       | --version          | The version of the CLI and Runtime.
       | --verbose or -v    | Enable Verbose Mode.
+      | --untrusted-code    | Enable Verbose Mode.
+      | --privileges       | "A comma separated set of the privileges for the script execution..
       | --list-spells      | [Experimental] List all the available spells.
       | --spell or -s      | [Experimental] Runs a spell. Use the <spellName> or <wizard>/<spellName> for spells from a given wizard.
       | --local-spell      | [Experimental] Executes a local folder spell.
       | --new-spell        | [Experimental] Create a new spell.
       | --add-wizard       | [Experimental] Downloads wizard grimoire so that its spell are accessible.
-      | --remove-wizard    | [Experimental] Remove a wizard from your local repository.
       | --update-grimoires | [Experimental] Update all wizard grimoires.
       |
       |
