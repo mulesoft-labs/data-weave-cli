@@ -23,7 +23,7 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     val console = new TestConsole(System.in, System.out, Map())
     new DataWeaveCLIRunner().run(Array("--list-spells"), console)
 
-    console.fatalMessages.isEmpty shouldBe (true)
+    console.fatalMessages.isEmpty shouldBe true
   }
 
   "should work when listing all the spells" in {
@@ -40,22 +40,22 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
   "should be able to run a local spell" in {
     val stream = new ByteArrayOutputStream()
     val localSpell: File = TestUtils.getMyLocalSpell
-    val i = new DataWeaveCLIRunner().run(Array("--local-spell", localSpell.getAbsolutePath), new TestConsole(System.in, stream))
+    val exitCode = new DataWeaveCLIRunner().run(Array("--local-spell", localSpell.getAbsolutePath), new TestConsole(System.in, stream))
+    exitCode shouldBe 0
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result: String = source.mkString
     result.trim shouldBe "\"DW Rules\""
   }
-
 
   "should be able to run a local spell with a library" in {
     val stream = new ByteArrayOutputStream()
     val localSpell: File = TestUtils.getMyLocalSpellWithLib
-    val i = new DataWeaveCLIRunner().run(Array("--local-spell", localSpell.getAbsolutePath), new TestConsole(System.in, stream))
+    val exitCode = new DataWeaveCLIRunner().run(Array("--local-spell", localSpell.getAbsolutePath), new TestConsole(System.in, stream))
+    exitCode shouldBe 0
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result: String = source.mkString
     result.trim shouldBe "\"DW Rules\""
   }
-
 
   "should work with simple script and not output" in {
     val stream = new ByteArrayOutputStream()
@@ -156,4 +156,18 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     maybeError.isEmpty shouldBe false
   }
 
+  "should run help command successfully" in {
+    val stream = new ByteArrayOutputStream()
+    val testConsole = new TestConsole(System.in, stream)
+    val exitCode = new DataWeaveCLIRunner().run(Array("--help"), testConsole)
+    exitCode shouldBe 0
+    val source = Source.fromBytes(stream.toByteArray, "UTF-8")
+    val result = source.mkString.trim
+    source.close()
+    val expected = """
+                     |{
+                     |  "isEmpty": false
+                     |}""".stripMargin.trim
+    result shouldBe expected
+  }
 }

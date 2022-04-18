@@ -1,1 +1,0 @@
-This is just a marker file to find this folder with in the classloader

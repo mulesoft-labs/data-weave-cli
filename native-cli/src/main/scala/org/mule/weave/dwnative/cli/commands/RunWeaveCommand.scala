@@ -73,7 +73,7 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
         }
         Signal.handle(new Signal("INT"), signalHandler)
         Signal.handle(new Signal("TERM"), signalHandler)
-        val result: ExecuteResult = nativeRuntime.eval(module.content, scriptingBindings, module.nameIdentifier, config.profile, config.maybePrivileges)
+        val result: ExecuteResult = nativeRuntime.eval(module.content, scriptingBindings, module.nameIdentifier, config.maybePrivileges)
         Runtime.getRuntime.addShutdownHook(new Thread() {
           override def run(): Unit = {
             Try(result.close())
@@ -113,7 +113,7 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
         console.out
       }
       val defaultOutputType: String = console.envVar(DW_DEFAULT_OUTPUT_MIMETYPE_VAR).getOrElse(DEFAULT_MIME_TYPE)
-      val result: WeaveExecutionResult = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, out, defaultOutputType, config.profile, config.maybePrivileges)
+      val result: WeaveExecutionResult = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, out, defaultOutputType, config.maybePrivileges)
       //load inputs from
       if (result.success()) {
         exitCode = 0
@@ -128,7 +128,6 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
 }
 
 case class WeaveRunnerConfig(path: Array[String],
-                             profile: Boolean,
                              eval: Boolean,
                              scriptToRun: NativeRuntime => WeaveModule,
                              properties: Map[String, String],

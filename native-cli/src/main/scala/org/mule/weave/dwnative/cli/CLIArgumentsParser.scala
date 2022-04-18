@@ -11,7 +11,6 @@ import org.mule.weave.dwnative.cli.commands.RunWeaveCommand
 import org.mule.weave.dwnative.cli.commands.UpdateAllGrimoires
 import org.mule.weave.dwnative.cli.commands.UpdateGrimoireCommand
 import org.mule.weave.dwnative.cli.commands.UpdateGrimoireConfig
-import org.mule.weave.dwnative.cli.commands.UsageCommand
 import org.mule.weave.dwnative.cli.commands.VersionCommand
 import org.mule.weave.dwnative.cli.commands.WeaveCommand
 import org.mule.weave.dwnative.cli.commands.WeaveModule
@@ -23,7 +22,6 @@ import org.mule.weave.v2.runtime.utils.AnsiColor.red
 import org.mule.weave.v2.sdk.NameIdentifierHelper
 
 import java.io.File
-import java.util
 import scala.collection.mutable
 import scala.io.Source
 
@@ -31,14 +29,12 @@ class CLIArgumentsParser(console: Console) {
   private val utils = new SpellsUtils(console)
   
   def parse(args: Array[String]): Either[WeaveCommand, String] = {
-    // console.info(s"Running parse: args[${args.mkString(",")}]")
     val parser = new DefaultParser
     
     //Use the current directory as the path
     var path: String = ""
     var scriptToRun: Option[NativeRuntime => WeaveModule] = None
     var output: Option[String] = None
-    var profile: Boolean = false
     var eval: Boolean = false
     var maybePrivileges: Option[Seq[String]] = None
 
@@ -247,10 +243,6 @@ class CLIArgumentsParser(console: Console) {
         }
       }
       
-      if (commandLine.hasOption(Options.PROFILE)) {
-        profile = true
-      }
-      
       if (commandLine.hasOption(Options.EVAL)) {
         eval = true
       }
@@ -284,241 +276,7 @@ class CLIArgumentsParser(console: Console) {
     if (scriptToRun.isEmpty) {
       Right(s"Missing <script-content> or -f <file-path> or --spell ")
     } else {
-      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, profile, eval, scriptToRun.get, properties.toMap, inputs.toMap, output, maybePrivileges)
-      Left(new RunWeaveCommand(config, console))
-    }
-  }
-  
-  def parseLegacy(args: Array[String]): Either[WeaveCommand, String] = {
-    var i = 0
-    //Use the current directory as the path
-    var path: String = ""
-    var scriptToRun: Option[NativeRuntime => WeaveModule] = None
-    var output: Option[String] = None
-    var profile: Boolean = false
-    var eval: Boolean = false
-    var maybePrivileges: Option[Seq[String]] = None
-
-    val inputs: mutable.Map[String, File] = mutable.Map()
-    val properties: mutable.Map[String, String] = mutable.Map()
-
-    while (i < args.length) {
-      args(i) match {
-        case "-p" | "--property" =>
-          if (i + 2 < args.length) {
-            val propName: String = args(i + 1)
-            val propValue: String = args(i + 2)
-            properties.put(propName, propValue)
-          } else {
-            return Right(red("Invalid amount of arguments on `Property`."))
-          }
-          i = i + 2
-        
-        case "-v" | "--verbose" =>
-          console.enableDebug()
-        
-        case "-h" | "--help" =>
-          return Left(new UsageCommand(console))
-        
-        case "--version" =>
-          return Left(new VersionCommand(console))
-        
-        case "--update-grimoires" =>
-          return Left(new UpdateAllGrimoires(console))
-        
-        case "--add-wizard" =>
-          if (i + 1 < args.length) {
-            i = i + 1
-            val wizardName = args(i)
-            return Left(new AddWizardCommand(CloneWizardConfig(wizardName), console))
-          } else {
-            return Right("Missing <wizard-name>")
-          }
-        
-        case "--new-spell" =>
-          if (i + 1 < args.length) {
-            i = i + 1
-            val spellName = args(i)
-            return Left(new CreateSpellCommand(spellName, console))
-          } else {
-            return Right("Missing <spell-name>")
-          }
-        
-        case "--list-spells" =>
-          return Left(new ListSpellsCommand(console))
-        
-        case "-s" | "--spell" =>
-          if (i + 1 < args.length) {
-            i = i + 1
-            val spell = args(i)
-            val wizard = if (spell.contains("/")) {
-              spell.split("/").head
-            } else {
-              null
-            }
-            var spellName = if (spell.contains("/")) {
-              spell.split("/")(1)
-            } else {
-              spell
-            }
-
-            var fileName = "Main.dwl"
-            var nameIdentifier = NameIdentifier("Main")
-
-            if (spellName.contains("@")) {
-              val spellParts = spellName.split("@")
-              spellName = spellParts.head
-              nameIdentifier = NameIdentifier(spellParts.last)
-              fileName = NameIdentifierHelper.toWeaveFilePath(nameIdentifier, File.pathSeparator)
-            }
-
-            val lastUpdate = utils.hoursSinceLastUpdate()
-            //Update grimoires every day
-            if (lastUpdate > 24) {
-              new UpdateAllGrimoires(console).exec()
-            }
-
-            var wizardGrimoire: File = utils.grimoireFolder(wizard)
-            if (!wizardGrimoire.exists()) {
-              new AddWizardCommand(CloneWizardConfig(wizard), console).exec()
-            }
-            wizardGrimoire = utils.grimoireFolder(wizard)
-            val wizardName = if (wizard == null) "Weave" else wizard
-            if (!wizardGrimoire.exists()) {
-              return Right(s"Unable to get Wise `$wizardName's` Grimoire.")
-            }
-
-            val spellFolder = new File(wizardGrimoire, spellName)
-            if (!spellFolder.exists()) {
-              new UpdateGrimoireCommand(UpdateGrimoireConfig(wizardGrimoire), console).exec()
-            }
-
-            if (!spellFolder.exists()) {
-              return Right(s"Unable find $spellName in Wise `$wizardName's` Grimoire.")
-            }
-
-            val srcFolder = new File(spellFolder, "src")
-            val mainFile = new File(srcFolder, fileName)
-            if (!mainFile.isFile) {
-              return Right(s"Unable find `$fileName` in the spell: `$spellName` inside Wise `$wizardName's` Grimoire.")
-            }
-            if (path.isEmpty) {
-              path = srcFolder.getAbsolutePath
-            } else {
-              path = path + File.pathSeparator + srcFolder.getAbsolutePath
-            }
-            scriptToRun = Some(_ => {
-              WeaveModule(fileToString(mainFile), nameIdentifier.toString())
-            })
-          } else {
-            return Right("Missing <spellName>")
-          }
-        
-        case "--local-spell" =>
-          if (i + 1 < args.length) {
-            i = i + 1
-            console.info("Running local spell")
-            val spell: String = args(i)
-
-            var fileName = "Main.dwl"
-            var nameIdentifier = NameIdentifier("Main")
-            var spellName = spell
-            if (spell.contains("@")) {
-              val spellParts = spell.split("@")
-              spellName = spellParts.head
-              nameIdentifier = NameIdentifier(spellParts.last)
-              fileName = NameIdentifierHelper.toWeaveFilePath(nameIdentifier, File.separator)
-            }
-
-            val spellFolder: File = new File(spellName)
-            if (!spellFolder.exists()) {
-              return Right(s"Unable find `$spellName` folder.")
-            }
-            val srcFolder = new File(spellFolder, "src")
-
-            val mainFile = new File(srcFolder, fileName)
-            if (!mainFile.isFile) {
-              return Right(s"Unable find `$fileName` in the spell: `$spell`.")
-            }
-            if (path.isEmpty) {
-              path = srcFolder.getAbsolutePath
-            } else {
-              path = path + File.pathSeparator + srcFolder.getAbsolutePath
-            }
-            scriptToRun = Some(_ => {
-              WeaveModule(fileToString(mainFile), nameIdentifier.toString())
-            })
-          } else {
-            return Right("Missing <spell-folder>")
-          }
-        
-        case "-i" | "--input" =>
-          if (i + 2 < args.length) {
-            val input: File = new File(args(i + 2))
-            val inputName: String = args(i + 1)
-            if (input.exists()) {
-              inputs.put(inputName, input)
-            } else {
-              return Right(red(s"Invalid input file $inputName ${input.getAbsolutePath}."))
-            }
-          } else {
-            return Right(red("Invalid amount of arguments on input."))
-          }
-          i = i + 2
-        
-        case "-o" | "--output" =>
-          if (i + 1 < args.length) {
-            i = i + 1
-            output = Some(args(i))
-          } else {
-            return Right("Missing <outputPath>")
-          }
-        
-        case "-f" | "--file" =>
-          if (i + 1 < args.length) {
-            i = i + 1
-            val scriptFile = new File(args(i))
-            if (scriptFile.exists()) {
-              scriptToRun = Some(_ => WeaveModule(fileToString(scriptFile), FileHelper.baseName(scriptFile)))
-            } else {
-              return Right(s"File `${args(i)}` was not found.")
-            }
-          } else {
-            return Right("Missing script file path.")
-          }
-        
-        case "--profile" =>
-          profile = true
-        
-        case "--eval" =>
-          eval = true
-
-        case "--untrusted-code" =>
-          maybePrivileges = Some(Seq.empty)
-
-        case "--privileges" =>
-          if (i + 1 < args.length) {
-            i = i + 1
-            val privileges = args(i)
-            maybePrivileges = Some(privileges.split(","))
-          } else {
-            return Right("Missing privileges args.")
-          }
-        
-        case script if i + 1 == args.length =>
-          scriptToRun = Some(_ => WeaveModule(script, NameIdentifier.ANONYMOUS_NAME.toString()))
-
-        case arg =>
-          return Right(s"Invalid argument $arg")
-      }
-      i = i + 1
-    }
-
-    val paths = if (path.isEmpty) Array[String]() else path.split(File.pathSeparatorChar)
-    if (scriptToRun.isEmpty) {
-      Right(s"Missing <scriptContent> or -f <filePath> or --spell ")
-    } else {
-      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, profile, eval, scriptToRun.get, properties.toMap, inputs.toMap, output, maybePrivileges)
+      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, eval, scriptToRun.get, properties.toMap, inputs.toMap, output, maybePrivileges)
       Left(new RunWeaveCommand(config, console))
     }
   }

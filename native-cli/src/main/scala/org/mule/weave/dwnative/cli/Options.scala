@@ -14,13 +14,13 @@ object Options {
   val NEW_SPELL = "new-spell"
   val OUTPUT = "output"
   val PRIVILEGES = "privileges"
-  val PROFILE = "profile"
   val PROPERTY = "property"
   val SPELL = "spell"
   val UNTRUSTED_CODE = "untrusted-code"
   val UPDATE_GRIMOIRES = "update-grimoires"
   val VERBOSE = "verbose"
   val VERSION = "version"
+  val EXPERIMENTAL_TAG = "[Experimental]"
   
   val OPTIONS: CliOptions = {
     val options = new CliOptions()
@@ -58,8 +58,6 @@ object Options {
       .desc("Specifies output file for the transformation if not standard output will be used.")
       .build())
     
-    options.addOption(null, PROFILE, false, "Profile the script execution.")
-    
     options.addOption(null, EVAL, false, "Evaluates the script instead of writing it.")
     
     options.addOption(null, VERSION, false, "The version of the CLI and Runtime.")
@@ -75,27 +73,27 @@ object Options {
       .desc("A comma separated set of the privileges for the script execution.")
       .build())
     
-    options.addOption(null, LIST_SPELLS, false, "[Experimental] List all the available spells.")
+    options.addOption(null, LIST_SPELLS, false, s"$EXPERIMENTAL_TAG List all the available spells.")
     
     options.addOption(Option.builder("s")
       .longOpt(SPELL)
       .hasArg(true)
       .argName("spell-name")
-      .desc("[Experimental] Runs a spell. Use the <spellName> or <wizard>/<spellName> for spells from a given wizard.")
+      .desc(s"$EXPERIMENTAL_TAG Runs a spell. Use the <spellName> or <wizard>/<spellName> for spells from a given wizard.")
       .build())
   
     options.addOption(Option.builder()
       .longOpt(LOCAL_SPELL)
       .hasArg(true)
       .argName("spell-folder")
-      .desc("[Experimental] Executes a local folder spell.")
+      .desc(s"$EXPERIMENTAL_TAG Executes a local folder spell.")
       .build())
     
     options.addOption(Option.builder()
       .longOpt(NEW_SPELL)
       .hasArg(true)
       .argName("spell-name")
-      .desc("[Experimental] Create a new spell.")
+      .desc(s"$EXPERIMENTAL_TAG Create a new spell.")
       .build()
     )
     
@@ -103,11 +101,11 @@ object Options {
       .longOpt(ADD_WIZARD)
       .hasArg(true)
       .argName("wizard-name")
-      .desc("[Experimental] Downloads wizard grimoire so that its spell are accessible.")
+      .desc(s"$EXPERIMENTAL_TAG Downloads wizard grimoire so that its spell are accessible.")
       .build()
     )
     
-    options.addOption(null, UPDATE_GRIMOIRES, false, "[Experimental] Update all wizard grimoires.")
+    options.addOption(null, UPDATE_GRIMOIRES, false, s"$EXPERIMENTAL_TAG Update all wizard grimoires.")
     
     options
   }
