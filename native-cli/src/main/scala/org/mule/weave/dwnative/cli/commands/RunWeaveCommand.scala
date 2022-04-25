@@ -7,6 +7,9 @@ import org.mule.weave.dwnative.utils.DataWeaveUtils
 import org.mule.weave.dwnative.utils.DataWeaveUtils.DW_DEFAULT_INPUT_MIMETYPE_VAR
 import org.mule.weave.dwnative.utils.DataWeaveUtils.DW_DEFAULT_OUTPUT_MIMETYPE_VAR
 import org.mule.weave.v2.model.EvaluationContext
+import org.mule.weave.v2.model.structure.KeyValuePair
+import org.mule.weave.v2.model.values.KeyValue
+import org.mule.weave.v2.model.values.ObjectValue
 import org.mule.weave.v2.model.values.StringValue
 import org.mule.weave.v2.module.DataFormatManager
 import org.mule.weave.v2.runtime.ExecuteResult
@@ -59,10 +62,13 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
       })
     }
 
-    config.properties.foreach((prop) => {
-      scriptingBindings.addBinding(prop._1, StringValue(prop._2))
-    })
-
+    val value = config.params.toSeq.map( prop =>
+      KeyValuePair(KeyValue(prop._1), StringValue(prop._2))
+    ).to
+    
+    val params = ObjectValue(value)
+    scriptingBindings.addBinding("params", params)
+    
     val module: WeaveModule = config.scriptToRun(nativeRuntime)
     if (config.eval) {
       keepRunning = true
@@ -130,7 +136,7 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
 case class WeaveRunnerConfig(path: Array[String],
                              eval: Boolean,
                              scriptToRun: NativeRuntime => WeaveModule,
-                             properties: Map[String, String],
+                             params: Map[String, String],
                              inputs: Map[String, File],
                              outputPath: Option[String],
                              maybePrivileges: Option[Seq[String]])

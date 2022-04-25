@@ -170,4 +170,23 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
                      |}""".stripMargin.trim
     result shouldBe expected
   }
+
+  "should run using parameter" in {
+    val stream = new ByteArrayOutputStream()
+    new DataWeaveCLIRunner().run(Array(
+      "-p", "name", "Mariano",
+      "-p", "lastname", "Lischetti",
+      "{fullName: params.name ++ \" \" ++  params.lastname}"), 
+      new TestConsole(System.in, stream))
+    val source = Source.fromBytes(stream.toByteArray, "UTF-8")
+    val result = source.mkString.trim
+    source.close()
+    val expected = """
+                     |{
+                     |  "fullName": "Mariano Lischetti"
+                     |}
+                     """.stripMargin.trim
+    println(result)
+    result shouldBe expected
+  }
 }
