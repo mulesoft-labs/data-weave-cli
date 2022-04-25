@@ -5,87 +5,38 @@ import org.scalatest.FreeSpec
 import org.scalatest.Matchers
 
 import java.io.File
-import java.util.concurrent.TimeUnit
-import scala.io.Source
 
-class NativeCliTest extends FreeSpec with Matchers with BeforeAndAfterAll {
+class NativeCliTest extends FreeSpec 
+  with Matchers 
+  with BeforeAndAfterAll 
+  with ResourceResolver {
+  
+  private lazy val USER_HOME: File = new File(System.getProperty("user.home"))
 
-
+  private lazy val DEFAULT_DW_CLI_HOME: File = {
+    val home = new File(USER_HOME, ".dw")
+    home
+  }
+  
   override protected def beforeAll(): Unit = {
-    getDefaultDWHome().mkdirs()
+    DEFAULT_DW_CLI_HOME.mkdirs()
   }
-
-  def getDefaultDWHome(): File = {
-    val homeUser = getUserHome()
-    val defaultDWHomeDir = new File(homeUser, ".dw")
-    defaultDWHomeDir
-  }
-
-  def getUserHome(): File = {
-    new File(System.getProperty("user.home"))
-  }
-
-
-  private val OS = System.getProperty("os.name").toLowerCase
 
   "it should execute simple case correctly" in {
-    val process = Runtime.getRuntime.exec(Array(getExecutable, "1 to 10"))
-    process.waitFor(5, TimeUnit.SECONDS)
-    val source = Source.fromInputStream(process.getInputStream)
-    try {
-      val out = source.mkString.trim
-      assert(out == "[\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  10\n]")
-    } finally {
-      source.close()
-    }
-  }
-
-  def getPath(resource: String): String = {
-    getClass.getClassLoader.getResource(resource).getPath
+    val (_, output) = NativeCliITTestRunner("1 to 10").execute()
+    output shouldBe "[\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  10\n]"
   }
 
   "it should execute with input" in {
-    val path = getPath("inputs/payload.json")
-    val process = Runtime.getRuntime.exec(Array(getExecutable, "-i", "payload", path, "payload.name"))
-    process.waitFor(5, TimeUnit.SECONDS)
-    val source = Source.fromInputStream(process.getInputStream)
-    try {
-      val out = source.mkString.trim
-      assert(out == "\"Tomo\"")
-    } finally {
-      source.close()
-    }
+    val path = getResourcePath("inputs/payload.json")
+    val (_, output) = NativeCliITTestRunner(Array("-i", "payload", path, "payload.name")).execute()
+    output shouldBe "\"Tomo\""
   }
 
   "it should execute with input and script" in {
-    val process = Runtime.getRuntime.exec(Array(getExecutable, "-i", "payload", getPath("inputs/payload.json"), "-f", getPath("scripts/GetName.dwl")))
-    process.waitFor(5, TimeUnit.SECONDS)
-    val source = Source.fromInputStream(process.getInputStream)
-    try {
-      val out = source.mkString.trim
-      assert(out == "\"Tomo\"")
-    } finally {
-      source.close()
-    }
+    val inputPath = getResourcePath("inputs/payload.json")
+    val transformationPath = getResourcePath("scripts/GetName.dwl")
+    val (_, output) = NativeCliITTestRunner(Array("-i", "payload", inputPath, "payload.name", "-f", transformationPath)).execute()
+    output shouldBe "\"Tomo\""
   }
-
-
-  def getExecutableName = {
-    if (OS.contains("win")) {
-      "dw.exe"
-    } else {
-      "dw"
-    }
-  }
-
-  def getExecutable: String = {
-    val path = getPath(getClass.getName.replaceAll("\\.", File.separator) + ".class")
-    var nativeCliIntegrationTest = new File(path)
-    while (nativeCliIntegrationTest.getName != "native-cli-integration-tests") {
-      nativeCliIntegrationTest = nativeCliIntegrationTest.getParentFile
-    }
-    val dwPath = new File(nativeCliIntegrationTest.getParentFile, s"native-cli/build/graal/${getExecutableName}")
-    dwPath.getAbsolutePath
-  }
-
 }
