@@ -359,7 +359,8 @@ class NativeCliRuntimeIT extends FunSpec
         "multipart-empty-body",
         "multipart-mixed-complex-scenario",
         "multipart-read-message",
-        "multipart-schema-access"
+        "multipart-schema-access",
+        "multipart-base64-to-multipart"
       ) ++
       // Multipart Object has empty `parts` and expects at least one part
       Array("multipart-write-message", 
