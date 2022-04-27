@@ -247,3 +247,16 @@ curl https://jsonplaceholder.typicode.com/posts/1 | dw "output application/json 
   "userId": 1
 }
 ```
+
+## Contributions Welcome
+
+Contributions to this project can be made through Pull Requests and Issues on the
+[GitHub Repository](https://github.com/mulesoft-labs/data-weave-cli).
+
+Before creating a pull request review the following:
+
+* [LICENSE](LICENSE.txt)
+* [SECURITY](SECURITY.md)
+* [CODE_OF_CONDUCT](CODE_OF_CONDUCT.md)
+
+When you submit your pull request, you are asked to sign a contributor license agreement (CLA) if we don't have one on file for you.
