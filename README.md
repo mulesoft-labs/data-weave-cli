@@ -66,11 +66,10 @@ dw --help
 
 ```bash
 usage: dw [--eval] [-f <file-path>] [--help] [-i <input-name input-path>]
-       [-o <output-path>] [-p <property-name property-value>]
-       [--privileges <privileges>] [--untrusted-code] [-v] [--version]
-       [--add-wizard <wizard-name>] [--list-spells] [--local-spell
-       <spell-folder>] [--new-spell <spell-name>] [-s <spell-name>]
-       [--update-grimoires]
+       [-o <output-path>] [-p <param-name param-value>] [--privileges
+       <privileges>] [--untrusted-code] [-v] [--version] [--add-wizard
+       <wizard-name>] [--list-spells] [--local-spell <spell-folder>]
+       [--new-spell <spell-name>] [-s <spell-name>] [--update-grimoires]
 
 
 .........................................................................
@@ -81,45 +80,41 @@ usage: dw [--eval] [-f <file-path>] [--help] [-i <input-name input-path>]
 .%%%%%...%%..%%....%%....%%..%%...%%.%%...%%%%%%..%%..%%....%%....%%%%%%.
 .........................................................................
 
-    --eval                                      Evaluates the script
-                                                instead of writing it.
- -f,--file <file-path>                          Specifies output file for
-                                                the transformation if not
-                                                standard output will be
-                                                used.
-    --help                                      Shows the help.
- -i,--input <input-name input-path>             Declares a new input.
- -o,--output <output-path>                      Specifies output file for
-                                                the transformation if not
-                                                standard output will be
-                                                used.
- -p,--property <property-name property-value>   Property to be passed.
-    --privileges <privileges>                   A comma separated set of
-                                                the privileges for the
-                                                script execution.
-    --untrusted-code                            Run the script as
-                                                untrusted, which means
-                                                that the script has no
-                                                privileges.
- -v,--verbose                                   Enable verbose mode.
-    --version                                   The version of the CLI and
-                                                Runtime.
-    --add-wizard <wizard-name>                  [Experimental] Downloads
-                                                wizard grimoire so that
-                                                its spell are accessible.
-    --list-spells                               [Experimental] List all
-                                                the available spells.
-    --local-spell <spell-folder>                [Experimental] Executes a
-                                                local folder spell.
-    --new-spell <spell-name>                    [Experimental] Create a
-                                                new spell.
- -s,--spell <spell-name>                        [Experimental] Runs a
-                                                spell. Use the <spellName>
-                                                or <wizard>/<spellName>
-                                                for spells from a given
-                                                wizard.
-    --update-grimoires                          [Experimental] Update all
-                                                wizard grimoires.
+    --eval                                 Evaluates the script instead of
+                                           writing it.
+ -f,--file <file-path>                     Specifies output file for the
+                                           transformation if not standard
+                                           output will be used.
+    --help                                 Shows the help.
+ -i,--input <input-name input-path>        Declares a new input.
+ -o,--output <output-path>                 Specifies output file for the
+                                           transformation if not standard
+                                           output will be used.
+ -p,--parameter <param-name param-value>   Parameter to be passed.
+    --privileges <privileges>              A comma separated set of the
+                                           privileges for the script
+                                           execution.
+    --untrusted-code                       Run the script as untrusted,
+                                           which means that the script has
+                                           no privileges.
+ -v,--verbose                              Enable verbose mode.
+    --version                              The version of the CLI and
+                                           Runtime.
+    --add-wizard <wizard-name>             [Experimental] Downloads wizard
+                                           grimoire so that its spell are
+                                           accessible.
+    --list-spells                          [Experimental] List all the
+                                           available spells.
+    --local-spell <spell-folder>           [Experimental] Executes a local
+                                           folder spell.
+    --new-spell <spell-name>               [Experimental] Create a new
+                                           spell.
+ -s,--spell <spell-name>                   [Experimental] Runs a spell.
+                                           Use the <spellName> or
+                                           <wizard>/<spellName> for spells
+                                           from a given wizard.
+    --update-grimoires                     [Experimental] Update all
+                                           wizard grimoires.
 
 
  Example:

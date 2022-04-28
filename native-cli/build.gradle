@@ -29,6 +29,7 @@ dependencies {
     compile group: 'org.mule.weave', name: 'core-modules', version: weaveVersion
     compile group: 'org.mule.weave', name: 'yaml-module', version: weaveVersion
     compile group: 'org.mule.weave', name: 'http-module', version: ioVersion
+    compile group: 'org.mule.weave', name: 'process-module', version: ioVersion
     compile(group: 'org.mule.weave', name: 'http-netty-module', version: ioVersion) {
         exclude group: 'org.slf4j'
     }
@@ -150,6 +151,7 @@ graal {
     option "--report-unsupported-elements-at-runtime"
     option "-H:CompilationExpirationPeriod=0"
     option "--trace-object-instantiation=java.util.Random"
+    option "-H:+AddAllCharsets"
 //    option "-H:+DashboardAll"
 //    option "-H:DashboardDump=/Users/mdeachaval/labs/palantir/weave-native-library/native-cli/dump"
 //    option "-H:+PrintImageObjectTree"

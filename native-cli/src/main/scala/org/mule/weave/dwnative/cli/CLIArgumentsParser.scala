@@ -39,23 +39,23 @@ class CLIArgumentsParser(console: Console) {
     var maybePrivileges: Option[Seq[String]] = None
 
     val inputs: mutable.Map[String, File] = mutable.Map()
-    val properties: mutable.Map[String, String] = mutable.Map()
+    val params: mutable.Map[String, String] = mutable.Map()
     
     try {
       val commandLine = parser.parse(Options.OPTIONS, args)
       
-      if (commandLine.hasOption(Options.PROPERTY)) {
-        val propsArgs = commandLine.getOptionValues(Options.PROPERTY)
-        if (propsArgs != null && (propsArgs.length % 2) == 0) {
-          val middle = propsArgs.length / 2
+      if (commandLine.hasOption(Options.PARAMETER)) {
+        val paramsArgs = commandLine.getOptionValues(Options.PARAMETER)
+        if (paramsArgs != null && (paramsArgs.length % 2) == 0) {
+          val middle = paramsArgs.length / 2
           for ( i <- 0 until middle) {
             val index = i * 2
-            val propName: String = propsArgs(index)
-            val propValue: String = propsArgs(index + 1)
-            properties.put(propName,propValue)
+            val name: String = paramsArgs(index)
+            val value: String = paramsArgs(index + 1)
+            params.put(name, value)
           }
         } else {
-          return Right(red("Invalid amount of arguments on `Property`."))
+          return Right(red("Invalid amount of arguments on `parameter`."))
         }
       }
       
@@ -276,7 +276,7 @@ class CLIArgumentsParser(console: Console) {
     if (scriptToRun.isEmpty) {
       Right(s"Missing <script-content> or -f <file-path> or --spell ")
     } else {
-      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, eval, scriptToRun.get, properties.toMap, inputs.toMap, output, maybePrivileges)
+      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, eval, scriptToRun.get, params.toMap, inputs.toMap, output, maybePrivileges)
       Left(new RunWeaveCommand(config, console))
     }
   }

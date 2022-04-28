@@ -14,7 +14,7 @@ object Options {
   val NEW_SPELL = "new-spell"
   val OUTPUT = "output"
   val PRIVILEGES = "privileges"
-  val PROPERTY = "property"
+  val PARAMETER = "parameter"
   val SPELL = "spell"
   val UNTRUSTED_CODE = "untrusted-code"
   val UPDATE_GRIMOIRES = "update-grimoires"
@@ -27,17 +27,17 @@ object Options {
     options.addOption(null, HELP, false, "Shows the help.")
     
     options.addOption(Option.builder("p")
-      .longOpt(PROPERTY)
+      .longOpt(PARAMETER)
       .hasArgs()
-      .numberOfArgs(2) // Option.UNLIMITED_VALUES)
-      .argName("property-name property-value")
-      .desc("Property to be passed.")
+      .numberOfArgs(2)
+      .argName("param-name param-value")
+      .desc("Parameter to be passed.")
       .build())
     
     options.addOption(Option.builder("i")
       .longOpt(INPUT)
       .hasArgs()
-      .numberOfArgs(2) // Option.UNLIMITED_VALUES)
+      .numberOfArgs(2)
       .argName("input-name input-path")
       .desc("Declares a new input.")
       .build())
