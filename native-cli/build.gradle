@@ -152,6 +152,7 @@ graal {
     option "-H:CompilationExpirationPeriod=0"
     option "--trace-object-instantiation=java.util.Random"
     option "-H:+AddAllCharsets"
+    option "-H:+IncludeAllLocales"
 //    option "-H:+DashboardAll"
 //    option "-H:DashboardDump=/Users/mdeachaval/labs/palantir/weave-native-library/native-cli/dump"
 //    option "-H:+PrintImageObjectTree"

@@ -186,7 +186,6 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
                      |  "fullName": "Mariano Lischetti"
                      |}
                      """.stripMargin.trim
-    println(result)
     result shouldBe expected
   }
 }
