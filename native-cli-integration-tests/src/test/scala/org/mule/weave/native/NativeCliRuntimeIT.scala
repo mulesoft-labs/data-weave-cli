@@ -48,6 +48,8 @@ class NativeCliRuntimeIT extends FunSpec
   with ResourceResolver {
 
   private val TIMEOUT: (Int, TimeUnit) = (30, TimeUnit.SECONDS)
+  private val INPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile( "in[0-9]+-config\\.properties")
+  private val OUTPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile( "out[0-9]+-config\\.properties")
   private val INPUT_FILE_PATTERN = Pattern.compile( "in[0-9]+\\.[a-zA-Z]+")
   private val OUTPUT_FILE_PATTERN = Pattern.compile("out\\.[a-zA-Z]+")
   
@@ -75,6 +77,11 @@ class NativeCliRuntimeIT extends FunSpec
   }
   
   private def runTestSuite(testsSuiteFolder: File): Unit = {
+    
+    def isEmpty(source: Array[String]): Boolean = {
+      source == null || source.isEmpty
+    }
+    
     val testFolders = testsSuiteFolder.listFiles(new FileFilter {
       override def accept(pathname: File): Boolean = {
         var accept = false
@@ -88,13 +95,24 @@ class NativeCliRuntimeIT extends FunSpec
               "dwl" ==  extension && !isInput && !isOutput
             })
             
-            // We ignore java use cases for now until we resolve classpath
-            // And cases with config.properties
-            val javaCasesOrConfigCases = pathname.list((_: File, name: String) => {
-              name.endsWith("groovy") || "config.properties" == name
+            // Ignore test case with inX-config.properties or outX-config.properties
+            val inputOrOutputConfigProperties: Array[String] = pathname.list((_: File, name: String) => {
+              val isInput = INPUT_FILE_CONFIG_PROPERTY_PATTERN.matcher(name).matches()
+              val isOutput = OUTPUT_FILE_CONFIG_PROPERTY_PATTERN.matcher(name).matches()
+              isInput || isOutput
             })
             
-            accept = dwlFiles.length == 1 && (javaCasesOrConfigCases == null || javaCasesOrConfigCases.isEmpty)
+            // Ignore java use cases for now until we resolve classpath
+            val javaCases: Array[String] = pathname.list((_: File, name: String) => {
+              name.endsWith("groovy")
+            })
+
+            // Ignore config.properties test cases
+            val configPropertyCase = pathname.list((_: File, name: String) => {
+              "config.properties" == name
+            })
+            
+            accept = dwlFiles.length == 1 && isEmpty(inputOrOutputConfigProperties) && isEmpty(javaCases) && isEmpty(configPropertyCase)
           }
         }
         accept
@@ -164,8 +182,7 @@ class NativeCliRuntimeIT extends FunSpec
               maybeEncoding = getEncodingFromOutputDirective(outputDirective)
             }
           }
-
-          // TODO [ML]: remove file creation
+          
           documentNode.header.directives = directives
           val settings = CodeGeneratorSettings(InfixOptions.KEEP, alwaysInsertVersion = false, newLineBetweenFunctions = true, orderDirectives = false)
           val code = CodeGenerator.generate(documentNode, settings)
@@ -254,7 +271,7 @@ class NativeCliRuntimeIT extends FunSpec
     result should matchBin(expectedFile)
   }
   
-  private def matchMultipart(output: File, result: Array[Byte]) = {
+  private def matchMultipart(output: File, result: Array[Byte]): Unit = {
     val expected = new MimeMultipart(new ByteArrayDataSource(new FileInputStream(output), "multipart/form-data"))
     val actual = new MimeMultipart(new ByteArrayDataSource(new ByteArrayInputStream(result), "multipart/form-data"))
     actual.getPreamble should matchString(expected.getPreamble)
@@ -307,11 +324,8 @@ class NativeCliRuntimeIT extends FunSpec
   private def subPart(mime: String): String = mime.split("/")(1)
 
   override def ignoreTests(): Array[String] = {
-    // Encoding issues
-    Array("binary-utf16-bom-to-json",
-      "csv-invalid-utf8",
-      "json_multi_encoding",
-      "textplain-utf16-bom") ++
+      // Encoding issues
+      Array("csv-invalid-utf8") ++
       // Unsupported charset
       Array(
         "coerciones_toString",
