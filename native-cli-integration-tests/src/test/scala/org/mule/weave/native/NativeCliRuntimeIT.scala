@@ -317,16 +317,6 @@ class NativeCliRuntimeIT extends FunSpec
         "coerciones_toString",
         "date-coercion"
       ) ++
-      // Fail number formatter
-      Array("coerciones_toNumber",
-        "number-conversion") ++
-      // DW out not includes content-type at output
-      Array("dfl-inline-default-namespace",
-        "dfl-inline-namespace",
-        "dfl-maxCollectionSize",
-        "dfl-overwrite-namespace",
-        "xml-nill-multiple-attributes-nested",
-        "xml-nill-multiple-attributes") ++
       // Use resources (dwl files) that is present in the Tests but not in Cli (e.g: org::mule::weave::v2::libs::)
       Array("full-qualified-name-ref",
         "import-component-alias-lib",
@@ -353,22 +343,12 @@ class NativeCliRuntimeIT extends FunSpec
         "java-interop-function-call",
         "write-function-with-null"
       ) ++
-      // boundary configuration property is missing.
-      Array("multipart-access-unknown-content-type",
-        "multipart-class-cast-issue",
-        "multipart-empty-body",
-        "multipart-mixed-complex-scenario",
-        "multipart-read-message",
-        "multipart-schema-access",
-        "multipart-base64-to-multipart"
-      ) ++
+      // form-data did not equal inline
+      Array("multipart-mixed-complex-scenario") ++
       // Multipart Object has empty `parts` and expects at least one part
-      Array("multipart-write-message", 
+      Array("multipart-write-message",
         "multipart-mixed-message",
         "multipart-write-subtype-override") ++
-      // javax.mail.internet.ParseException - Missing start boundary
-      Array("multipart_binary_nocontent_type",
-        "multipart_binary_other_default_content_type") ++
       // Fail pattern match on complex object
       Array("pattern-match-complex-type") ++
       // DataFormats
