@@ -12,6 +12,8 @@ import org.mule.weave.v2.matchers.WeaveMatchers.matchJson
 import org.mule.weave.v2.matchers.WeaveMatchers.matchProperties
 import org.mule.weave.v2.matchers.WeaveMatchers.matchString
 import org.mule.weave.v2.matchers.WeaveMatchers.matchXml
+import org.mule.weave.v2.model.EvaluationContext
+import org.mule.weave.v2.module.DataFormatManager
 import org.mule.weave.v2.parser.MappingParser
 import org.mule.weave.v2.parser.ast.header.directives.ContentType
 import org.mule.weave.v2.parser.ast.header.directives.DirectiveNode
@@ -160,26 +162,30 @@ class NativeCliRuntimeIT extends FunSpec
           
           var maybeEncoding: Option[String] = None
           var directives = headerDirectives
+          implicit val ctx: EvaluationContext = EvaluationContext()
+          val maybeDefaultDataFormat = DataFormatManager.byExtension(s".$outputExtension")
+          val defaultDataFormat = maybeDefaultDataFormat.getOrElse(throw new IllegalArgumentException("Unable to find data-format for extension `" + outputExtension + "`"))
+          val defaultMimeType = defaultDataFormat.defaultMimeType.toString()
           if (maybeOutputDirective.isEmpty) {
-            val contentType = MimeTypeMapper.getMimeTypeOf(outputExtension)
-            val newOutputDirective = OutputDirective(None, Some(ContentType(contentType)), None, None)
+            val newOutputDirective = OutputDirective(None, Some(ContentType(defaultMimeType)), None, None)
             directives = directives :+ newOutputDirective
           } else {
-            val contentType = MimeTypeMapper.getMimeTypeOf(outputExtension)
             val outputDirective = maybeOutputDirective.get
+            maybeEncoding = getEncodingFromOutputDirective(outputDirective)
+            
             if (outputDirective.mime.isDefined) {
               val currentContentType = outputDirective.mime.get
-              val currentMime = currentContentType.mime
-              if (subPart(contentType) != subPart(currentMime)) {
-                val newOutputDirective = OutputDirective(None, Some(ContentType(contentType)), None, None)
+              val maybeCurrentDataFormat = DataFormatManager.byContentType(currentContentType.mime)
+              // Replace output directive if:
+              // 1- declared data-format at output directive that's not exits or
+              // 2- declared data-format at output directive is different from the data-format obtained by the file extension
+              if (maybeCurrentDataFormat.isEmpty || maybeCurrentDataFormat.get.defaultMimeType.toString() != defaultMimeType) {
+                val newOutputDirective = OutputDirective(None, Some(ContentType(defaultMimeType)), None, None)
                 val index = directives.indexOf(outputDirective)
                 directives = directives.take(index) ++ directives.drop(index + 1)
                 directives = directives :+ newOutputDirective
-              } else {
-                maybeEncoding = getEncodingFromOutputDirective(outputDirective)
+                maybeEncoding = getEncodingFromOutputDirective(newOutputDirective)
               }
-            } else {
-              maybeEncoding = getEncodingFromOutputDirective(outputDirective)
             }
           }
           
@@ -321,12 +327,10 @@ class NativeCliRuntimeIT extends FunSpec
     expectedText
   }
 
-  private def subPart(mime: String): String = mime.split("/")(1)
-
-  override def ignoreTests(): Array[String] = {
+  def ignoreTests2(): Array[String] = {
       // Encoding issues
       Array("csv-invalid-utf8") ++
-      // Unsupported charset
+      // Fail in java11 because broken backwards
       Array(
         "coerciones_toString",
         "date-coercion"
@@ -355,25 +359,20 @@ class NativeCliRuntimeIT extends FunSpec
         "java-field-ref",
         "java-interop-enum",
         "java-interop-function-call",
+        "runtime_run_coercionException",
+        "runtime_run_fibo",
+        "runtime_run_null_java",
         "write-function-with-null"
       ) ++
-      // form-data did not equal inline
-      Array("multipart-mixed-complex-scenario") ++
       // Multipart Object has empty `parts` and expects at least one part
-      Array("multipart-write-message",
-        "multipart-mixed-message",
+      Array("multipart-mixed-message",
+        "multipart-write-message",
         "multipart-write-subtype-override") ++
       // Fail pattern match on complex object
       Array("pattern-match-complex-type") ++
       // DataFormats
       Array(
         "runtime_dataFormatsDescriptors"
-      ) ++
-      // UnknownContentTypeException
-      Array(
-        "runtime_run_coercionException",
-        "runtime_run_fibo",
-        "runtime_run_null_java"
       ) ++
       // Cannot coerce Null (null) to Number
       Array(
