@@ -12,6 +12,8 @@ import org.mule.weave.v2.matchers.WeaveMatchers.matchJson
 import org.mule.weave.v2.matchers.WeaveMatchers.matchProperties
 import org.mule.weave.v2.matchers.WeaveMatchers.matchString
 import org.mule.weave.v2.matchers.WeaveMatchers.matchXml
+import org.mule.weave.v2.model.EvaluationContext
+import org.mule.weave.v2.module.DataFormatManager
 import org.mule.weave.v2.parser.MappingParser
 import org.mule.weave.v2.parser.ast.header.directives.ContentType
 import org.mule.weave.v2.parser.ast.header.directives.DirectiveNode
@@ -48,6 +50,8 @@ class NativeCliRuntimeIT extends FunSpec
   with ResourceResolver {
 
   private val TIMEOUT: (Int, TimeUnit) = (30, TimeUnit.SECONDS)
+  private val INPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile( "in[0-9]+-config\\.properties")
+  private val OUTPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile( "out[0-9]+-config\\.properties")
   private val INPUT_FILE_PATTERN = Pattern.compile( "in[0-9]+\\.[a-zA-Z]+")
   private val OUTPUT_FILE_PATTERN = Pattern.compile("out\\.[a-zA-Z]+")
   
@@ -75,6 +79,11 @@ class NativeCliRuntimeIT extends FunSpec
   }
   
   private def runTestSuite(testsSuiteFolder: File): Unit = {
+    
+    def isEmpty(source: Array[String]): Boolean = {
+      source == null || source.isEmpty
+    }
+    
     val testFolders = testsSuiteFolder.listFiles(new FileFilter {
       override def accept(pathname: File): Boolean = {
         var accept = false
@@ -88,13 +97,24 @@ class NativeCliRuntimeIT extends FunSpec
               "dwl" ==  extension && !isInput && !isOutput
             })
             
-            // We ignore java use cases for now until we resolve classpath
-            // And cases with config.properties
-            val javaCasesOrConfigCases = pathname.list((_: File, name: String) => {
-              name.endsWith("groovy") || "config.properties" == name
+            // Ignore test case with inX-config.properties or outX-config.properties
+            val inputOrOutputConfigProperties: Array[String] = pathname.list((_: File, name: String) => {
+              val isInput = INPUT_FILE_CONFIG_PROPERTY_PATTERN.matcher(name).matches()
+              val isOutput = OUTPUT_FILE_CONFIG_PROPERTY_PATTERN.matcher(name).matches()
+              isInput || isOutput
             })
             
-            accept = dwlFiles.length == 1 && (javaCasesOrConfigCases == null || javaCasesOrConfigCases.isEmpty)
+            // Ignore java use cases for now until we resolve classpath
+            val javaCases: Array[String] = pathname.list((_: File, name: String) => {
+              name.endsWith("groovy")
+            })
+
+            // Ignore config.properties test cases
+            val configPropertyCase = pathname.list((_: File, name: String) => {
+              "config.properties" == name
+            })
+            
+            accept = dwlFiles.length == 1 && isEmpty(inputOrOutputConfigProperties) && isEmpty(javaCases) && isEmpty(configPropertyCase)
           }
         }
         accept
@@ -142,30 +162,33 @@ class NativeCliRuntimeIT extends FunSpec
           
           var maybeEncoding: Option[String] = None
           var directives = headerDirectives
+          implicit val ctx: EvaluationContext = EvaluationContext()
+          val maybeDefaultDataFormat = DataFormatManager.byExtension(s".$outputExtension")
+          val defaultDataFormat = maybeDefaultDataFormat.getOrElse(throw new IllegalArgumentException("Unable to find data-format for extension `" + outputExtension + "`"))
+          val defaultMimeType = defaultDataFormat.defaultMimeType.toString()
           if (maybeOutputDirective.isEmpty) {
-            val contentType = MimeTypeMapper.getMimeTypeOf(outputExtension)
-            val newOutputDirective = OutputDirective(None, Some(ContentType(contentType)), None, None)
+            val newOutputDirective = OutputDirective(None, Some(ContentType(defaultMimeType)), None, None)
             directives = directives :+ newOutputDirective
           } else {
-            val contentType = MimeTypeMapper.getMimeTypeOf(outputExtension)
             val outputDirective = maybeOutputDirective.get
+            maybeEncoding = getEncodingFromOutputDirective(outputDirective)
+            
             if (outputDirective.mime.isDefined) {
               val currentContentType = outputDirective.mime.get
-              val currentMime = currentContentType.mime
-              if (subPart(contentType) != subPart(currentMime)) {
-                val newOutputDirective = OutputDirective(None, Some(ContentType(contentType)), None, None)
+              val maybeCurrentDataFormat = DataFormatManager.byContentType(currentContentType.mime)
+              // Replace output directive if:
+              // 1- declared data-format at output directive that's not exits or
+              // 2- declared data-format at output directive is different from the data-format obtained by the file extension
+              if (maybeCurrentDataFormat.isEmpty || maybeCurrentDataFormat.get.defaultMimeType.toString() != defaultMimeType) {
+                val newOutputDirective = OutputDirective(None, Some(ContentType(defaultMimeType)), None, None)
                 val index = directives.indexOf(outputDirective)
                 directives = directives.take(index) ++ directives.drop(index + 1)
                 directives = directives :+ newOutputDirective
-              } else {
-                maybeEncoding = getEncodingFromOutputDirective(outputDirective)
+                maybeEncoding = getEncodingFromOutputDirective(newOutputDirective)
               }
-            } else {
-              maybeEncoding = getEncodingFromOutputDirective(outputDirective)
             }
           }
-
-          // TODO [ML]: remove file creation
+          
           documentNode.header.directives = directives
           val settings = CodeGeneratorSettings(InfixOptions.KEEP, alwaysInsertVersion = false, newLineBetweenFunctions = true, orderDirectives = false)
           val code = CodeGenerator.generate(documentNode, settings)
@@ -254,7 +277,7 @@ class NativeCliRuntimeIT extends FunSpec
     result should matchBin(expectedFile)
   }
   
-  private def matchMultipart(output: File, result: Array[Byte]) = {
+  private def matchMultipart(output: File, result: Array[Byte]): Unit = {
     val expected = new MimeMultipart(new ByteArrayDataSource(new FileInputStream(output), "multipart/form-data"))
     val actual = new MimeMultipart(new ByteArrayDataSource(new ByteArrayInputStream(result), "multipart/form-data"))
     actual.getPreamble should matchString(expected.getPreamble)
@@ -304,15 +327,10 @@ class NativeCliRuntimeIT extends FunSpec
     expectedText
   }
 
-  private def subPart(mime: String): String = mime.split("/")(1)
-
   override def ignoreTests(): Array[String] = {
-    // Encoding issues
-    Array("binary-utf16-bom-to-json",
-      "csv-invalid-utf8",
-      "json_multi_encoding",
-      "textplain-utf16-bom") ++
-      // Unsupported charset
+      // Encoding issues
+      Array("csv-invalid-utf8") ++
+      // Fail in java11 because broken backwards
       Array(
         "coerciones_toString",
         "date-coercion"
@@ -341,25 +359,20 @@ class NativeCliRuntimeIT extends FunSpec
         "java-field-ref",
         "java-interop-enum",
         "java-interop-function-call",
+        "runtime_run_coercionException",
+        "runtime_run_fibo",
+        "runtime_run_null_java",
         "write-function-with-null"
       ) ++
-      // form-data did not equal inline
-      Array("multipart-mixed-complex-scenario") ++
       // Multipart Object has empty `parts` and expects at least one part
-      Array("multipart-write-message",
-        "multipart-mixed-message",
+      Array("multipart-mixed-message",
+        "multipart-write-message",
         "multipart-write-subtype-override") ++
       // Fail pattern match on complex object
       Array("pattern-match-complex-type") ++
       // DataFormats
       Array(
         "runtime_dataFormatsDescriptors"
-      ) ++
-      // UnknownContentTypeException
-      Array(
-        "runtime_run_coercionException",
-        "runtime_run_fibo",
-        "runtime_run_null_java"
       ) ++
       // Cannot coerce Null (null) to Number
       Array(
