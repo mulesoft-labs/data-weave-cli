@@ -327,7 +327,7 @@ class NativeCliRuntimeIT extends FunSpec
     expectedText
   }
 
-  def ignoreTests2(): Array[String] = {
+  override def ignoreTests(): Array[String] = {
       // Encoding issues
       Array("csv-invalid-utf8") ++
       // Fail in java11 because broken backwards
