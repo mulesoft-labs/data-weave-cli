@@ -24,7 +24,7 @@ class NativeCliITTestRunner(args: Array[String]) extends ResourceResolver {
     while (nativeCliIntegrationTest.getName != NATIVE_CLI_INTEGRATION_TESTS) {
       nativeCliIntegrationTest = nativeCliIntegrationTest.getParentFile
     }
-    val dwPath = new File(nativeCliIntegrationTest.getParentFile, s"native-cli/build/graal/$EXECUTABLE_NAME")
+    val dwPath = new File(nativeCliIntegrationTest.getParentFile, s"native-cli/build/native/nativeCompile/$EXECUTABLE_NAME")
     dwPath.getAbsolutePath
   }
   
