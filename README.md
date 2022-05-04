@@ -43,10 +43,10 @@ brew install dw
 3. Add `<user.home>/.dw/bin` to your **PATH**
 
 ### Build and Install
-Execute the gradle task `nativeImage`
+Execute the gradle task `nativeCompile`
 
 ```bash
-./gradlew native-cli:nativeImage
+./gradlew native-cli:nativeCompile
 ```
 
 It takes several minutes so good time to take and refill your mate.
