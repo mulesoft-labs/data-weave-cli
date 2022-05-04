@@ -35,11 +35,11 @@ jobs:
 
     # Setup graalvm
     - uses: graalvm/setup-graalvm@v1
-        with:
-          version: '21.2.0'
-          java-version: '11'
-          components: 'native-image'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        version: '21.2.0'
+        java-version: '11'
+        components: 'native-image'
+        github-token: ${{ secrets.GITHUB_TOKEN }}
 
     # Runs a single command using the runners shell
     - name: Run Build on native
