@@ -10,8 +10,8 @@ import java.io.File
 
 class ArgumentsParserTest extends FreeSpec with Matchers {
   
-  private def getScriptFolder(script: String): File = {
-    val url = getClass.getClassLoader.getResource(s"scripts${File.separator}$script")
+  private def getScriptFolder(scriptFolder: String): File = {
+    val url = getClass.getClassLoader.getResource(s"scripts/$scriptFolder")
     val file = new File(url.getFile)
     file
   }
@@ -99,7 +99,7 @@ class ArgumentsParserTest extends FreeSpec with Matchers {
   
   "should fail parsing unrecognized argument" in {
     val parser = new CLIArgumentsParser(new TestConsole())
-    val value = parser.parse(Array("-o", "/tmp/out.json", "--property", "p1", "p2", "p3", "1 to 10" ))
+    val value = parser.parse(Array("-o", "/tmp/out.json", "--parameter", "p1", "p2", "p3", "1 to 10" ))
     assert(value.isRight)
     val message = value.right.get
     message shouldBe "Invalid argument p3"

@@ -47,7 +47,8 @@ import scala.util.Try
 class NativeCliRuntimeIT extends FunSpec 
   with Matchers 
   with FolderBasedTest 
-  with ResourceResolver {
+  with ResourceResolver 
+  with OSSupport {
 
   private val TIMEOUT: (Int, TimeUnit) = (30, TimeUnit.SECONDS)
   private val INPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile( "in[0-9]+-config\\.properties")
@@ -328,13 +329,11 @@ class NativeCliRuntimeIT extends FunSpec
   }
 
   override def ignoreTests(): Array[String] = {
+      val ignored: Array[String] = 
       // Encoding issues
       Array("csv-invalid-utf8") ++
       // Fail in java11 because broken backwards
-      Array(
-        "coerciones_toString",
-        "date-coercion"
-      ) ++
+      Array("coerciones_toString", "date-coercion") ++
       // Use resources (dwl files) that is present in the Tests but not in Cli (e.g: org::mule::weave::v2::libs::)
       Array("full-qualified-name-ref",
         "import-component-alias-lib",
@@ -348,12 +347,9 @@ class NativeCliRuntimeIT extends FunSpec
         "try",
         "urlEncodeDecode") ++
       // Uses resource name that is different on Cli than in the Tests 
-      Array(
-        "try-recursive-call",
-        "runtime_orElseTry") ++
+      Array("try-recursive-call", "runtime_orElseTry") ++
       // Use readUrl from classpath
-      Array("dw-binary",
-        "read_lines") ++
+      Array("dw-binary", "read_lines") ++
       // Uses java module
       Array("java-big-decimal",
         "java-field-ref",
@@ -365,19 +361,68 @@ class NativeCliRuntimeIT extends FunSpec
         "write-function-with-null"
       ) ++
       // Multipart Object has empty `parts` and expects at least one part
-      Array("multipart-mixed-message",
-        "multipart-write-message",
-        "multipart-write-subtype-override") ++
+      Array("multipart-mixed-message", "multipart-write-message", "multipart-write-subtype-override") ++
       // Fail pattern match on complex object
       Array("pattern-match-complex-type") ++
       // DataFormats
-      Array(
-        "runtime_dataFormatsDescriptors"
-      ) ++
+      Array("runtime_dataFormatsDescriptors") ++
       // Cannot coerce Null (null) to Number
-      Array(
-        "update-op"
+      Array("update-op") ++
+      // Take too long time
+      Array("array-concat")
+      
+    val osIgnored: Array[String] = if (isWindows) {
+      Array("base64",
+        "constant_folding",
+        "csv-big-field",
+        "csv-buffered-writer",
+        "csv-escaped-quoted-input",
+        "csv-emoji",
+        "csv-newline",
+        "csv-no-escape",
+        "csv-no-header-selection",
+        "csv-no-quote",
+        "csv-quote-output",
+        "csv-reformat",
+        "csv-separator-input",
+        "csv-separator-tab",
+        "csv-single-record",
+        "csv-streaming-escaped-quoted-input",
+        "csv-streaming-quote-output",
+        "csv-streaming-separator-tab",
+        "csv-to-csv",
+        "csv-utf8",
+        "csv-value",
+        "dfl-string-literal-values",
+        "encoding",
+        "env",
+        "json-utf8",
+        "json_binary",
+        "light-input",
+        "multipart-read-message",
+        "nested_map_with_filter",
+        "non-printable-characters",
+        "runtime_eval",
+        "runtime_run",
+        "runtime_run_empty_char_option",
+        "runtime_run_illegal_arguments",
+        "runtime_run_invalid_input",
+        "runtime_run_securityReaderProperty",
+        "runtime_run_securityReaderProperty_InputDirective",
+        "runtime_run_unhandled_pattern_syntax_exception",
+        "runtime_run_unhandled_xml_parser_exception",
+        "runtime_run_unhandled_xml_parsing_exception",
+        "write-function-by-id",
+        "write-function",
+        "write_function_missing_root_exception",
+        "xml-encoding",
+        "xml-string-escape",
+        "xml_default_namespace_passthru"
       )
+    } else {
+      Array.empty
+    }
+    ignored ++ osIgnored
   }
 }
 

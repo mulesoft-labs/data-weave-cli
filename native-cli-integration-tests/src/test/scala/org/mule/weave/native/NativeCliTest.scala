@@ -36,7 +36,7 @@ class NativeCliTest extends FreeSpec
   "it should execute with input and script" in {
     val inputPath = getResourcePath("inputs/payload.json")
     val transformationPath = getResourcePath("scripts/GetName.dwl")
-    val (_, output) = NativeCliITTestRunner(Array("-i", "payload", inputPath, "payload.name", "-f", transformationPath)).execute()
+    val (_, output) = NativeCliITTestRunner(Array("-i", "payload", inputPath, "-f", transformationPath)).execute()
     output shouldBe "\"Tomo\""
   }
 }

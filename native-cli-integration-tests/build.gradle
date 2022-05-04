@@ -13,4 +13,4 @@ dependencies {
     testRuntime 'org.pegdown:pegdown:1.6.0'
 }
 
-test.dependsOn(":native-cli:nativeImage")
+test.dependsOn(":native-cli:nativeCompile")
