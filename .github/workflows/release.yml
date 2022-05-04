@@ -12,11 +12,10 @@ jobs:
   RELEASE_EXTENSION:
     strategy:
       matrix:
-#        os: [macos-latest, ubuntu-latest, windows-latest]
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
         include:
-#          - os: windows-2019
-#            script_name: windows
+          - os: windows-latest
+            script_name: windows
           - os: ubuntu-latest
             script_name: linux
           - os: macos-latest
@@ -31,7 +30,7 @@ jobs:
       # Setup graalvm
       - uses: graalvm/setup-graalvm@v1
         with:
-          version: '21.2.0'
+          version: '22.0.0.2'
           java-version: '11'
           components: 'native-image'
           github-token: ${{ secrets.GITHUB_TOKEN }}
