@@ -10,8 +10,8 @@ import java.io.File
 
 class ArgumentsParserTest extends FreeSpec with Matchers {
   
-  private def getScriptFolder(script: String): File = {
-    val url = getClass.getClassLoader.getResource(s"scripts${File.separator}$script")
+  private def getScriptFolder(scriptFolder: String): File = {
+    val url = getClass.getClassLoader.getResource(s"scripts$scriptFolder")
     val file = new File(url.getFile)
     file
   }

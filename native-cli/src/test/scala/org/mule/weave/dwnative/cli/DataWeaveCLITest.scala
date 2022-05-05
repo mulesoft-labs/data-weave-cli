@@ -1,6 +1,7 @@
 package org.mule.weave.dwnative.cli
 
 import org.mule.weave.dwnative.utils.DataWeaveUtils
+import org.mule.weave.v2.utils.StringHelper.toStringTransformer
 import org.scalatest.FreeSpec
 import org.scalatest.Matchers
 
@@ -33,7 +34,7 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     val result: String = source.mkString
     val expected =
       """<?xml version='1.0' encoding='UTF-8'?>
-        |<root>Mariano</root>""".stripMargin
+        |<root>Mariano</root>""".stripMarginAndNormalizeEOL
     result.trim shouldBe expected
   }
 
@@ -126,7 +127,7 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     val expected = """
                |{
                |  "isEmpty": false
-               |}""".stripMargin.trim
+               |}""".stripMarginAndNormalizeEOL.trim
     result shouldBe expected
   }
 
@@ -142,7 +143,7 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     val expected = """
                      |{
                      |  "isEmpty": false
-                     |}""".stripMargin.trim
+                     |}""".stripMarginAndNormalizeEOL.trim
     result shouldBe expected
   }
   
@@ -181,7 +182,7 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
                      |{
                      |  "fullName": "Mariano Lischetti"
                      |}
-                     """.stripMargin.trim
+                     """.stripMarginAndNormalizeEOL.trim
     result shouldBe expected
   }
 }
