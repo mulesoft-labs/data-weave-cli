@@ -35,15 +35,12 @@ jobs:
     # Read graalvm version
     - name: Read Graalvm version
       run: |
-        echo "GRAALVM_VERSION=$(grep graalvmVersion gradle.properties | cut -d '=' -f2)" >> $GITHUB_ENV
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          echo "GRAALVM_VERSION=22.0.0.2" >> $GITHUB_ENV
+        else
+          echo "GRAALVM_VERSION=$(grep graalvmVersion gradle.properties | cut -d '=' -f2)" >> $GITHUB_ENV
+        fi
       shell: bash
-      if: runner.os != 'Windows'
-    
-    - name: Read Graalvm version Windows
-      run: |
-        echo "GRAALVM_VERSION=22.0.0.2" >> $GITHUB_ENV
-      shell: bash
-      if: runner.os == 'Windows'
     
     # Setup Graalvm
     - name: Setup Graalvm
@@ -55,42 +52,12 @@ jobs:
         github-token: ${{ secrets.GITHUB_TOKEN }}
 
     # Runs a single command using the runners shell
-    - name: Run Build on native
+    - name: Run Build
       run: |
         if [ "$RUNNER_OS" == "Windows" ]; then
-          ./gradlew.bat --stacktrace native-cli:build
+          ./gradlew.bat --stacktrace build
         else
-          ./gradlew --stacktrace native-cli:build
-        fi
-      shell: bash
-        
-    # Runs a test command using the runners shell
-    - name: Run unit test
-      run: |
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          ./gradlew.bat native-cli:test
-        else
-          ./gradlew native-cli:test
-        fi
-      shell: bash
-
-    # Runs a set of commands using the runners shell
-    - name: Create Native Image
-      run: |
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          ./gradlew.bat --stacktrace native-cli:nativeCompile
-        else
-          ./gradlew --stacktrace native-cli:nativeCompile
-        fi
-      shell: bash
-      
-    # Runs integration test command using the runners shell
-    - name: Run integration test
-      run: |
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          ./gradlew.bat native-cli-integration-tests:test
-        else
-          ./gradlew native-cli-integration-tests:test
+          ./gradlew --stacktrace build
         fi
       shell: bash
     
