@@ -50,20 +50,19 @@ jobs:
     # Runs a single command using the runners shell
     - name: Run Build
       run: |
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          ./gradlew --stacktrace clean build -x test
-        else
-          ./gradlew --stacktrace build
-        fi
+        ./gradlew --stacktrace build
       shell: bash
+      if: runner.os != 'Windows'
+
+    - name: Run Build on Windows
+      run: |
+        ./gradlew --stacktrace build -x test
+      shell: bash
+      if: runner.os == 'Windows'  
     
     - name: Generate Distro
       run: |
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          ./gradlew.bat --stacktrace native-cli:distro
-        else
           ./gradlew --stacktrace native-cli:distro
-        fi
       shell: bash
 
     # Upload the generated artifact
