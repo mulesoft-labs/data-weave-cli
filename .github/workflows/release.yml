@@ -12,10 +12,10 @@ jobs:
   RELEASE_EXTENSION:
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest] #, windows-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
         include:
-          #- os: windows-latest
-          #  script_name: windows
+          - os: windows-latest
+            script_name: windows
           - os: ubuntu-latest
             script_name: linux
           - os: macos-latest
@@ -26,11 +26,12 @@ jobs:
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v2
-      
+          
       # Read graalvm version
       - name: Read Graalvm version
         run: |
           echo "GRAALVM_VERSION=$(grep graalvmVersion gradle.properties | cut -d '=' -f2)" >> $GITHUB_ENV
+        shell: bash
       
       # Setup Graalvm
       - name: Setup Graalvm
@@ -46,25 +47,19 @@ jobs:
           echo "NATIVE_VERSION=$(echo '${{github.ref}}' | sed -e 's,.*/v\(.*\),\1,')" >> $GITHUB_ENV
       
       # Runs a single command using the runners shell
-      - name: Run Build on native
-        run: ./gradlew native-cli:build -PnativeVersion=${{env.NATIVE_VERSION}}
+      - name: Run Build
+        run: |
+          ./gradlew build -PnativeVersion=${{env.NATIVE_VERSION}}
         shell: bash
-          
-      # Runs a test command using the runners shell
-      - name: Run unit test
-        run: ./gradlew --stacktrace native-cli:test
-        shell: bash
+        if: runner.os != 'Windows'
 
-      # Runs a set of commands using the runners shell
-      - name: Create Native Image
-        run: ./gradlew native-cli:nativeCompile -PnativeVersion=${{env.NATIVE_VERSION}}
+      - name: Run Build on Windows
+        run: |
+          ./gradlew build -PnativeVersion=${{env.NATIVE_VERSION}} -x test
         shell: bash
+        if: runner.os == 'Windows'
       
-      # Runs integration test command using the runners shell
-      - name: Run integration test
-        run: ./gradlew --stacktrace native-cli-integration-tests:test
-        shell: bash
-      
+      # Generate distro
       - name: Create Distro
         run: ./gradlew native-cli:distro -PnativeVersion=${{env.NATIVE_VERSION}}
         shell: bash

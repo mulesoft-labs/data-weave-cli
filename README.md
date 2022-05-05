@@ -35,10 +35,7 @@ brew install dw
 ```
 
 ### Manual Installation
-1. Download the zip 
-   1. [Mac](https://github.com/mulesoft-labs/data-weave-cli/releases/download/v1.0.21/dw-1.0.21-macOS)
-   2. [Linux](https://github.com/mulesoft-labs/data-weave-cli/releases/download/v1.0.21/dw-1.0.21-Linux)
-   3. [Windows](https://github.com/mulesoft-labs/data-weave-native/releases/download/v1.0.21/dw-1.0.21-Windows.zip)
+1. Download the latest [release version](https://github.com/mulesoft-labs/data-weave-cli/releases) according to your OS.
 2. Unzip the file on your `<user.home>/.dw`
 3. Add `<user.home>/.dw/bin` to your **PATH**
 
