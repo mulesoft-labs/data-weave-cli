@@ -27,10 +27,16 @@ jobs:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v2
       
-      # Setup graalvm
-      - uses: graalvm/setup-graalvm@v1
+      # Read graalvm version
+      - name: Read Graalvm version
+        run: |
+          echo "GRAALVM_VERSION=$(grep graalvmVersion gradle.properties | cut -d '=' -f2)" >> $GITHUB_ENV
+      
+      # Setup Graalvm
+      - name: Setup Graalvm
+        uses: graalvm/setup-graalvm@v1
         with:
-          version: '22.0.0.2'
+          version: ${{env.GRAALVM_VERSION}}
           java-version: '11'
           components: 'native-image'
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -38,17 +44,27 @@ jobs:
       - name: Guess Extension Version
         run: |
           echo "NATIVE_VERSION=$(echo '${{github.ref}}' | sed -e 's,.*/v\(.*\),\1,')" >> $GITHUB_ENV
-
+      
       # Runs a single command using the runners shell
       - name: Run Build on native
         run: ./gradlew native-cli:build -PnativeVersion=${{env.NATIVE_VERSION}}
+        shell: bash
+          
+      # Runs a test command using the runners shell
+      - name: Run unit test
+        run: ./gradlew --stacktrace native-cli:test
         shell: bash
 
       # Runs a set of commands using the runners shell
       - name: Create Native Image
         run: ./gradlew native-cli:nativeCompile -PnativeVersion=${{env.NATIVE_VERSION}}
         shell: bash
-
+      
+      # Runs integration test command using the runners shell
+      - name: Run integration test
+        run: ./gradlew --stacktrace native-cli-integration-tests:test
+        shell: bash
+      
       - name: Create Distro
         run: ./gradlew native-cli:distro -PnativeVersion=${{env.NATIVE_VERSION}}
         shell: bash

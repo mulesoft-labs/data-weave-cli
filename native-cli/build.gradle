@@ -8,6 +8,7 @@ buildscript {
 
 plugins {
 //    id 'com.github.johnrengelman.shadow' version '5.2.0'
+    id "com.github.maiflai.scalatest" version "${scalaTestPluginVersion}"
     id 'application'
     // Apply GraalVM Native Image plugin
     id 'org.graalvm.buildtools.native' version '0.9.5'
@@ -27,7 +28,7 @@ mainClassName = 'org.mule.weave.dwnative.cli.DataWeaveCLI'
 
 dependencies {
     compile group: 'org.mule.weave', name: 'runtime', version: weaveVersion
-    compile group: 'org.graalvm.sdk', name: 'graal-sdk', version: '1.0.0-rc12'
+    compileOnly group: 'org.graalvm.sdk', name: 'graal-sdk', version: graalvmVersion
     compile group: 'org.mule.weave', name: 'core-modules', version: weaveVersion
     compile group: 'org.mule.weave', name: 'yaml-module', version: weaveVersion
     compile group: 'org.mule.weave', name: 'http-module', version: ioVersion
@@ -38,6 +39,7 @@ dependencies {
     compile group: 'org.mule.weave', name: 'ndjson-module', version: weaveVersion
     compile group: 'commons-cli', name: 'commons-cli', version: '1.4'
     testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
+    testRuntime 'org.pegdown:pegdown:1.6.0'
 }
 
 ext {
@@ -111,9 +113,6 @@ graalvmNative {
             // Main options
             imageName = 'dw'
             mainClass = 'org.mule.weave.dwnative.cli.DataWeaveCLI'
-            debug = true // Determines if debug info should be generated, defaults to false
-            verbose = true // Add verbose output, defaults to false
-            fallback = false // Sets the fallback mode of native-image, defaults to false
 
             // Advanced options
             buildArgs.add("-H:+ReportExceptionStackTraces")

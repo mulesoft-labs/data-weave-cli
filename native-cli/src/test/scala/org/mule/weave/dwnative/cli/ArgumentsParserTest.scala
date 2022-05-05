@@ -99,7 +99,7 @@ class ArgumentsParserTest extends FreeSpec with Matchers {
   
   "should fail parsing unrecognized argument" in {
     val parser = new CLIArgumentsParser(new TestConsole())
-    val value = parser.parse(Array("-o", "/tmp/out.json", "--property", "p1", "p2", "p3", "1 to 10" ))
+    val value = parser.parse(Array("-o", "/tmp/out.json", "--parameter", "p1", "p2", "p3", "1 to 10" ))
     assert(value.isRight)
     val message = value.right.get
     message shouldBe "Invalid argument p3"

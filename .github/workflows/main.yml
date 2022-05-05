@@ -31,11 +31,17 @@ jobs:
     steps:
     # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
     - uses: actions/checkout@v2
-
-    # Setup graalvm
-    - uses: graalvm/setup-graalvm@v1
+    
+    # Read graalvm version
+    - name: Read Graalvm version
+    run: |
+      echo "GRAALVM_VERSION=$(grep graalvmVersion gradle.properties | cut -d '=' -f2)" >> $GITHUB_ENV
+    
+    # Setup Graalvm
+    - name: Setup Graalvm
+      uses: graalvm/setup-graalvm@v1
       with:
-        version: '22.0.0.2'
+        version: ${{env.GRAALVM_VERSION}}
         java-version: '11'
         components: 'native-image'
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -44,23 +50,25 @@ jobs:
     - name: Run Build on native
       run: ./gradlew --stacktrace native-cli:build
       shell: bash
-      env:
-        AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
-        AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
+        
+    # Runs a test command using the runners shell
+    - name: Run unit test
+      run: ./gradlew --stacktrace native-cli:test
+      shell: bash
 
     # Runs a set of commands using the runners shell
     - name: Create Native Image
-      run: ./gradlew --stacktrace --debug native-cli:nativeCompile
+      run: ./gradlew --stacktrace native-cli:nativeCompile
       shell: bash
-      env:
-        AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
-        AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
+      
+    # Runs integration test command using the runners shell
+    - name: Run integration test
+      run: ./gradlew --stacktrace native-cli-integration-tests:test
+      shell: bash
+    
     - name: Generate Distro
       run: |
         ./gradlew --stacktrace native-cli:distro
-      env:
-        AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
-        AWS_SECRET_KEY: ${{secrets.AWS_SECRET_KEY}}
 
     # Upload the generated artifact
     - name: Upload generated script

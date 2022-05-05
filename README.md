@@ -36,13 +36,20 @@ brew install dw
 
 ### Manual Installation
 1. Download the zip 
-   1. [Mac](https://github.com/mulesoft-labs/data-weave-cli/releases/download/v1.0.16/dw-1.0.16-macOS)
-   2. [Linux](https://github.com/mulesoft-labs/data-weave-cli/releases/download/v1.0.16/dw-1.0.16-Linux)
-   3. [Windows](https://github.com/mulesoft-labs/data-weave-native/releases/download/v1.0.9/dw-1.0.9-Windows.zip) Very OLD :(!
+   1. [Mac](https://github.com/mulesoft-labs/data-weave-cli/releases/download/v1.0.21/dw-1.0.21-macOS)
+   2. [Linux](https://github.com/mulesoft-labs/data-weave-cli/releases/download/v1.0.21/dw-1.0.21-Linux)
+   3. [Windows](https://github.com/mulesoft-labs/data-weave-native/releases/download/v1.0.21/dw-1.0.21-Windows.zip)
 2. Unzip the file on your `<user.home>/.dw`
 3. Add `<user.home>/.dw/bin` to your **PATH**
 
 ### Build and Install
+
+To build the project, you need to run gradlew with the graalVM distribution based on Java 11. You can download it at https://github.com/graalvm/graalvm-ce-builds/releases
+Set:
+```bash
+export GRAALVM_HOME=<pathToGraalVMFolder>/graalvm-ce-java11-21.2.0/Contents/Home
+export JAVA_HOME=<pathToGraalVMFolder>/graalvm-ce-java11-21.2.0/Contents/Home
+```
 Execute the gradle task `nativeCompile`
 
 ```bash
@@ -51,7 +58,7 @@ Execute the gradle task `nativeCompile`
 
 It takes several minutes so good time to take and refill your mate.
 
-Once it finishes you will find the `dw` binary in `native-cli/build/graal/dw`
+Once it finishes you will find the `dw` binary in `native-cli/build/native/nativeCompile/dw`
 
 ## How to Use It
 

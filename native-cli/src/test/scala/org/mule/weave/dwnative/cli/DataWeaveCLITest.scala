@@ -164,11 +164,7 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result = source.mkString.trim
     source.close()
-    val expected = """
-                     |{
-                     |  "isEmpty": false
-                     |}""".stripMargin.trim
-    result shouldBe expected
+    result should include("usage: dw")
   }
 
   "should run using parameter" in {
