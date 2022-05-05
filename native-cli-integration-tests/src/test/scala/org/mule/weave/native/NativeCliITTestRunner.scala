@@ -19,7 +19,7 @@ class NativeCliITTestRunner(args: Array[String]) extends ResourceResolver {
   }
 
   private lazy val DW_CLI_EXECUTABLE: String = {
-    val path = getResourcePath(getClass.getName.replaceAll("\\.", File.separator) + ".class")
+    val path = getResourcePath(getClass.getName.replace(".", File.separator) + ".class")
     var nativeCliIntegrationTest = new File(path)
     while (nativeCliIntegrationTest.getName != NATIVE_CLI_INTEGRATION_TESTS) {
       nativeCliIntegrationTest = nativeCliIntegrationTest.getParentFile
