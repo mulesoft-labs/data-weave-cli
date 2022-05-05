@@ -37,13 +37,13 @@ jobs:
       run: |
         echo "GRAALVM_VERSION=$(grep graalvmVersion gradle.properties | cut -d '=' -f2)" >> $GITHUB_ENV
       shell: bash
-      if: !contains(runner.os, 'indows')
+      if: runner.os != 'Windows'
     
     - name: Read Graalvm version Windows
       run: |
-        echo "GRAALVM_VERSION=22.0.0.2" >> $env:GITHUB_ENV
+        echo "GRAALVM_VERSION=22.0.0.2" >> $GITHUB_ENV
       shell: bash
-      if: contains(runner.os, 'indows')
+      if: runner.os == 'Windows'
     
     # Setup Graalvm
     - name: Setup Graalvm
