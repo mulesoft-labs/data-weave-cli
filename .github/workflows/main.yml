@@ -34,8 +34,8 @@ jobs:
     
     # Read graalvm version
     - name: Read Graalvm version
-    run: |
-      echo "GRAALVM_VERSION=$(grep graalvmVersion gradle.properties | cut -d '=' -f2)" >> $GITHUB_ENV
+      run: |
+        echo "GRAALVM_VERSION=$(grep graalvmVersion gradle.properties | cut -d '=' -f2)" >> $GITHUB_ENV
     
     # Setup Graalvm
     - name: Setup Graalvm
