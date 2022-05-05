@@ -11,7 +11,7 @@ import java.io.File
 class ArgumentsParserTest extends FreeSpec with Matchers {
   
   private def getScriptFolder(scriptFolder: String): File = {
-    val url = getClass.getClassLoader.getResource(s"scripts$scriptFolder")
+    val url = getClass.getClassLoader.getResource(s"scripts/$scriptFolder")
     val file = new File(url.getFile)
     file
   }
