@@ -36,7 +36,7 @@ jobs:
     - name: Read Graalvm version
       run: |
         if [ "$RUNNER_OS" == "Windows" ]; then
-          echo "GRAALVM_VERSION=22.0.0.2" >> $GITHUB_ENV
+          echo "GRAALVM_VERSION=$(grep graalvmVersion gradle.properties | cut -d '=' -f2)" >> $GITHUB_ENV
         else
           echo "GRAALVM_VERSION=$(grep graalvmVersion gradle.properties | cut -d '=' -f2)" >> $GITHUB_ENV
         fi
@@ -55,7 +55,7 @@ jobs:
     - name: Run Build
       run: |
         if [ "$RUNNER_OS" == "Windows" ]; then
-          ./gradlew.bat --stacktrace build
+          ./gradlew.bat --stacktrace clean build -x test
         else
           ./gradlew --stacktrace build
         fi
