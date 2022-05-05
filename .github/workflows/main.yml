@@ -17,10 +17,10 @@ jobs:
   OSX_LINUX_WINDOWS:
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest] #, windows-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
         include:
-          #- os: windows-latest
-          #  script_name: windows
+          - os: windows-latest
+            script_name: windows
           - os: ubuntu-latest
             script_name: linux
           - os: macos-latest
@@ -35,7 +35,11 @@ jobs:
     # Read graalvm version
     - name: Read Graalvm version
       run: |
-        echo "GRAALVM_VERSION=$(grep graalvmVersion gradle.properties | cut -d '=' -f2)" >> $GITHUB_ENV
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          echo "GRAALVM_VERSION=$(grep graalvmVersion gradle.properties | cut -d '=' -f2)" >> $env:GITHUB_ENV
+        else
+          echo "GRAALVM_VERSION=$(grep graalvmVersion gradle.properties | cut -d '=' -f2)" >> $GITHUB_ENV
+        fi
     
     # Setup Graalvm
     - name: Setup Graalvm
@@ -48,27 +52,52 @@ jobs:
 
     # Runs a single command using the runners shell
     - name: Run Build on native
-      run: ./gradlew --stacktrace native-cli:build
+      run: |
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          ./gradlew.bat --stacktrace native-cli:build
+        else
+          ./gradlew --stacktrace native-cli:build
+        fi
       shell: bash
         
     # Runs a test command using the runners shell
     - name: Run unit test
-      run: ./gradlew --stacktrace native-cli:test
+      run: |
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          ./gradlew.bat native-cli:test
+        else
+          ./gradlew native-cli:test
+        fi
       shell: bash
 
     # Runs a set of commands using the runners shell
     - name: Create Native Image
-      run: ./gradlew --stacktrace native-cli:nativeCompile
+      run: |
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          ./gradlew.bat --stacktrace native-cli:nativeCompile
+        else
+          ./gradlew --stacktrace native-cli:nativeCompile
+        fi
       shell: bash
       
     # Runs integration test command using the runners shell
     - name: Run integration test
-      run: ./gradlew --stacktrace native-cli-integration-tests:test
+      run: |
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          ./gradlew.bat native-cli-integration-tests:test
+        else
+          ./gradlew native-cli-integration-tests:test
+        fi
       shell: bash
     
     - name: Generate Distro
       run: |
-        ./gradlew --stacktrace native-cli:distro
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          ./gradlew.bat --stacktrace native-cli:distro
+        else
+          ./gradlew --stacktrace native-cli:distro
+        fi
+      shell: bash
 
     # Upload the generated artifact
     - name: Upload generated script

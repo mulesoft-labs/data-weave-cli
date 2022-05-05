@@ -331,10 +331,7 @@ class NativeCliRuntimeIT extends FunSpec
       // Encoding issues
       Array("csv-invalid-utf8") ++
       // Fail in java11 because broken backwards
-      Array(
-        "coerciones_toString",
-        "date-coercion"
-      ) ++
+      Array("coerciones_toString", "date-coercion") ++
       // Use resources (dwl files) that is present in the Tests but not in Cli (e.g: org::mule::weave::v2::libs::)
       Array("full-qualified-name-ref",
         "import-component-alias-lib",
@@ -348,12 +345,9 @@ class NativeCliRuntimeIT extends FunSpec
         "try",
         "urlEncodeDecode") ++
       // Uses resource name that is different on Cli than in the Tests 
-      Array(
-        "try-recursive-call",
-        "runtime_orElseTry") ++
+      Array("try-recursive-call", "runtime_orElseTry") ++
       // Use readUrl from classpath
-      Array("dw-binary",
-        "read_lines") ++
+      Array("dw-binary", "read_lines") ++
       // Uses java module
       Array("java-big-decimal",
         "java-field-ref",
@@ -365,19 +359,15 @@ class NativeCliRuntimeIT extends FunSpec
         "write-function-with-null"
       ) ++
       // Multipart Object has empty `parts` and expects at least one part
-      Array("multipart-mixed-message",
-        "multipart-write-message",
-        "multipart-write-subtype-override") ++
+      Array("multipart-mixed-message", "multipart-write-message", "multipart-write-subtype-override") ++
       // Fail pattern match on complex object
       Array("pattern-match-complex-type") ++
       // DataFormats
-      Array(
-        "runtime_dataFormatsDescriptors"
-      ) ++
+      Array("runtime_dataFormatsDescriptors") ++
       // Cannot coerce Null (null) to Number
-      Array(
-        "update-op"
-      )
+      Array("update-op") ++
+      // Take too long time
+      Array("array-concat")
   }
 }
 
