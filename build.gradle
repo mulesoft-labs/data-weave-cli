@@ -5,19 +5,12 @@ buildscript {
             url "https://plugins.gradle.org/m2/"
         }
     }
-    dependencies {
-        classpath "gradle.plugin.com.palantir.graal:gradle-graal:0.7.2"
-    }
 }
-
-
-apply plugin: 'com.palantir.graal'
 
 subprojects {
 
     apply plugin: "java"
     apply plugin: "scala"
-    apply plugin: 'com.palantir.graal'
     apply plugin: 'maven-publish'
 
     group 'org.mule.weave.native'
@@ -73,6 +66,7 @@ subprojects {
             name "jitpack.io"
             url "https://jitpack.io"
         }
+        gradlePluginPortal()
     }
 
 

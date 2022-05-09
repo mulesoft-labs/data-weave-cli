@@ -4,14 +4,14 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import scala.io.Source
 
-class NativeCliITTestRunner(args: Array[String]) extends ResourceResolver {
+class NativeCliITTestRunner(args: Array[String]) 
+  extends ResourceResolver 
+    with OSSupport {
 
   private val NATIVE_CLI_INTEGRATION_TESTS = "native-cli-integration-tests"
   
-  private lazy val OS = System.getProperty("os.name").toLowerCase
-  
   private lazy val EXECUTABLE_NAME = {
-    if (OS.contains("win")) {
+    if (isWindows) {
       "dw.exe"
     } else {
       "dw"
@@ -19,12 +19,12 @@ class NativeCliITTestRunner(args: Array[String]) extends ResourceResolver {
   }
 
   private lazy val DW_CLI_EXECUTABLE: String = {
-    val path = getResourcePath(getClass.getName.replaceAll("\\.", File.separator) + ".class")
+    val path = getResourcePath(getClass.getName.replace(".", File.separator) + ".class")
     var nativeCliIntegrationTest = new File(path)
     while (nativeCliIntegrationTest.getName != NATIVE_CLI_INTEGRATION_TESTS) {
       nativeCliIntegrationTest = nativeCliIntegrationTest.getParentFile
     }
-    val dwPath = new File(nativeCliIntegrationTest.getParentFile, s"native-cli/build/graal/$EXECUTABLE_NAME")
+    val dwPath = new File(nativeCliIntegrationTest.getParentFile, s"native-cli/build/native/nativeCompile/$EXECUTABLE_NAME")
     dwPath.getAbsolutePath
   }
   

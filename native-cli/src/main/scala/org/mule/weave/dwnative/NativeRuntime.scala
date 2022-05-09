@@ -12,6 +12,7 @@ import org.mule.weave.v2.io.service.CustomWorkingDirectoryService
 import org.mule.weave.v2.io.service.WorkingDirectoryService
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
+import org.mule.weave.v2.model.service.CharsetProviderService
 import org.mule.weave.v2.model.service.DefaultSecurityManagerService
 import org.mule.weave.v2.model.service.LoggingService
 import org.mule.weave.v2.model.service.ProtocolUrlSourceProviderResolverService
@@ -50,6 +51,7 @@ import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.charset.Charset
+import java.nio.charset.StandardCharsets
 
 class NativeRuntime(libDir: File, path: Array[File], console: Console) {
 
@@ -104,9 +106,15 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
   
   private def createServiceManager(maybePrivileges: Option[Seq[String]] = None): ServiceManager = {
     
+    val charsetProviderService = new CharsetProviderService {
+      override def defaultCharset(): Charset = {
+        StandardCharsets.UTF_8
+      }
+    }
     var customServices: Map[Class[_], _] = Map(
       classOf[UrlSourceProviderResolverService] -> new ProtocolUrlSourceProviderResolverService(Seq(UrlProtocolHandler, WeavePathProtocolHandler(pathBasedResourceResolver))),
-      classOf[WorkingDirectoryService] -> new CustomWorkingDirectoryService(dataWeaveUtils.getWorkingHome(), true)
+      classOf[WorkingDirectoryService] -> new CustomWorkingDirectoryService(dataWeaveUtils.getWorkingHome(), true),
+      classOf[CharsetProviderService] -> charsetProviderService
     )
 
     if (maybePrivileges.isDefined) {

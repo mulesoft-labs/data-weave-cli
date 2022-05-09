@@ -7,8 +7,11 @@ buildscript {
 }
 
 plugins {
-//    id 'com.github.johnrengelman.shadow' version '5.2.0'
+    id 'com.github.johnrengelman.shadow' version '5.2.0'
+    id "com.github.maiflai.scalatest" version "${scalaTestPluginVersion}"
     id 'application'
+    // Apply GraalVM Native Image plugin
+    id 'org.graalvm.buildtools.native' version '0.9.5'
 }
 
 sourceSets {
@@ -25,7 +28,7 @@ mainClassName = 'org.mule.weave.dwnative.cli.DataWeaveCLI'
 
 dependencies {
     compile group: 'org.mule.weave', name: 'runtime', version: weaveVersion
-    compile group: 'org.graalvm.sdk', name: 'graal-sdk', version: '1.0.0-rc12'
+    compileOnly group: 'org.graalvm.sdk', name: 'graal-sdk', version: graalvmVersion
     compile group: 'org.mule.weave', name: 'core-modules', version: weaveVersion
     compile group: 'org.mule.weave', name: 'yaml-module', version: weaveVersion
     compile group: 'org.mule.weave', name: 'http-module', version: ioVersion
@@ -36,6 +39,7 @@ dependencies {
     compile group: 'org.mule.weave', name: 'ndjson-module', version: weaveVersion
     compile group: 'commons-cli', name: 'commons-cli', version: '1.4'
     testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
+    testRuntime 'org.pegdown:pegdown:1.6.0'
 }
 
 ext {
@@ -74,21 +78,21 @@ compileScala {
     dependsOn genVersions
 }
 
-//// Merging Service Files
-//shadowJar {
-//    mergeServiceFiles()
-//}
+// Merging Service Files
+shadowJar {
+    mergeServiceFiles()
+}
 
 
 import org.apache.tools.ant.taskdefs.condition.Os
 
-task distro(dependsOn: nativeImage, type: Zip) {
+task distro(dependsOn: nativeCompile, type: Zip) {
     classifier = "native-distro-" + getOsName()
     into("libs") {
         from { configurations.runtime.filter { it.getName().contains("ndjson-module") } }
     }
     into("bin") {
-        from 'build/graal/'
+        from 'build/native/nativeCompile/'
     }
 }
 
@@ -103,43 +107,43 @@ private static String getOsName() {
         prefix = "windows"
     prefix
 }
+graalvmNative {
+    binaries {
+        main {
+            // Main options
+            imageName = 'dw'
+            mainClass = 'org.mule.weave.dwnative.cli.DataWeaveCLI'
 
-graal {
-    windowsVsVarsPath 'C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Enterprise\\VC\\Auxiliary\\Build\\vcvars64.bat'
-    mainClass 'org.mule.weave.dwnative.cli.DataWeaveCLI'
-    outputName 'dw'
-    javaVersion '11'
-    graalVersion graalvmVersion
-    option "-H:+ReportExceptionStackTraces"
-    option "-J-Xmx3G"
-    option "--no-fallback"
-    option "--allow-incomplete-classpath"
-    option "-H:EnableURLProtocols=http,https"
-    option "--initialize-at-run-time=" +
-            "io.netty," +
-            "org.asynchttpclient," +
-            "org.mule.weave.v2.module.http.netty.HttpAsyncClientService," +
-            "scala.util.Random," +
-            "org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider\$"
-    option "--initialize-at-build-time=" +
-            "sun.instrument.InstrumentationImpl," +
-            "org.mule.weave.dwnative.initializer.Startup," +
-            "org.mule.weave.dwnative.," +
-            "org.mule.weave.v2.parser.," +
-            "org.mule.weave.v2.codegen.StringCodeWriter," +
-            "org.mule.weave.v2.resources.WeaveResourceLoader\$," +
-            "org.mule.weave.v2.annotations.," +
-            "org.mule.weave.v2.ts.," +
-            "org.mule.weave.v2.scope.," +
-            "org.mule.weave.v2.scope.," +
-            "org.mule.weave.v2.grammar.," +
-            "org.mule.weave.v2.sdk.," +
-            "org.mule.weave.v2.utils.," +
-            "org.mule.weave.v2.versioncheck.," +
-            //Parboiled
-            "scala.," +
-            "org.parboiled2.," +
-            "shapeless.syntax."
+            // Advanced options
+            buildArgs.add("-H:+ReportExceptionStackTraces")
+            buildArgs.add("--no-fallback")
+            buildArgs.add("--allow-incomplete-classpath")
+            buildArgs.add("-H:EnableURLProtocols=http,https")
+            buildArgs.add("--initialize-at-run-time=" +
+                    "io.netty," +
+                    "org.asynchttpclient," +
+                    "org.mule.weave.v2.module.http.netty.HttpAsyncClientService," +
+                    "scala.util.Random," +
+                    "org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider\$")
+            buildArgs.add("--initialize-at-build-time=" +
+                    "sun.instrument.InstrumentationImpl," +
+                    "org.mule.weave.dwnative.initializer.Startup," +
+                    "org.mule.weave.dwnative.," +
+                    "org.mule.weave.v2.parser.," +
+                    "org.mule.weave.v2.codegen.StringCodeWriter," +
+                    "org.mule.weave.v2.resources.WeaveResourceLoader\$," +
+                    "org.mule.weave.v2.annotations.," +
+                    "org.mule.weave.v2.ts.," +
+                    "org.mule.weave.v2.scope.," +
+                    "org.mule.weave.v2.scope.," +
+                    "org.mule.weave.v2.grammar.," +
+                    "org.mule.weave.v2.sdk.," +
+                    "org.mule.weave.v2.utils.," +
+                    "org.mule.weave.v2.versioncheck.," +
+                    //Parboiled
+                    "scala.," +
+                    "org.parboiled2.," +
+                    "shapeless.syntax.")
 
     //For Runtime execution
 //            "org.mule.weave.v2.interpreted.,"+
@@ -147,16 +151,27 @@ graal {
 //            "org.mule.weave.v2.model.types.,"
 //            "org.mule.weave.v2.core.functions."
 //    option "-H:+TraceClassInitialization"
-    option "-H:DeadlockWatchdogInterval=1000"
-    option "--report-unsupported-elements-at-runtime"
-    option "-H:CompilationExpirationPeriod=0"
-    option "--trace-object-instantiation=java.util.Random"
-    option "-H:+AddAllCharsets"
-    option "-H:+IncludeAllLocales"
+            buildArgs.add("-H:DeadlockWatchdogInterval=1000")
+            buildArgs.add("--report-unsupported-elements-at-runtime")
+            buildArgs.add("-H:CompilationExpirationPeriod=0")
+            buildArgs.add("--trace-object-instantiation=java.util.Random")
+            buildArgs.add("-H:+AddAllCharsets")
+            buildArgs.add("-H:+IncludeAllLocales")
 //    option "-H:+DashboardAll"
 //    option "-H:DashboardDump=/Users/mdeachaval/labs/palantir/weave-native-library/native-cli/dump"
 //    option "-H:+PrintImageObjectTree"
-    option "-J-Xmx6G"
+            buildArgs.add("-J-Xmx6G")
+            
+            // Development options
+            agent = false // Enables the reflection agent. Can be also set on command line using '-Pagent'
+
+            useFatJar = false // Instead of passing each jar individually, builds a fat jar
+        }
+    }
 }
 
+nativeCompile.dependsOn("shadowJar")
 
+tasks.named("nativeCompile") {
+    classpathJar = file("${buildDir}/libs/native-cli-" + nativeVersion + "-all.jar")
+}
