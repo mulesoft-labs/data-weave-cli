@@ -7,7 +7,7 @@ buildscript {
 }
 
 plugins {
-//    id 'com.github.johnrengelman.shadow' version '5.2.0'
+    id 'com.github.johnrengelman.shadow' version '5.2.0'
     id "com.github.maiflai.scalatest" version "${scalaTestPluginVersion}"
     id 'application'
     // Apply GraalVM Native Image plugin
@@ -78,10 +78,10 @@ compileScala {
     dependsOn genVersions
 }
 
-//// Merging Service Files
-//shadowJar {
-//    mergeServiceFiles()
-//}
+// Merging Service Files
+shadowJar {
+    mergeServiceFiles()
+}
 
 
 import org.apache.tools.ant.taskdefs.condition.Os
@@ -168,4 +168,10 @@ graalvmNative {
             useFatJar = false // Instead of passing each jar individually, builds a fat jar
         }
     }
+}
+
+nativeCompile.dependsOn("shadowJar")
+
+tasks.named("nativeCompile") {
+    classpathJar = file("${buildDir}/libs/native-cli-" + nativeVersion + "-all.jar")
 }

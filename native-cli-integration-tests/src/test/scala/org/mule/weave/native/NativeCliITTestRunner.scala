@@ -4,14 +4,14 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import scala.io.Source
 
-class NativeCliITTestRunner(args: Array[String]) extends ResourceResolver {
+class NativeCliITTestRunner(args: Array[String]) 
+  extends ResourceResolver 
+    with OSSupport {
 
   private val NATIVE_CLI_INTEGRATION_TESTS = "native-cli-integration-tests"
   
-  private lazy val OS = System.getProperty("os.name").toLowerCase
-  
   private lazy val EXECUTABLE_NAME = {
-    if (OS.contains("win")) {
+    if (isWindows) {
       "dw.exe"
     } else {
       "dw"
