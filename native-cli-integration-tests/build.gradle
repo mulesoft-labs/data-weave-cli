@@ -9,6 +9,7 @@ dependencies {
     testCompile group: 'org.mule.weave', name: 'parser', version: weaveVersion
     testCompile group: 'org.mule.weave', name: 'test-helpers', version: weaveVersion
     testCompile "org.mule.weave:runtime:${weaveVersion}:test@zip"
+    testCompile "org.mule.weave:yaml-module:${weaveVersion}:test@zip"
     testCompile 'commons-io:commons-io:2.11.0'
     testRuntime 'org.pegdown:pegdown:1.6.0'
 }
