@@ -57,10 +57,13 @@ class NativeCliRuntimeIT extends FunSpec
   private val OUTPUT_FILE_PATTERN = Pattern.compile("out\\.[a-zA-Z]+")
   
   val testSuites =
-    Seq(TestSuite("master", loadTestZipFile()))
+    Seq(
+      TestSuite("master", loadTestZipFile("access_raw_value")),
+      TestSuite("yaml", loadTestZipFile("comments"))
+    )
   
-  private def loadTestZipFile(): File = {
-    val url = getResource("access_raw_value")
+  private def loadTestZipFile(testSuiteExample: String): File = {
+    val url = getResource(testSuiteExample)
     val connection = url.openConnection.asInstanceOf[JarURLConnection]
     val zipFile = new File(connection.getJarFileURL.toURI)
     zipFile
@@ -271,6 +274,10 @@ class NativeCliRuntimeIT extends FunSpec
       
       case "multipart" => 
         matchMultipart(expectedFile, bytes)
+
+      case "yml" | "yaml" =>
+        val actual: String = new String(bytes, "UTF-8")
+        actual.trim should matchString(readFile(expectedFile).trim)
     }
   }
 
