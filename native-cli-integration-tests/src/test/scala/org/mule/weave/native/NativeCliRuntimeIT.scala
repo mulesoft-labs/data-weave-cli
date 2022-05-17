@@ -251,10 +251,10 @@ class NativeCliRuntimeIT extends FunSpec
     extension match {
       case "json" =>
         val actual: String = new String(bytes, encoding)
-        actual should matchJson(readFile(expectedFile))
+        actual.stripMarginAndNormalizeEOL should matchJson(readFile(expectedFile))
       case "xml" =>
         val actual: String = new String(bytes, encoding)
-        actual should matchXml(readFile(expectedFile))
+        actual.stripMarginAndNormalizeEOL should matchXml(readFile(expectedFile))
       case "dwl" =>
         val actual: String = new String(bytes, "UTF-8")
         actual should matchString(readFile(expectedFile))(after being whiteSpaceNormalised)
