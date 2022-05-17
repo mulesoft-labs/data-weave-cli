@@ -21,6 +21,7 @@ import org.mule.weave.v2.parser.ast.header.directives.OutputDirective
 import org.mule.weave.v2.parser.ast.structure.StringNode
 import org.mule.weave.v2.sdk.ParsingContextFactory
 import org.mule.weave.v2.sdk.WeaveResourceFactory
+import org.mule.weave.v2.utils.StringHelper.toStringTransformer
 import org.scalatest.Assertion
 import org.scalatest.FunSpec
 import org.scalatest.Matchers
@@ -259,7 +260,7 @@ class NativeCliRuntimeIT extends FunSpec
         actual should matchString(readFile(expectedFile))(after being whiteSpaceNormalised)
       case "csv" =>
         val actual: String = new String(bytes, encoding)
-        actual.trim should matchString(readFile(expectedFile).trim)
+        actual.stripMarginAndNormalizeEOL.trim should matchString(readFile(expectedFile).trim)
       case "txt" =>
         val actual: String = new String(bytes, encoding)
         actual should matchString(readFile(expectedFile))
@@ -379,36 +380,9 @@ class NativeCliRuntimeIT extends FunSpec
       Array("array-concat")
       
     val osIgnored: Array[String] = if (isWindows) {
-      Array("base64",
-        "constant_folding",
-        "csv-big-field",
-        "csv-buffered-writer",
-        "csv-escaped-quoted-input",
-        "csv-emoji",
-        "csv-newline",
-        "csv-no-escape",
-        "csv-no-header-selection",
-        "csv-no-quote",
-        "csv-quote-output",
-        "csv-reformat",
-        "csv-separator-input",
-        "csv-separator-tab",
-        "csv-single-record",
-        "csv-streaming-escaped-quoted-input",
-        "csv-streaming-quote-output",
-        "csv-streaming-separator-tab",
-        "csv-to-csv",
-        "csv-utf8",
-        "csv-value",
-        "dfl-string-literal-values",
-        "encoding",
+      Array(
         "env",
-        "json-utf8",
-        "json_binary",
-        "light-input",
         "multipart-read-message",
-        "nested_map_with_filter",
-        "non-printable-characters",
         "runtime_eval",
         "runtime_run",
         "runtime_run_empty_char_option",
@@ -421,10 +395,7 @@ class NativeCliRuntimeIT extends FunSpec
         "runtime_run_unhandled_xml_parsing_exception",
         "write-function-by-id",
         "write-function",
-        "write_function_missing_root_exception",
-        "xml-encoding",
-        "xml-string-escape",
-        "xml_default_namespace_passthru"
+        "write_function_missing_root_exception"
       )
     } else {
       Array.empty
