@@ -39,11 +39,4 @@ class NativeCliTest extends FreeSpec
     val (_, output) = NativeCliITTestRunner(Array("-i", "payload", inputPath, "-f", transformationPath)).execute()
     output shouldBe "\"Tomo\""
   }
-  
-  "it should run temperature" in {
-    val transformationPath = getResourcePath("scripts/Temperature.dwl")
-    val (_, output) = NativeCliITTestRunner(Array("-f", transformationPath)).execute()
-    println(s"temperature result: [$output]")
-    output shouldBe "{\n  \"temperature\": \"15 ° C\"\n}"
-  }
 }
