@@ -391,7 +391,7 @@ class NativeCliRuntimeIT extends FunSpec
     val osIgnored: Array[String] = if (isWindows) {
       Array(
         "base64",
-//        "constant_folding",
+        "constant_folding",
         /*
         "csv-big-field",
         "csv-buffered-writer",
@@ -446,7 +446,7 @@ class NativeCliRuntimeIT extends FunSpec
     } else {
       Array.empty
     }
-    ignored ++ osIgnored
+    ignored //++ osIgnored
   }
 }
 
