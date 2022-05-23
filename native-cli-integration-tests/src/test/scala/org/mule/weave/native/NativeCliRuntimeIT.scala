@@ -122,10 +122,15 @@ class NativeCliRuntimeIT extends FunSpec
             accept = dwlFiles.length == 1 && isEmpty(inputOrOutputConfigProperties) && isEmpty(javaCases) && isEmpty(configPropertyCase)
           }
         }
-        accept
+        if ("constant_folding" == pathname.getName) {
+          true
+        } else {
+          false
+        }
+        // accept
       }
     })
-    if (testFolders != null) {
+    if (testFolders != null ) {
       runTestCase(testFolders)
     }
   }
@@ -386,7 +391,7 @@ class NativeCliRuntimeIT extends FunSpec
     val osIgnored: Array[String] = if (isWindows) {
       Array(
         "base64",
-        "constant_folding",
+//        "constant_folding",
         /*
         "csv-big-field",
         "csv-buffered-writer",
