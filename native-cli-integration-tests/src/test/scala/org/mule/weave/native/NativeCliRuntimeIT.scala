@@ -122,12 +122,7 @@ class NativeCliRuntimeIT extends FunSpec
             accept = dwlFiles.length == 1 && isEmpty(inputOrOutputConfigProperties) && isEmpty(javaCases) && isEmpty(configPropertyCase)
           }
         }
-        if ("constant_folding" == pathname.getName) {
-          true
-        } else {
-          false
-        }
-        // accept
+        accept
       }
     })
     if (testFolders != null ) {
