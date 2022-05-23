@@ -125,7 +125,7 @@ class NativeCliRuntimeIT extends FunSpec
         accept
       }
     })
-    if (testFolders != null ) {
+    if (testFolders != null) {
       runTestCase(testFolders)
     }
   }
@@ -264,7 +264,7 @@ class NativeCliRuntimeIT extends FunSpec
         val actualNormalized = actual.stripMarginAndNormalizeEOL
         val expected = readFile(expectedFile).trim
         val expectedNormalized = expected.stripMarginAndNormalizeEOL
-        actualNormalized.stripMarginAndNormalizeEOL.trim should matchString(expectedNormalized)
+        actualNormalized should matchString(expectedNormalized)
       case "txt" =>
         val actual: String = new String(bytes, encoding)
         actual should matchString(readFile(expectedFile))
