@@ -266,8 +266,11 @@ class NativeCliRuntimeIT extends FunSpec
         val expectedNormalized = expected.stripMarginAndNormalizeEOL
         actualNormalized should matchString(expectedNormalized)
       case "txt" =>
-        val actual: String = new String(bytes, encoding)
-        actual should matchString(readFile(expectedFile))
+        val actual: String = new String(bytes, encoding).trim
+        val actualNormalized = actual.stripMarginAndNormalizeEOL
+        val expected = readFile(expectedFile).trim
+        val expectedNormalized = expected.stripMarginAndNormalizeEOL
+        actualNormalized should matchString(expectedNormalized)
       case "bin" =>
         assertBinaryFile(bytes, expectedFile)
       case "urlencoded" =>
@@ -318,7 +321,9 @@ class NativeCliRuntimeIT extends FunSpec
           String.valueOf(expectedContent);
       }
       
-      actualContentString shouldBe expectedContentString
+      val actualContentNormalized = actualContentString.stripMarginAndNormalizeEOL
+      val expectedContentNormalized = expectedContentString.stripMarginAndNormalizeEOL
+      actualContentNormalized shouldBe expectedContentNormalized
       
       i = i + 1
     }
@@ -341,65 +346,46 @@ class NativeCliRuntimeIT extends FunSpec
   }
 
   override def ignoreTests(): Array[String] = {
-      val ignored: Array[String] = 
-      // Encoding issues
-      Array("csv-invalid-utf8") ++
-      // Fail in java11 because broken backwards
-      Array("coerciones_toString", "date-coercion") ++
-      // Use resources (dwl files) that is present in the Tests but not in Cli (e.g: org::mule::weave::v2::libs::)
-      Array("full-qualified-name-ref",
-        "import-component-alias-lib",
-        "import-lib",
-        "import-lib-with-alias",
-        "import-named-lib",
-        "import-star",
-        "module-singleton",
-        "multipart-write-binary",
-        "read-binary-files",
-        "try",
-        "urlEncodeDecode") ++
-      // Uses resource name that is different on Cli than in the Tests 
-      Array("try-recursive-call", "runtime_orElseTry") ++
-      // Use readUrl from classpath
-      Array("dw-binary", "read_lines") ++
-      // Uses java module
-      Array("java-big-decimal",
-        "java-field-ref",
-        "java-interop-enum",
-        "java-interop-function-call",
-        "runtime_run_coercionException",
-        "runtime_run_fibo",
-        "runtime_run_null_java",
-        "write-function-with-null"
-      ) ++
-      // Multipart Object has empty `parts` and expects at least one part
-      Array("multipart-mixed-message", "multipart-write-message", "multipart-write-subtype-override") ++
-      // Fail pattern match on complex object
-      Array("pattern-match-complex-type") ++
-      // DataFormats
-      Array("runtime_dataFormatsDescriptors") ++
-      // Cannot coerce Null (null) to Number
-      Array("update-op") ++
-      // Take too long time
-      Array("array-concat")
-      
-    val osIgnored: Array[String] = if (isWindows) {
-      Array(
-        "env",
-        "runtime_eval",
-        "runtime_run",
-        "runtime_run_empty_char_option",
-        "runtime_run_illegal_arguments",
-        "runtime_run_invalid_input",
-        "runtime_run_securityReaderProperty",
-        "runtime_run_securityReaderProperty_InputDirective",
-        "runtime_run_unhandled_pattern_syntax_exception",
-        "write_function_missing_root_exception"
-      )
-    } else {
-      Array.empty
-    }
-    ignored ++ osIgnored
+    // Encoding issues
+    Array("csv-invalid-utf8") ++
+    // Fail in java11 because broken backwards
+    Array("coerciones_toString", "date-coercion") ++
+    // Use resources (dwl files) that is present in the Tests but not in Cli (e.g: org::mule::weave::v2::libs::)
+    Array("full-qualified-name-ref",
+      "import-component-alias-lib",
+      "import-lib",
+      "import-lib-with-alias",
+      "import-named-lib",
+      "import-star",
+      "module-singleton",
+      "multipart-write-binary",
+      "read-binary-files",
+      "try",
+      "urlEncodeDecode") ++
+    // Uses resource name that is different on Cli than in the Tests 
+    Array("try-recursive-call", "runtime_orElseTry") ++
+    // Use readUrl from classpath
+    Array("dw-binary", "read_lines") ++
+    // Uses java module
+    Array("java-big-decimal",
+      "java-field-ref",
+      "java-interop-enum",
+      "java-interop-function-call",
+      "runtime_run_coercionException",
+      "runtime_run_fibo",
+      "runtime_run_null_java",
+      "write-function-with-null"
+    ) ++
+    // Multipart Object has empty `parts` and expects at least one part
+    Array("multipart-mixed-message", "multipart-write-message", "multipart-write-subtype-override") ++
+    // Fail pattern match on complex object
+    Array("pattern-match-complex-type") ++
+    // DataFormats
+    Array("runtime_dataFormatsDescriptors") ++
+    // Cannot coerce Null (null) to Number
+    Array("update-op") ++
+    // Take too long time
+    Array("array-concat")
   }
 }
 
