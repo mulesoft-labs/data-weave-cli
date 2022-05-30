@@ -45,6 +45,7 @@ jobs:
       - name: Guess Extension Version
         run: |
           echo "NATIVE_VERSION=$(echo '${{github.ref}}' | sed -e 's,.*/v\(.*\),\1,')" >> $GITHUB_ENV
+        shell: bash
       
       # Runs a single command using the runners shell
       - name: Run Build
