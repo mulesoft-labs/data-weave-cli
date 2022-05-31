@@ -36,6 +36,7 @@ class CLIArgumentsParser(console: Console) {
     var scriptToRun: Option[NativeRuntime => WeaveModule] = None
     var output: Option[String] = None
     var eval: Boolean = false
+    var coloring: Boolean = false
     var maybePrivileges: Option[Seq[String]] = None
 
     val inputs: mutable.Map[String, File] = mutable.Map()
@@ -58,6 +59,8 @@ class CLIArgumentsParser(console: Console) {
           return Right(red("Invalid amount of arguments on `parameter`."))
         }
       }
+
+      coloring = commandLine.hasOption(Options.COLORING)
       
       if (commandLine.hasOption(Options.VERBOSE)) {
         console.enableDebug()
@@ -276,7 +279,7 @@ class CLIArgumentsParser(console: Console) {
     if (scriptToRun.isEmpty) {
       Right(s"Missing <script-content> or -f <file-path> or --spell ")
     } else {
-      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, eval, scriptToRun.get, params.toMap, inputs.toMap, output, maybePrivileges)
+      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, eval, scriptToRun.get, params.toMap, inputs.toMap, output, maybePrivileges, coloring)
       Left(new RunWeaveCommand(config, console))
     }
   }

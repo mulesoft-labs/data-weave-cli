@@ -109,7 +109,7 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
     weaveScriptingEngine.compile(script, nameIdentifier, inputs.entries().map(wi => new InputType(wi, None)).toArray, defaultOutputMimeType)
   }
   
-  private def createServiceManager(maybePrivileges: Option[Seq[String]] = None, coloring: Boolean = true): ServiceManager = {
+  private def createServiceManager(maybePrivileges: Option[Seq[String]] = None, coloring: Boolean = false): ServiceManager = {
     
     val charsetProviderService = new CharsetProviderService {
       override def defaultCharset(): Charset = {

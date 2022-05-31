@@ -116,7 +116,7 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
         }
         (false, new FileOutputStream(outputFile))
       } else {
-        (true, console.out)
+        (config.coloring, console.out)
       }
       val defaultOutputType: String = console.envVar(DW_DEFAULT_OUTPUT_MIMETYPE_VAR).getOrElse(DEFAULT_MIME_TYPE)
       val result: WeaveExecutionResult = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, out, defaultOutputType, config.maybePrivileges, coloring)
@@ -139,6 +139,7 @@ case class WeaveRunnerConfig(path: Array[String],
                              params: Map[String, String],
                              inputs: Map[String, File],
                              outputPath: Option[String],
-                             maybePrivileges: Option[Seq[String]])
+                             maybePrivileges: Option[Seq[String]],
+                             coloring: Boolean)
 
 case class WeaveModule(content: String, nameIdentifier: String)
