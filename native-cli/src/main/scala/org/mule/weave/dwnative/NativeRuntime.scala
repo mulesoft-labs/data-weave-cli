@@ -17,10 +17,15 @@ import org.mule.weave.v2.model.service.DefaultSecurityManagerService
 import org.mule.weave.v2.model.service.LoggingService
 import org.mule.weave.v2.model.service.ProtocolUrlSourceProviderResolverService
 import org.mule.weave.v2.model.service.ReadFunctionProtocolHandler
+import org.mule.weave.v2.model.service.RuntimeProperty
+import org.mule.weave.v2.model.service.RuntimePropertyResolver
 import org.mule.weave.v2.model.service.SecurityManagerService
+import org.mule.weave.v2.model.service.SettingsService
+import org.mule.weave.v2.model.service.SimpleSettingsService
 import org.mule.weave.v2.model.service.UrlProtocolHandler
 import org.mule.weave.v2.model.service.UrlSourceProviderResolverService
 import org.mule.weave.v2.model.service.WeaveRuntimePrivilege
+import org.mule.weave.v2.model.service.WeaveRuntimeSettings
 import org.mule.weave.v2.model.values.BinaryValue
 import org.mule.weave.v2.module.reader.AutoPersistedOutputStream
 import org.mule.weave.v2.module.reader.SourceProvider
@@ -80,10 +85,10 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
     pathBasedResourceResolver.resolve(ni).map(_.content())
   }
 
-  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", maybePrivileges: Option[Seq[String]] = None): WeaveExecutionResult = {
+  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", maybePrivileges: Option[Seq[String]] = None, coloring: Boolean = true ): WeaveExecutionResult = {
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), defaultOutputMimeType)
-      val serviceManager: ServiceManager = createServiceManager(maybePrivileges)
+      val serviceManager: ServiceManager = createServiceManager(maybePrivileges, coloring)
       val result: DataWeaveResult = dataWeaveScript.write(inputs, serviceManager, Option(out))
       WeaveSuccessResult(out, result.getCharset().name())
     } catch {
@@ -104,17 +109,21 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
     weaveScriptingEngine.compile(script, nameIdentifier, inputs.entries().map(wi => new InputType(wi, None)).toArray, defaultOutputMimeType)
   }
   
-  private def createServiceManager(maybePrivileges: Option[Seq[String]] = None): ServiceManager = {
+  private def createServiceManager(maybePrivileges: Option[Seq[String]] = None, coloring: Boolean = true): ServiceManager = {
     
     val charsetProviderService = new CharsetProviderService {
       override def defaultCharset(): Charset = {
         StandardCharsets.UTF_8
       }
     }
+
+    val settingsService = SimpleSettingsService(WeaveRuntimeSettings(CliRuntimePropertyResolver(coloring)))
+    
     var customServices: Map[Class[_], _] = Map(
       classOf[UrlSourceProviderResolverService] -> new ProtocolUrlSourceProviderResolverService(Seq(UrlProtocolHandler, WeavePathProtocolHandler(pathBasedResourceResolver))),
       classOf[WorkingDirectoryService] -> new CustomWorkingDirectoryService(dataWeaveUtils.getWorkingHome(), true),
-      classOf[CharsetProviderService] -> charsetProviderService
+      classOf[CharsetProviderService] -> charsetProviderService,
+      classOf[SettingsService] -> settingsService
     )
 
     if (maybePrivileges.isDefined) {
@@ -132,6 +141,21 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
   }
 }
 
+class CliRuntimePropertyResolver(coloring: Boolean) extends RuntimePropertyResolver {
+
+  override def resolve(fullPropertyName: String): Option[RuntimeProperty] = {
+      fullPropertyName match {
+        case "com.mulesoft.dw.coloring.enabled" =>
+          Some(RuntimeProperty(Some(coloring.toString)))
+        case _ =>
+          None
+      }
+  }
+}
+
+object CliRuntimePropertyResolver {
+  def apply(coloring: Boolean): CliRuntimePropertyResolver = new CliRuntimePropertyResolver(coloring)
+}
 
 class WeavePathProtocolHandler(path: PathBasedResourceResolver) extends ReadFunctionProtocolHandler {
 

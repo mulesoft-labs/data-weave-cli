@@ -101,7 +101,7 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
         }
       }
     } else {
-      val out: OutputStream = if (config.outputPath.isDefined) {
+      val (coloring, out): (Boolean, OutputStream) = if (config.outputPath.isDefined) {
         val outputFile = new File(config.outputPath.get)
         val parentFile: File = outputFile.getParentFile
         if (parentFile == null) {
@@ -114,12 +114,12 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
             return -1
           }
         }
-        new FileOutputStream(outputFile)
+        (false, new FileOutputStream(outputFile))
       } else {
-        console.out
+        (true, console.out)
       }
       val defaultOutputType: String = console.envVar(DW_DEFAULT_OUTPUT_MIMETYPE_VAR).getOrElse(DEFAULT_MIME_TYPE)
-      val result: WeaveExecutionResult = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, out, defaultOutputType, config.maybePrivileges)
+      val result: WeaveExecutionResult = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, out, defaultOutputType, config.maybePrivileges, coloring)
       //load inputs from
       if (result.success()) {
         exitCode = 0
