@@ -2,12 +2,14 @@ package org.mule.weave.dwnative.cli
 
 import org.mule.weave.dwnative.cli.commands.HelpCommand
 import org.mule.weave.dwnative.cli.exceptions.CLIException
+import org.fusesource.jansi.AnsiConsole
 
 import java.io.PrintWriter
 import java.io.StringWriter
 
 
 object DataWeaveCLI extends App {
+  AnsiConsole.systemInstall()
   val exitCode = new DataWeaveCLIRunner().run(args, DefaultConsole)
   System.exit(exitCode)
 }

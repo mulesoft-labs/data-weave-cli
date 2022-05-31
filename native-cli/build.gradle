@@ -36,10 +36,12 @@ dependencies {
     compile(group: 'org.mule.weave', name: 'http-netty-module', version: ioVersion) {
         exclude group: 'org.slf4j'
     }
+    compile "org.fusesource.jansi:jansi:2.4.0"
     compile group: 'org.mule.weave', name: 'ndjson-module', version: weaveVersion
     compile group: 'commons-cli', name: 'commons-cli', version: '1.4'
     testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
     testRuntime 'org.pegdown:pegdown:1.6.0'
+
 }
 
 ext {
