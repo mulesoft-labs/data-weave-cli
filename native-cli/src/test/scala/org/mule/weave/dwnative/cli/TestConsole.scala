@@ -1,6 +1,8 @@
 package org.mule.weave.dwnative.cli
 
 
+import org.jline.terminal.Terminal
+
 import java.io.{InputStream, OutputStream, PrintWriter}
 import scala.collection.mutable.ArrayBuffer
 
@@ -37,7 +39,9 @@ class TestConsole(val in: InputStream = System.in, val out: OutputStream = Syste
 
   override def debug(message: String): Unit = ColoredConsole.debug(message)
 
-  override def printHighlighted(message: OutputStream): Unit = {}
-
   override def writer: PrintWriter = new PrintWriter(out)
+
+  override def terminal: Terminal = null
+
+  override def highLight(message: String, extension: String): String = message
 }

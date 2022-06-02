@@ -1,11 +1,10 @@
 package org.mule.weave.dwnative.cli
 
 import org.jline.terminal.{Terminal, TerminalBuilder}
+import org.mule.weave.dwnative.cli.highlighting.NanoHighlighterProvider
 import org.mule.weave.dwnative.utils.AnsiColor
 
-import java.io.{ByteArrayOutputStream, InputStream, OutputStream, PipedOutputStream, PrintWriter}
-import org.jline.builtins.Nano.SyntaxHighlighter
-
+import java.io.{ByteArrayOutputStream, InputStream, OutputStream, PrintWriter}
 import scala.util.Try
 
 /**
@@ -21,6 +20,8 @@ trait Console {
     * @return
     */
   def isDebugEnabled(): Boolean = debugEnabled
+
+  def terminal: Terminal
 
   def in: InputStream
 
@@ -43,7 +44,7 @@ trait Console {
 
   def warn(message: String): Unit
 
-  def printHighlighted(message: OutputStream): Unit
+  def highLight(message: String, extension: String): String
 
   def clear(): Unit
 
@@ -57,6 +58,8 @@ object ColoredConsole extends Console {
     .system(true)
     .jansi(true)
     .build();
+
+  val highLighterProvider = new NanoHighlighterProvider()
 
   override def info(message: String): Unit = {
     terminal.writer().println(message)
@@ -76,11 +79,11 @@ object ColoredConsole extends Console {
   override def clear(): Unit = {
     Try({
       if (System.getProperty("os.name").contains("Windows")) {
-          new ProcessBuilder("cmd", "/c", "cls").inheritIO.start.waitFor
-        }
-     else {
-          System.out.print("\u001b\u0063")
-        }
+        new ProcessBuilder("cmd", "/c", "cls").inheritIO.start.waitFor
+      }
+      else {
+        System.out.print("\u001b\u0063")
+      }
     })
   }
 
@@ -104,11 +107,7 @@ object ColoredConsole extends Console {
 
   override def writer: PrintWriter = terminal.writer()
 
-  override def printHighlighted(message: OutputStream): Unit = {
-    if (!terminal.getType.equals(Terminal.TYPE_DUMB)) {
-      val jsonSyntax = SyntaxHighlighter.build(getClass.getResource("/syntaxes/json.nanorc").toString)
-      jsonSyntax.highlight(message.toString).println(terminal)
-      terminal.writer().flush()
-    }
+  override def highLight(message: String, extension: String): String = {
+    highLighterProvider.hightlighterFor(extension).highlight(message).toAnsi(terminal)
   }
 }

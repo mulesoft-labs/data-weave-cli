@@ -5,8 +5,7 @@ import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.dwnative.initializer.NativeSystemModuleComponents
 import org.mule.weave.dwnative.utils.DataWeaveUtils
 import org.mule.weave.v2.exception.InvalidLocationException
-import org.mule.weave.v2.interpreted.CustomRuntimeModuleNodeCompiler
-import org.mule.weave.v2.interpreted.RuntimeModuleNodeCompiler
+import org.mule.weave.v2.interpreted.{CustomRuntimeModuleNodeCompiler, RuntimeModuleNodeCompiler}
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
 import org.mule.weave.v2.io.service.CustomWorkingDirectoryService
 import org.mule.weave.v2.io.service.WorkingDirectoryService
@@ -22,43 +21,23 @@ import org.mule.weave.v2.model.service.UrlProtocolHandler
 import org.mule.weave.v2.model.service.UrlSourceProviderResolverService
 import org.mule.weave.v2.model.service.WeaveRuntimePrivilege
 import org.mule.weave.v2.model.values.BinaryValue
-import org.mule.weave.v2.module.reader.AutoPersistedOutputStream
-import org.mule.weave.v2.module.reader.SourceProvider
+import org.mule.weave.v2.module.reader.{AutoPersistedOutputStream, SourceProvider}
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.exception.LocatableException
 import org.mule.weave.v2.parser.location.LocationCapable
-import org.mule.weave.v2.parser.phase.CompilationException
-import org.mule.weave.v2.parser.phase.CompositeModuleParsingPhasesManager
-import org.mule.weave.v2.parser.phase.ModuleLoader
-import org.mule.weave.v2.parser.phase.ModuleLoaderManager
-import org.mule.weave.v2.parser.phase.ModuleParsingPhasesManager
-import org.mule.weave.v2.runtime.DataWeaveResult
-import org.mule.weave.v2.runtime.DataWeaveScript
-import org.mule.weave.v2.runtime.DataWeaveScriptingEngine
-import org.mule.weave.v2.runtime.ExecuteResult
-import org.mule.weave.v2.runtime.InputType
-import org.mule.weave.v2.runtime.ModuleComponents
-import org.mule.weave.v2.runtime.ModuleComponentsFactory
-import org.mule.weave.v2.runtime.ParserConfiguration
-import org.mule.weave.v2.runtime.ScriptingBindings
-import org.mule.weave.v2.runtime.ScriptingEngineSetupException
-import org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider
-import org.mule.weave.v2.sdk.TwoLevelWeaveResourceResolver
-import org.mule.weave.v2.sdk.WeaveResourceResolver
+import org.mule.weave.v2.parser.phase._
+import org.mule.weave.v2.runtime._
+import org.mule.weave.v2.sdk.{SPIBasedModuleLoaderProvider, TwoLevelWeaveResourceResolver, WeaveResourceResolver}
 
-import java.io.File
-import java.io.OutputStream
-import java.io.PrintWriter
-import java.io.StringWriter
-import java.nio.charset.Charset
-import java.nio.charset.StandardCharsets
+import java.io.{File, OutputStream, PrintWriter, StringWriter}
+import java.nio.charset.{Charset, StandardCharsets}
 
 class NativeRuntime(libDir: File, path: Array[File], console: Console) {
 
   private val dataWeaveUtils = new DataWeaveUtils(console)
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
-  
+
   private val weaveScriptingEngine: DataWeaveScriptingEngine = {
     setupEnv()
     DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration())
@@ -85,7 +64,11 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), defaultOutputMimeType)
       val serviceManager: ServiceManager = createServiceManager(maybePrivileges)
       val result: DataWeaveResult = dataWeaveScript.write(inputs, serviceManager, Option(out))
-      WeaveSuccessResult(out, result.getCharset().name())
+      var extension = result.getExtension()
+      if (extension != null && extension.length > 2) {
+        extension = extension.substring(1);
+      }
+      WeaveSuccessResult(out, result.getCharset().name(), Some(extension))
     } catch {
       case cr: CompilationException =>
         WeaveFailureResult(cr.getMessage())
@@ -121,7 +104,7 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
     if (maybePrivileges.isDefined) {
       val privileges = maybePrivileges.get
       val weaveRuntimePrivileges = privileges.map(WeaveRuntimePrivilege(_)).toArray
-      customServices = customServices + (classOf[SecurityManagerService] -> new DefaultSecurityManagerService(weaveRuntimePrivileges)) 
+      customServices = customServices + (classOf[SecurityManagerService] -> new DefaultSecurityManagerService(weaveRuntimePrivileges))
     }
     ServiceManager(new ConsoleLogger(console), customServices)
   }
@@ -196,11 +179,13 @@ sealed trait WeaveExecutionResult {
 
   def result(): String
 
+  def extension(): Option[String]
+
   def success(): Boolean
 
 }
 
-case class WeaveSuccessResult(outputStream: OutputStream, charset: String) extends WeaveExecutionResult {
+case class WeaveSuccessResult(outputStream: OutputStream, charset: String, extension: Option[String]) extends WeaveExecutionResult {
   override def success(): Boolean = true
 
   override def result(): String = {
@@ -220,7 +205,7 @@ case class WeaveSuccessResult(outputStream: OutputStream, charset: String) exten
   }
 }
 
-case class WeaveFailureResult(message: String) extends WeaveExecutionResult {
+case class WeaveFailureResult(message: String, extension: Option[String] = None) extends WeaveExecutionResult {
   override def success(): Boolean = false
 
   override def result(): String = message

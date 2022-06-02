@@ -1,30 +1,24 @@
 package org.mule.weave.dwnative.cli.commands
 
-import org.mule.weave.dwnative.NativeRuntime
-import org.mule.weave.dwnative.WeaveExecutionResult
 import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.dwnative.utils.DataWeaveUtils
-import org.mule.weave.dwnative.utils.DataWeaveUtils.DW_DEFAULT_INPUT_MIMETYPE_VAR
-import org.mule.weave.dwnative.utils.DataWeaveUtils.DW_DEFAULT_OUTPUT_MIMETYPE_VAR
+import org.mule.weave.dwnative.utils.DataWeaveUtils.{DW_DEFAULT_INPUT_MIMETYPE_VAR, DW_DEFAULT_OUTPUT_MIMETYPE_VAR}
+import org.mule.weave.dwnative.{NativeRuntime, WeaveExecutionResult, WeaveSuccessResult}
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.structure.KeyValuePair
-import org.mule.weave.v2.model.values.KeyValue
-import org.mule.weave.v2.model.values.ObjectValue
-import org.mule.weave.v2.model.values.StringValue
+import org.mule.weave.v2.model.values.{KeyValue, ObjectValue, StringValue}
 import org.mule.weave.v2.module.DataFormatManager
-import org.mule.weave.v2.runtime.ExecuteResult
-import org.mule.weave.v2.runtime.ScriptingBindings
-import sun.misc.Signal
-import sun.misc.SignalHandler
+import org.mule.weave.v2.runtime.{ExecuteResult, ScriptingBindings}
+import sun.misc.{Signal, SignalHandler}
 
-import java.io.{File, FileOutputStream, OutputStream, PrintWriter, StringWriter}
+import java.io.{ByteArrayOutputStream, File, FileOutputStream, OutputStream, PrintWriter, StringWriter}
 import scala.util.Try
 
 class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends WeaveCommand {
   val weaveUtils = new DataWeaveUtils(console)
 
   private val DEFAULT_MIME_TYPE: String = "application/json"
-  
+
   @volatile
   private var keepRunning = true
 
@@ -58,13 +52,13 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
       })
     }
 
-    val value = config.params.toSeq.map( prop =>
+    val value = config.params.toSeq.map(prop =>
       KeyValuePair(KeyValue(prop._1), StringValue(prop._2))
     ).to
-    
+
     val params = ObjectValue(value)
     scriptingBindings.addBinding("params", params)
-    
+
     val module: WeaveModule = config.scriptToRun(nativeRuntime)
     if (config.eval) {
       keepRunning = true
@@ -117,7 +111,19 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
       val defaultOutputType: String = console.envVar(DW_DEFAULT_OUTPUT_MIMETYPE_VAR).getOrElse(DEFAULT_MIME_TYPE)
       val result: WeaveExecutionResult = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, out, defaultOutputType, config.maybePrivileges)
       if (result.success()) {
-        console.printHighlighted(out)
+        out match {
+          case byteArrayOutputStream: ByteArrayOutputStream => {
+            val extension = result.extension().getOrElse("json")
+            val successResult = result.asInstanceOf[WeaveSuccessResult]
+            var charset = successResult.charset
+            if (charset == null || charset.isEmpty) {
+              charset = "UTF-8"
+            }
+            val transformationResult = console.highLight(byteArrayOutputStream.toString(charset), extension)
+            console.info(transformationResult)
+          }
+          case _ =>
+        }
         exitCode = 0
       } else {
         console.error("Error while executing the script:")
