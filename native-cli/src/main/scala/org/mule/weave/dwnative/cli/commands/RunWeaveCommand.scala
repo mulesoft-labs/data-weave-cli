@@ -17,11 +17,7 @@ import org.mule.weave.v2.runtime.ScriptingBindings
 import sun.misc.Signal
 import sun.misc.SignalHandler
 
-import java.io.File
-import java.io.FileOutputStream
-import java.io.OutputStream
-import java.io.PrintWriter
-import java.io.StringWriter
+import java.io.{File, FileOutputStream, OutputStream, PrintWriter, StringWriter}
 import scala.util.Try
 
 class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends WeaveCommand {
@@ -120,8 +116,8 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
       }
       val defaultOutputType: String = console.envVar(DW_DEFAULT_OUTPUT_MIMETYPE_VAR).getOrElse(DEFAULT_MIME_TYPE)
       val result: WeaveExecutionResult = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, out, defaultOutputType, config.maybePrivileges, coloring)
-      //load inputs from
       if (result.success()) {
+        console.printHighlighted(out)
         exitCode = 0
       } else {
         console.error("Error while executing the script:")

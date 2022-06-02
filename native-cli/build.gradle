@@ -19,6 +19,9 @@ sourceSets {
         scala {
             srcDirs = ['src/main/scala', 'build/genresource']
         }
+        resources {
+            srcDir 'src/main/resources'
+        }
     }
 }
 
@@ -36,7 +39,8 @@ dependencies {
     compile(group: 'org.mule.weave', name: 'http-netty-module', version: ioVersion) {
         exclude group: 'org.slf4j'
     }
-    compile "org.fusesource.jansi:jansi:2.4.0"
+    implementation "org.fusesource.jansi:jansi:2.4.0"
+    implementation 'org.jline:jline:3.21.0'
     compile group: 'org.mule.weave', name: 'ndjson-module', version: weaveVersion
     compile group: 'commons-cli', name: 'commons-cli', version: '1.4'
     testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
@@ -118,6 +122,7 @@ graalvmNative {
 
             // Advanced options
             buildArgs.add("-H:+ReportExceptionStackTraces")
+            buildArgs.add("-H:Log=registerResource:")
             buildArgs.add("--no-fallback")
             buildArgs.add("--allow-incomplete-classpath")
             buildArgs.add("-H:EnableURLProtocols=http,https")
@@ -147,7 +152,7 @@ graalvmNative {
                     "org.parboiled2.," +
                     "shapeless.syntax.")
 
-    //For Runtime execution
+            //For Runtime execution
 //            "org.mule.weave.v2.interpreted.,"+
 //            "org.mule.weave.v2.model.values.,"
 //            "org.mule.weave.v2.model.types.,"
@@ -159,6 +164,9 @@ graalvmNative {
             buildArgs.add("--trace-object-instantiation=java.util.Random")
             buildArgs.add("-H:+AddAllCharsets")
             buildArgs.add("-H:+IncludeAllLocales")
+            resources.includedPatterns =[
+                ".*nanorc"
+            ]
 //    option "-H:+DashboardAll"
 //    option "-H:DashboardDump=/Users/mdeachaval/labs/palantir/weave-native-library/native-cli/dump"
 //    option "-H:+PrintImageObjectTree"

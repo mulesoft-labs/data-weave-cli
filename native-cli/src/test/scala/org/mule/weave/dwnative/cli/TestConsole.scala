@@ -1,7 +1,7 @@
 package org.mule.weave.dwnative.cli
 
-import java.io.InputStream
-import java.io.OutputStream
+
+import java.io.{InputStream, OutputStream, PrintWriter}
 import scala.collection.mutable.ArrayBuffer
 
 class TestConsole(val in: InputStream = System.in, val out: OutputStream = System.out, val envVars: Map[String, String] = Map()) extends Console {
@@ -35,5 +35,9 @@ class TestConsole(val in: InputStream = System.in, val out: OutputStream = Syste
 
   override def envVar(name: String): Option[String] = envVars.get(name)
 
-  override def debug(message: String): Unit = DefaultConsole.debug(message)
+  override def debug(message: String): Unit = ColoredConsole.debug(message)
+
+  override def printHighlighted(message: OutputStream): Unit = {}
+
+  override def writer: PrintWriter = new PrintWriter(out)
 }

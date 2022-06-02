@@ -38,7 +38,7 @@ class HelpCommand(console: Console) extends WeaveCommand {
                    |
                    | https://docs.mulesoft.com/dataweave/latest/
     """.stripMargin
-    val pw = new PrintWriter(console.out)
+    val pw = console.writer
     formatter.setOptionComparator(new Comparator[Option] {
       
       private def getKey(opt: Option): String = { 
