@@ -53,7 +53,7 @@ trait Console {
 
 object ColoredConsole extends Console {
 
-  lazy val terminal =  TerminalBuilder.builder()
+  lazy val terminal = TerminalBuilder.builder()
     .system(true)
     .jansi(true)
     .build();
@@ -90,6 +90,7 @@ object ColoredConsole extends Console {
 
   override def warn(message: String): Unit = {
     terminal.writer().println(AnsiColor.yellow(message))
+    terminal.writer().flush()
   }
 
   override def envVar(name: String): Option[String] = Option(System.getenv(name))

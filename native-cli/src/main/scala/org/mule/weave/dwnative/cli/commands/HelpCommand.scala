@@ -3,11 +3,10 @@ package org.mule.weave.dwnative.cli.commands
 import org.apache.commons.cli.HelpFormatter
 import org.apache.commons.cli.Option
 import org.mule.weave.dwnative.cli.Console
-import org.mule.weave.dwnative.cli.Options
+import org.mule.weave.dwnative.cli.{Options => CliOptions}
+import org.mule.weave.dwnative.utils.AnsiColor
 
-import java.io.PrintWriter
 import java.util.Comparator
-
 class HelpCommand(console: Console) extends WeaveCommand {
 
   override def exec(): Int = {
@@ -47,7 +46,7 @@ class HelpCommand(console: Console) extends WeaveCommand {
       }
       
       private def isExperimentalOption(opt: Option): Boolean = {
-        opt.getDescription != null && opt.getDescription.contains(Options.EXPERIMENTAL_TAG)
+        opt.getDescription != null && opt.getDescription.contains(CliOptions.EXPERIMENTAL_TAG)
       } 
       
       override def compare(opt1: Option, opt2: Option): Int = {
@@ -61,7 +60,7 @@ class HelpCommand(console: Console) extends WeaveCommand {
         
       }
     })
-    formatter.printHelp(pw, formatter.getWidth, "dw", header, Options.OPTIONS, formatter.getLeftPadding, formatter.getDescPadding, footer, true)
+    formatter.printHelp(pw, formatter.getWidth, "dw", AnsiColor.green(header), CliOptions.OPTIONS, formatter.getLeftPadding, formatter.getDescPadding, footer, true)
     pw.flush()
   }
 }
