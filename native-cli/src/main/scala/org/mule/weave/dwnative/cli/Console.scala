@@ -48,7 +48,7 @@ trait Console {
 
   def clear(): Unit
 
-  def enabledStreaming: Boolean = true
+  def supportsStreaming: Boolean = true
   
   def printResult(failure: WeaveFailureResult): Unit = {
     error("Error while executing the script:")
@@ -156,7 +156,7 @@ object ColoredConsole extends Console {
 
   override def writer: PrintWriter = terminal.writer()
 
-  override def enabledStreaming: Boolean = false
+  override def supportsStreaming: Boolean = false
 
   override def printResult(result: WeaveSuccessResult): Unit = {
     val message = highLighterProvider.hightlighterFor(result.extension.getOrElse("json")).highlight(result.result()).toAnsi(terminal)

@@ -108,12 +108,12 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console, envVarPro
         }
         Some(new FileOutputStream(outputFile))
       } else {
-        if (console.enabledStreaming) Some(console.out) else None  
+        if (console.supportsStreaming) Some(console.out) else None  
       }
       val result = nativeRuntime.run(module.content, module.nameIdentifier, scriptingBindings, target, defaultOutputType, config.maybePrivileges)
       result match {
         case success: WeaveSuccessResult =>
-          if (config.outputPath.isEmpty && !console.enabledStreaming) {
+          if (config.outputPath.isEmpty && !console.supportsStreaming) {
             console.printResult(success)
           }
           exitCode = 0
