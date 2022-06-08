@@ -8,14 +8,17 @@ import java.io.StringWriter
 
 
 object DataWeaveCLI extends App {
-  val exitCode = new DataWeaveCLIRunner().run(args, ColoredConsole)
+  val envVarProvider = DefaultEnvironmentVariableProvider
+  val color = java.lang.Boolean.parseBoolean(envVarProvider.envVar(EnvironmentVariableProvider.DW_USE_COLOR_VAR).getOrElse("true"))
+  val console = ConsoleProvider.provide(color)
+  val exitCode = new DataWeaveCLIRunner().run(args, console, envVarProvider)
   System.exit(exitCode)
 }
 
 class DataWeaveCLIRunner {
 
-  def run(args: Array[String], console: Console = ColoredConsole): Int = {
-    val parser = new CLIArgumentsParser(console)
+  def run(args: Array[String], console: Console = DefaultConsole, envVarProvider: EnvironmentVariableProvider = DefaultEnvironmentVariableProvider): Int = {
+    val parser = new CLIArgumentsParser(console, envVarProvider)
     val scriptToRun = parser.parse(args)
     val exitCode = scriptToRun match {
       case Right(message) if message.nonEmpty =>

@@ -2,6 +2,7 @@ package org.mule.weave.dwnative
 
 import io.netty.util.internal.PlatformDependent
 import org.mule.weave.dwnative.cli.Console
+import org.mule.weave.dwnative.cli.EnvironmentVariableProvider
 import org.mule.weave.dwnative.initializer.NativeSystemModuleComponents
 import org.mule.weave.dwnative.utils.DataWeaveUtils
 import org.mule.weave.v2.exception.InvalidLocationException
@@ -9,7 +10,6 @@ import org.mule.weave.v2.interpreted.{CustomRuntimeModuleNodeCompiler, RuntimeMo
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
 import org.mule.weave.v2.io.service.CustomWorkingDirectoryService
 import org.mule.weave.v2.io.service.WorkingDirectoryService
-import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
 import org.mule.weave.v2.model.service.CharsetProviderService
 import org.mule.weave.v2.model.service.DefaultSecurityManagerService
@@ -20,8 +20,7 @@ import org.mule.weave.v2.model.service.SecurityManagerService
 import org.mule.weave.v2.model.service.UrlProtocolHandler
 import org.mule.weave.v2.model.service.UrlSourceProviderResolverService
 import org.mule.weave.v2.model.service.WeaveRuntimePrivilege
-import org.mule.weave.v2.model.values.BinaryValue
-import org.mule.weave.v2.module.reader.{AutoPersistedOutputStream, SourceProvider}
+import org.mule.weave.v2.module.reader.SourceProvider
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.parser.exception.LocatableException
 import org.mule.weave.v2.parser.location.LocationCapable
@@ -32,9 +31,9 @@ import org.mule.weave.v2.sdk.{SPIBasedModuleLoaderProvider, TwoLevelWeaveResourc
 import java.io.{File, OutputStream, PrintWriter, StringWriter}
 import java.nio.charset.{Charset, StandardCharsets}
 
-class NativeRuntime(libDir: File, path: Array[File], console: Console) {
+class NativeRuntime(libDir: File, path: Array[File], console: Console, envVarProvider: EnvironmentVariableProvider) {
 
-  private val dataWeaveUtils = new DataWeaveUtils(console)
+  private val dataWeaveUtils = new DataWeaveUtils(console, envVarProvider)
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
@@ -59,16 +58,16 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
     pathBasedResourceResolver.resolve(ni).map(_.content())
   }
 
-  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, out: OutputStream, defaultOutputMimeType: String = "application/json", maybePrivileges: Option[Seq[String]] = None): WeaveExecutionResult = {
+  def run(script: String, nameIdentifier: String, inputs: ScriptingBindings, target: Option[OutputStream], defaultOutputMimeType: String = "application/json", maybePrivileges: Option[Seq[String]] = None): WeaveExecutionResult = {
     try {
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), defaultOutputMimeType)
       val serviceManager: ServiceManager = createServiceManager(maybePrivileges)
-      val result: DataWeaveResult = dataWeaveScript.write(inputs, serviceManager, Option(out))
+      val result: DataWeaveResult = dataWeaveScript.write(inputs, serviceManager, target)
       var extension = result.getExtension()
       if (extension != null && extension.length > 2) {
-        extension = extension.substring(1);
+        extension = extension.substring(1)
       }
-      WeaveSuccessResult(out, result.getCharset().name(), Some(extension))
+      WeaveSuccessResult(result, Some(extension))
     } catch {
       case cr: CompilationException =>
         WeaveFailureResult(cr.getMessage())
@@ -185,24 +184,10 @@ sealed trait WeaveExecutionResult {
 
 }
 
-case class WeaveSuccessResult(outputStream: OutputStream, charset: String, extension: Option[String]) extends WeaveExecutionResult {
+case class WeaveSuccessResult(private val dataWeaveResult: DataWeaveResult, extension: Option[String]) extends WeaveExecutionResult {
   override def success(): Boolean = true
 
-  override def result(): String = {
-    outputStream match {
-      case ap: AutoPersistedOutputStream => {
-        implicit val context: EvaluationContext = EvaluationContext()
-        try {
-          new String(BinaryValue.getBytesFromSeekableStream(ap.toInputStream, close = true, memoryService = context.serviceManager.memoryService), charset)
-        } finally {
-          context.close()
-        }
-      }
-      case _ => {
-        outputStream.toString
-      }
-    }
-  }
+  override def result(): String = dataWeaveResult.getContentAsString()
 }
 
 case class WeaveFailureResult(message: String, extension: Option[String] = None) extends WeaveExecutionResult {

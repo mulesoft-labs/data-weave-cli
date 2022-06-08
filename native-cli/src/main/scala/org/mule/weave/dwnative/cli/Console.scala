@@ -1,10 +1,14 @@
 package org.mule.weave.dwnative.cli
 
 import org.jline.terminal.{Terminal, TerminalBuilder}
+import org.mule.weave.dwnative.WeaveFailureResult
+import org.mule.weave.dwnative.WeaveSuccessResult
 import org.mule.weave.dwnative.cli.highlighting.NanoHighlighterProvider
 import org.mule.weave.dwnative.utils.AnsiColor
 
-import java.io.{ByteArrayOutputStream, InputStream, OutputStream, PrintWriter}
+import java.io.ByteArrayOutputStream
+import java.io.OutputStream
+import java.io.{InputStream, PrintWriter}
 import scala.util.Try
 
 /**
@@ -20,8 +24,6 @@ trait Console {
     * @return
     */
   def isDebugEnabled(): Boolean = debugEnabled
-
-  def terminal: Terminal
 
   def in: InputStream
 
@@ -44,17 +46,66 @@ trait Console {
 
   def warn(message: String): Unit
 
-  def highLight(message: String, extension: String): String
-
   def clear(): Unit
 
-  def envVar(name: String): Option[String]
+  def supportsStreaming: Boolean = true
+  
+  def printResult(failure: WeaveFailureResult): Unit = {
+    error("Error while executing the script:")
+    error(failure.result())
+  }
+  
+  def printResult(success: WeaveSuccessResult): Unit
+}
 
+object DefaultConsole extends Console {
+
+  override def info(message: String): Unit = {
+    println(message)
+  }
+
+  override def error(message: String): Unit = {
+    System.err.println(AnsiColor.red("[ERROR] " + message))
+  }
+
+  override def fatal(message: String): Unit = {
+    System.err.println(AnsiColor.red("[FATAL] " + message))
+  }
+
+  override def clear(): Unit = {
+    Try({
+      if (System.getProperty("os.name").contains("Windows")) {
+        new ProcessBuilder("cmd", "/c", "cls").inheritIO.start.waitFor
+      }
+      else {
+        System.out.print("\u001b\u0063")
+      }
+    })
+  }
+
+  override def in: InputStream = System.in
+
+  override def out: OutputStream = System.out
+
+  override def warn(message: String): Unit = {
+    println(AnsiColor.yellow(message))
+  }
+
+  override def debug(message: String): Unit = {
+    if (isDebugEnabled())
+      println(AnsiColor.green(message))
+  }
+
+  override def writer: PrintWriter = new PrintWriter(System.out)
+
+  override def printResult(result: WeaveSuccessResult): Unit = {
+    println(result.result())
+  }
 }
 
 object ColoredConsole extends Console {
 
-  lazy val terminal = TerminalBuilder.builder()
+  lazy val terminal: Terminal = TerminalBuilder.builder()
     .system(true)
     .jansi(true)
     .build();
@@ -96,8 +147,6 @@ object ColoredConsole extends Console {
     terminal.writer().flush()
   }
 
-  override def envVar(name: String): Option[String] = Option(System.getenv(name))
-
   override def debug(message: String): Unit = {
     if (isDebugEnabled()) {
       terminal.writer().println(AnsiColor.green(message))
@@ -107,7 +156,14 @@ object ColoredConsole extends Console {
 
   override def writer: PrintWriter = terminal.writer()
 
-  override def highLight(message: String, extension: String): String = {
-    highLighterProvider.hightlighterFor(extension).highlight(message).toAnsi(terminal)
+  override def supportsStreaming: Boolean = false
+
+  override def printResult(result: WeaveSuccessResult): Unit = {
+    val message = highLighterProvider.hightlighterFor(result.extension.getOrElse("json")).highlight(result.result()).toAnsi(terminal)
+    info(message)
   }
+}
+
+object ConsoleProvider {
+  def provide(color: Boolean): Console = if (color) ColoredConsole else DefaultConsole
 }

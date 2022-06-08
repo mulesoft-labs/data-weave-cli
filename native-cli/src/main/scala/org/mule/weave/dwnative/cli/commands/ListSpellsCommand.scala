@@ -1,6 +1,7 @@
 package org.mule.weave.dwnative.cli.commands
 
 import org.mule.weave.dwnative.cli.Console
+import org.mule.weave.dwnative.cli.EnvironmentVariableProvider
 import org.mule.weave.dwnative.cli.utils.SpellsUtils
 import org.mule.weave.dwnative.cli.utils.SpellsUtils._
 
@@ -8,9 +9,9 @@ import java.io.File
 import java.io.FileFilter
 import scala.io.Source
 
-class ListSpellsCommand(console: Console) extends WeaveCommand {
+class ListSpellsCommand(console: Console, envVarProvider: EnvironmentVariableProvider) extends WeaveCommand {
 
-  private val utils = new SpellsUtils(console)
+  private val utils = new SpellsUtils(console, envVarProvider)
 
   def exec(): Int = {
     val spells: String = listSpells()
@@ -24,7 +25,7 @@ class ListSpellsCommand(console: Console) extends WeaveCommand {
     val grimoires: File = utils.grimoiresFolders()
     var grimoiresDirs: Array[File] = listGrimoires(grimoires)
     if (grimoiresDirs == null || !new File(grimoires, DATA_WEAVE_GRIMOIRE_FOLDER).exists()) {
-      new AddWizardCommand(CloneWizardConfig(null), console).exec()
+      new AddWizardCommand(CloneWizardConfig(null), console, envVarProvider).exec()
       grimoiresDirs = listGrimoires(grimoires)
     }
     if (grimoiresDirs != null) {

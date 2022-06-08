@@ -1,13 +1,14 @@
 package org.mule.weave.dwnative.cli.commands
 
 import org.mule.weave.dwnative.cli.Console
+import org.mule.weave.dwnative.cli.EnvironmentVariableProvider
 import org.mule.weave.dwnative.cli.utils.SpellsUtils
 
 import scala.io.StdIn
 
-class AddWizardCommand(config: CloneWizardConfig, console: Console) extends WeaveCommand {
+class AddWizardCommand(config: CloneWizardConfig, console: Console, envVarProvider: EnvironmentVariableProvider) extends WeaveCommand {
 
-  private val utils = new SpellsUtils(console)
+  private val utils = new SpellsUtils(console, envVarProvider)
 
   override def exec(): Int = {
     val wizard = config.wizardName

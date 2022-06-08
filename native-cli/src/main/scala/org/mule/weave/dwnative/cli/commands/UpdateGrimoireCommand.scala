@@ -1,13 +1,14 @@
 package org.mule.weave.dwnative.cli.commands
 
 import org.mule.weave.dwnative.cli.Console
+import org.mule.weave.dwnative.cli.EnvironmentVariableProvider
 import org.mule.weave.dwnative.cli.utils.SpellsUtils
 
 import java.io.File
 
-class UpdateGrimoireCommand(config: UpdateGrimoireConfig, console: Console) extends WeaveCommand {
+class UpdateGrimoireCommand(config: UpdateGrimoireConfig, console: Console, envVarProvider: EnvironmentVariableProvider) extends WeaveCommand {
 
-  private val utils = new SpellsUtils(console)
+  private val utils = new SpellsUtils(console, envVarProvider)
 
   def exec(): Int = {
     updateGrimoire(config.grimoire)
