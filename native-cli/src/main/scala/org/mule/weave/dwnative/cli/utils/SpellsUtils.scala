@@ -1,6 +1,7 @@
 package org.mule.weave.dwnative.cli.utils
 
 import org.mule.weave.dwnative.cli.Console
+import org.mule.weave.dwnative.cli.EnvironmentVariableProvider
 import org.mule.weave.dwnative.cli.utils.SpellsUtils.DATA_WEAVE_GRIMOIRE_FOLDER
 import org.mule.weave.dwnative.utils
 
@@ -11,7 +12,7 @@ object SpellsUtils {
   val DATA_WEAVE_GRIMOIRE_FOLDER = "data-weave-grimoire"
 }
 
-class SpellsUtils(console: Console) {
+class SpellsUtils(console: Console, envVarProvider: EnvironmentVariableProvider) {
 
   def grimoireName(user: String): String = {
     if (user == null) {
@@ -47,7 +48,7 @@ class SpellsUtils(console: Console) {
   }
 
   def grimoiresFolders(): File = {
-    val file = new File(new utils.DataWeaveUtils(console).getDWHome(), "grimoires")
+    val file = new File(new utils.DataWeaveUtils(console, envVarProvider).getDWHome(), "grimoires")
     if (!file.exists()) {
       file.mkdirs()
     }

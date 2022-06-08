@@ -1,11 +1,12 @@
 package org.mule.weave.dwnative.cli.commands
 
 import org.mule.weave.dwnative.cli.Console
+import org.mule.weave.dwnative.cli.EnvironmentVariableProvider
 import org.mule.weave.dwnative.cli.utils.SpellsUtils
 
-class UpdateAllGrimoires(console:Console) extends WeaveCommand {
+class UpdateAllGrimoires(console:Console, envVarProvider: EnvironmentVariableProvider) extends WeaveCommand {
 
-  private val utils = new SpellsUtils(console)
+  private val utils = new SpellsUtils(console, envVarProvider)
 
   def exec(): Int = {
     updateGrimoires()
@@ -19,7 +20,7 @@ class UpdateAllGrimoires(console:Console) extends WeaveCommand {
     grimoires.foreach((grimoire) => {
       //If it is not a directory it can be the lastUpdate.txt
       if (grimoire.isDirectory) {
-        val updateGrimoireCommand = new UpdateGrimoireCommand(UpdateGrimoireConfig(grimoire),console)
+        val updateGrimoireCommand = new UpdateGrimoireCommand(UpdateGrimoireConfig(grimoire),console, envVarProvider)
         val i = updateGrimoireCommand.exec()
         if (i != 0) {
           statusCode = i

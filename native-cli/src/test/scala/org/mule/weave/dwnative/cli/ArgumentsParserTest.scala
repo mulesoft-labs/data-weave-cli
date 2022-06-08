@@ -17,7 +17,7 @@ class ArgumentsParserTest extends FreeSpec with Matchers {
   }
 
   "should parse correctly help argument" in {
-    val parser = new CLIArgumentsParser(new TestConsole())
+    val parser = new CLIArgumentsParser(new TestConsole(), TestEnvironmentVariableProvider())
     val value = parser.parse(Array("--help"))
     assert(value.isLeft)
     val commandToRun = value.left.get
@@ -25,7 +25,7 @@ class ArgumentsParserTest extends FreeSpec with Matchers {
   }
 
   "should parse correctly a local script with multiple inputs and properties" in {
-    val parser = new CLIArgumentsParser(new TestConsole())
+    val parser = new CLIArgumentsParser(new TestConsole(), TestEnvironmentVariableProvider())
     val simpleScriptFolder = getScriptFolder("simpleScript")
     val basePath = simpleScriptFolder.getAbsolutePath
     val value = parser.parse(Array(
@@ -41,7 +41,7 @@ class ArgumentsParserTest extends FreeSpec with Matchers {
   }
 
   "should parse correctly a simple executable" in {
-    val parser = new CLIArgumentsParser(new TestConsole())
+    val parser = new CLIArgumentsParser(new TestConsole(), TestEnvironmentVariableProvider())
     val value = parser.parse(Array("1 to 10"))
     assert(value.isLeft)
     val commandToRun = value.left.get
@@ -49,7 +49,7 @@ class ArgumentsParserTest extends FreeSpec with Matchers {
   }
 
   "should parse correctly a simple executable with input" in {
-    val parser = new CLIArgumentsParser(new TestConsole())
+    val parser = new CLIArgumentsParser(new TestConsole(), TestEnvironmentVariableProvider())
     val simpleScriptFolder = getScriptFolder("simpleScript")
     val basePath = simpleScriptFolder.getAbsolutePath
     val value = parser.parse(Array(
@@ -62,7 +62,7 @@ class ArgumentsParserTest extends FreeSpec with Matchers {
   }
   
   "should parse correctly a local spell arg" in {
-    val parser = new CLIArgumentsParser(new TestConsole())
+    val parser = new CLIArgumentsParser(new TestConsole(), TestEnvironmentVariableProvider())
     val lib = TestUtils.getMyLocalSpellWithLib
     val value = parser.parse(Array("--local-spell", lib.getAbsolutePath))
     assert(value.isLeft)
@@ -71,7 +71,7 @@ class ArgumentsParserTest extends FreeSpec with Matchers {
   }
 
   "should set the watch command correctly" in {
-    val parser = new CLIArgumentsParser(new TestConsole())
+    val parser = new CLIArgumentsParser(new TestConsole(), TestEnvironmentVariableProvider())
     val lib = TestUtils.getMyLocalSpellWithLib
     val value = parser.parse(Array("--local-spell", lib.getAbsolutePath))
     assert(value.isLeft)
@@ -80,7 +80,7 @@ class ArgumentsParserTest extends FreeSpec with Matchers {
   }
 
   "should parse correctly when using literal script" in {
-    val parser = new CLIArgumentsParser(new TestConsole())
+    val parser = new CLIArgumentsParser(new TestConsole(), TestEnvironmentVariableProvider())
     val value = parser.parse(Array("'Test'"))
     assert(value.isLeft)
     val commandToRun = value.left.get
@@ -88,7 +88,7 @@ class ArgumentsParserTest extends FreeSpec with Matchers {
   }
 
   "should parse new-spell correctly" in {
-    val parser = new CLIArgumentsParser(new TestConsole())
+    val parser = new CLIArgumentsParser(new TestConsole(), TestEnvironmentVariableProvider())
     val value = parser.parse(Array("--new-spell", "Test"))
     assert(value.isLeft)
     val commandToRun = value.left.get
@@ -98,7 +98,7 @@ class ArgumentsParserTest extends FreeSpec with Matchers {
   }
   
   "should fail parsing unrecognized argument" in {
-    val parser = new CLIArgumentsParser(new TestConsole())
+    val parser = new CLIArgumentsParser(new TestConsole(), TestEnvironmentVariableProvider())
     val value = parser.parse(Array("-o", "/tmp/out.json", "--parameter", "p1", "p2", "p3", "1 to 10" ))
     assert(value.isRight)
     val message = value.right.get

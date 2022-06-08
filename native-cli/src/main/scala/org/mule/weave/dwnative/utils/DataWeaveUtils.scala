@@ -1,19 +1,11 @@
 package org.mule.weave.dwnative.utils
 
 import org.mule.weave.dwnative.cli.Console
-import org.mule.weave.dwnative.utils.DataWeaveUtils._
+import org.mule.weave.dwnative.cli.EnvironmentVariableProvider
 
 import java.io.File
 
-object DataWeaveUtils {
-  val DW_DEFAULT_INPUT_MIMETYPE_VAR: String = "DW_DEFAULT_INPUT_MIMETYPE"
-  val DW_DEFAULT_OUTPUT_MIMETYPE_VAR: String = "DW_DEFAULT_OUTPUT_MIMETYPE"
-  val DW_HOME_VAR = "DW_HOME"
-  val DW_WORKING_DIRECTORY_VAR = "DW_WORKING_PATH"
-  val DW_LIB_PATH_VAR = "DW_LIB_PATH"
-}
-
-class DataWeaveUtils(console: Console) {
+class DataWeaveUtils(console: Console, envVarProvider: EnvironmentVariableProvider) {
 
   /**
     * Returns the DW home directory if exists it can be overwritten with env variable DW_HOME
@@ -21,21 +13,21 @@ class DataWeaveUtils(console: Console) {
     * @return The home directory
     */
   def getDWHome(): File = {
-    val weavehome: Option[String] = console.envVar(DW_HOME_VAR)
-    if (weavehome.isDefined) {
-      val home = new File(weavehome.get)
+    val maybeHomeVariable = envVarProvider.envVar(EnvironmentVariableProvider.DW_HOME_VAR)
+    if (maybeHomeVariable.isDefined) {
+      val homeVariable = maybeHomeVariable.get
+      val home = new File(homeVariable)
       if (!home.exists()) {
-        console.error(s" Weave Home Directory `${weavehome}` declared on environment variable `WEAVE_HOME` does not exists.")
+        console.error(s" Weave Home Directory `$homeVariable` declared on environment variable `WEAVE_HOME` does not exists.")
       }
       home
     } else {
-
       console.debug("Env not working trying home directory")
       val defaultDWHomeDir: File = getDefaultDWHome()
       if (defaultDWHomeDir.exists()) {
         defaultDWHomeDir
       } else {
-        val dwScriptPath = console.envVar("_")
+        val dwScriptPath = envVarProvider.envVar("_")
         if (dwScriptPath.isDefined) {
           val scriptPath = new File(dwScriptPath.get)
           if (scriptPath.isFile && scriptPath.getName == "dw") {
@@ -44,7 +36,7 @@ class DataWeaveUtils(console: Console) {
             return homeDirectory
           }
         }
-        console.warn(s"Unable to detect Weave Home directory so local directory is going to be used. Please either define the env variable `${DW_HOME_VAR}` or copy the weave distro into `${defaultDWHomeDir.getAbsolutePath}`.")
+        console.warn(s"Unable to detect Weave Home directory so local directory is going to be used. Please either define the env variable `${EnvironmentVariableProvider.DW_HOME_VAR}` or copy the weave distro into `${defaultDWHomeDir.getAbsolutePath}`.")
         new File("..")
       }
     }
@@ -66,13 +58,14 @@ class DataWeaveUtils(console: Console) {
     * @return The home directory
     */
   def getWorkingHome(): File = {
-    val weavehome = console.envVar(DW_WORKING_DIRECTORY_VAR)
-    if (weavehome.isDefined) {
-      val home = new File(weavehome.get)
-      if (!home.exists()) {
-        console.envVar(s"Weave Working Home Directory `${weavehome}` declared on environment variable `$DW_WORKING_DIRECTORY_VAR` does not exists.")
+    val maybeWorkingDirectoryVariable = envVarProvider.envVar(EnvironmentVariableProvider.DW_WORKING_DIRECTORY_VAR)
+    if (maybeWorkingDirectoryVariable.isDefined) {
+      val workingDirectoryVariable = maybeWorkingDirectoryVariable.get
+      val workingDirectory = new File(workingDirectoryVariable)
+      if (!workingDirectory.exists()) {
+        console.error(s"Weave Working Home Directory `$workingDirectoryVariable` declared on environment variable `${EnvironmentVariableProvider.DW_WORKING_DIRECTORY_VAR}` does not exists.")
       }
-      home
+      workingDirectory
     } else {
       val tmpDirectory = new File(getDWHome(), "tmp")
       if (!tmpDirectory.exists()) {
@@ -88,13 +81,14 @@ class DataWeaveUtils(console: Console) {
     * @return The file
     */
   def getLibPathHome(): File = {
-    val weavehome = console.envVar(DW_LIB_PATH_VAR)
-    if (weavehome.isDefined) {
-      val home = new File(weavehome.get)
-      if (!home.exists()) {
-        console.envVar(s"Weave Library Home Directory `${weavehome}` declared on environment variable `$DW_LIB_PATH_VAR` does not exists.")
+    val maybeWeaveLibPathVariable = envVarProvider.envVar(EnvironmentVariableProvider.DW_LIB_PATH_VAR)
+    if (maybeWeaveLibPathVariable.isDefined) {
+      val weaveLibPathVariable = maybeWeaveLibPathVariable.get
+      val weaveLibPathVarDirectory = new File(weaveLibPathVariable)
+      if (!weaveLibPathVarDirectory.exists()) {
+        console.error(s"Weave Library Home Directory `$weaveLibPathVariable` declared on environment variable `${EnvironmentVariableProvider.DW_LIB_PATH_VAR}` does not exists.")
       }
-      home
+      weaveLibPathVarDirectory
     } else {
       new File(getDWHome(), "libs")
     }

@@ -25,8 +25,8 @@ import java.io.File
 import scala.collection.mutable
 import scala.io.Source
 
-class CLIArgumentsParser(console: Console) {
-  private val utils = new SpellsUtils(console)
+class CLIArgumentsParser(console: Console, envVarProvider: EnvironmentVariableProvider) {
+  private val utils = new SpellsUtils(console, envVarProvider)
   
   def parse(args: Array[String]): Either[WeaveCommand, String] = {
     val parser = new DefaultParser
@@ -75,13 +75,13 @@ class CLIArgumentsParser(console: Console) {
       }
       
       if (commandLine.hasOption(Options.UPDATE_GRIMOIRES)) {
-        return Left(new UpdateAllGrimoires(console))
+        return Left(new UpdateAllGrimoires(console, envVarProvider))
       }
       
       if (commandLine.hasOption(Options.ADD_WIZARD)) {
         val wizardName = commandLine.getOptionValue(Options.ADD_WIZARD)
         if (wizardName != null && !wizardName.isBlank) {
-          return Left(new AddWizardCommand(CloneWizardConfig(wizardName), console))
+          return Left(new AddWizardCommand(CloneWizardConfig(wizardName), console, envVarProvider))
         } else {
           return Right("Missing <wizard-name>")
         }
@@ -97,7 +97,7 @@ class CLIArgumentsParser(console: Console) {
       }
       
       if (commandLine.hasOption(Options.LIST_SPELLS)) {
-        return Left(new ListSpellsCommand(console))
+        return Left(new ListSpellsCommand(console, envVarProvider))
       }
       
       if (commandLine.hasOption(Options.SPELL)) {
@@ -127,12 +127,12 @@ class CLIArgumentsParser(console: Console) {
           val lastUpdate = utils.hoursSinceLastUpdate()
           // Update grimoires every day
           if (lastUpdate > 24) {
-            new UpdateAllGrimoires(console).exec()
+            new UpdateAllGrimoires(console, envVarProvider).exec()
           }
           
           var wizardGrimoire: File = utils.grimoireFolder(wizard)
           if (!wizardGrimoire.exists()) {
-            new AddWizardCommand(CloneWizardConfig(wizard), console).exec()
+            new AddWizardCommand(CloneWizardConfig(wizard), console, envVarProvider).exec()
           }
           wizardGrimoire = utils.grimoireFolder(wizard)
           val wizardName = if (wizard == null) "Weave" else wizard
@@ -142,7 +142,7 @@ class CLIArgumentsParser(console: Console) {
 
           val spellFolder = new File(wizardGrimoire, spellName)
           if (!spellFolder.exists()) {
-            new UpdateGrimoireCommand(UpdateGrimoireConfig(wizardGrimoire), console).exec()
+            new UpdateGrimoireCommand(UpdateGrimoireConfig(wizardGrimoire), console, envVarProvider).exec()
           }
 
           if (!spellFolder.exists()) {
@@ -280,7 +280,7 @@ class CLIArgumentsParser(console: Console) {
       Right(s"Missing <script-content> or -f <file-path> or --spell ")
     } else {
       val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, eval, scriptToRun.get, params.toMap, inputs.toMap, output, maybePrivileges, coloring)
-      Left(new RunWeaveCommand(config, console))
+      Left(new RunWeaveCommand(config, console, envVarProvider))
     }
   }
 
