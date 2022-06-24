@@ -4,8 +4,6 @@ on:
     # Sequence of patterns matched against refs/tags
     tags:
       - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
-
-
 jobs:
 
   # This workflow contains a single job called "build"
@@ -14,12 +12,12 @@ jobs:
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
         include:
-          - os: windows-latest
-            script_name: windows
           - os: ubuntu-latest
             script_name: linux
           - os: macos-latest
             script_name: osx
+          - os: windows-latest
+            script_name: windows
 
     runs-on: ${{ matrix.os }}
     # Steps represent a sequence of tasks that will be executed as part of the job
@@ -59,12 +57,25 @@ jobs:
         shell: bash
 
       # Upload the artifact file
-      - name: Upload binaries to release
-        uses: svenstaro/upload-release-action@v2
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: native-cli/build/distributions/native-cli-${{env.NATIVE_VERSION}}-native-distro-${{ matrix.script_name }}.zip
-          asset_name: dw-${{env.NATIVE_VERSION}}-${{runner.os}}
-          tag: ${{ github.ref }}
-          overwrite: true
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+        if: matrix.os == 'ubuntu-latest'
+      - name: Upload Release Asset
+        id: upload-release-asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
+          asset_path: native-cli/build/distributions/native-cli-${{env.NATIVE_VERSION}}-native-distro-${{ matrix.script_name }}.zip
+          asset_name: dw-${{env.NATIVE_VERSION}}-${{runner.os}}.zip
+          asset_content_type: application/zip
 
