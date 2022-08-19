@@ -12,7 +12,7 @@ class HelpCommand(console: Console) extends WeaveCommand {
 
   override def exec(): Int = {
     printHelp()
-    0
+    ExitCodes.SUCCESS
   }
 
   private def printHelp(): Unit = {

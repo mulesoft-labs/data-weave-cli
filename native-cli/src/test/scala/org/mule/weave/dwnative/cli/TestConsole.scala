@@ -13,7 +13,7 @@ class TestConsole(val in: InputStream = System.in, val out: OutputStream = Syste
   var clearCount: Int = 0
 
 
-  override def info(message: String): Unit = {
+  override def doInfo(message: String): Unit = {
     infoMessages += (message)
   }
 
@@ -25,7 +25,7 @@ class TestConsole(val in: InputStream = System.in, val out: OutputStream = Syste
     fatalMessages += (message)
   }
 
-  override def warn(message: String): Unit = {
+  override def doWarn(message: String): Unit = {
     warnMessages += (message)
   }
 
@@ -35,5 +35,5 @@ class TestConsole(val in: InputStream = System.in, val out: OutputStream = Syste
 
   override def envVar(name: String): Option[String] = envVars.get(name)
 
-  override def debug(message: String): Unit = DefaultConsole.debug(message)
+  override def doDebug(message: String): Unit = DefaultConsole.debug(message)
 }

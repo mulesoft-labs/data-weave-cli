@@ -4,8 +4,6 @@ import java.io.Serializable;
 import java.util.Iterator;
 
 public interface Marker extends Serializable {
-    String ANY_MARKER = "*";
-    String ANY_NON_NULL_MARKER = "+";
 
     String getName();
 
@@ -13,7 +11,7 @@ public interface Marker extends Serializable {
 
     boolean remove(Marker var1);
 
-    /** @deprecated */
+    @Deprecated
     boolean hasChildren();
 
     boolean hasReferences();

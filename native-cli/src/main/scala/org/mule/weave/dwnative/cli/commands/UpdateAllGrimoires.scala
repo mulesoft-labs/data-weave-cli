@@ -13,7 +13,7 @@ class UpdateAllGrimoires(console:Console) extends WeaveCommand {
 
   def updateGrimoires(): Int = {
     console.info("Updating Grimoires")
-    var statusCode = 0
+    var statusCode = ExitCodes.SUCCESS
     utils.updateLastUpdateTimeStamp()
     val grimoires = utils.grimoiresFolders().listFiles()
     grimoires.foreach((grimoire) => {

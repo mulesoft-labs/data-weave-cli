@@ -62,6 +62,10 @@ class CLIArgumentsParser(console: Console) {
       if (commandLine.hasOption(Options.VERBOSE)) {
         console.enableDebug()
       }
+
+      if (commandLine.hasOption(Options.SILENT)) {
+        console.enableSilent()
+      }
       
       if (commandLine.hasOption(Options.HELP)) {
         return Left(HelpCommand(console))
@@ -121,10 +125,9 @@ class CLIArgumentsParser(console: Console) {
             fileName = NameIdentifierHelper.toWeaveFilePath(nameIdentifier, File.pathSeparator)
           }
 
-          val lastUpdate = utils.hoursSinceLastUpdate()
-          // Update grimoires every day
-          if (lastUpdate > 24) {
-            new UpdateAllGrimoires(console).exec()
+          val lastUpdate = utils.daysSinceLastUpdate()
+          if (lastUpdate > 30) {
+            console.info(s"Your spells are getting old. ${lastUpdate} days since last update. Please run \n dw --update-grimoires")
           }
           
           var wizardGrimoire: File = utils.grimoireFolder(wizard)
@@ -167,7 +170,6 @@ class CLIArgumentsParser(console: Console) {
       if (commandLine.hasOption(Options.LOCAL_SPELL)) {
         val spell = commandLine.getOptionValue(Options.LOCAL_SPELL)
         if (spell != null && !spell.isBlank) {
-          console.info("Running local spell")
           var fileName = "Main.dwl"
           var nameIdentifier = NameIdentifier("Main")
           var spellName = spell

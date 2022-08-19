@@ -9,11 +9,11 @@ import java.nio.charset.StandardCharsets
 class CreateSpellCommand(val spellName: String, console: Console) extends WeaveCommand {
 
   def exec(): Int = {
-    var statusCode = 0
+    var statusCode = ExitCodes.SUCCESS
     val homeFolder = new File(spellName)
     if (homeFolder.exists()) {
       console.error(s"Spell `${spellName}` already exists.")
-      statusCode = -1
+      statusCode = ExitCodes.FAILURE
     } else {
       if (homeFolder.mkdirs()) {
         val srcFolder = new File(homeFolder, "src")
@@ -25,7 +25,7 @@ class CreateSpellCommand(val spellName: String, console: Console) extends WeaveC
         writer.close()
       } else {
         console.error(s"Unable to create folder `${spellName}`.")
-        statusCode = -1
+        statusCode = ExitCodes.FAILURE
       }
     }
     statusCode

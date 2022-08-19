@@ -6,6 +6,7 @@ import org.mule.weave.dwnative.cli.utils.SpellsUtils._
 
 import java.io.File
 import java.io.FileFilter
+import scala.collection.mutable
 import scala.io.Source
 
 class ListSpellsCommand(console: Console) extends WeaveCommand {
@@ -15,11 +16,11 @@ class ListSpellsCommand(console: Console) extends WeaveCommand {
   def exec(): Int = {
     val spells: String = listSpells()
     console.info(spells)
-    0
+    ExitCodes.SUCCESS
   }
 
   private def listSpells(): String = {
-    val builder = new StringBuilder()
+    val builder = new mutable.StringBuilder()
     builder.append("Spells:\n")
     val grimoires: File = utils.grimoiresFolders()
     var grimoiresDirs: Array[File] = listGrimoires(grimoires)
