@@ -50,7 +50,7 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
   }
 
   def doRun(config: WeaveRunnerConfig, nativeRuntime: NativeRuntime): Int = {
-    var exitCode: Int = 0
+    var exitCode: Int = ExitCodes.SUCCESS
 
     val defaultInputType: String = console.envVar(DW_DEFAULT_INPUT_MIMETYPE_VAR).getOrElse(DEFAULT_MIME_TYPE)
     val scriptingBindings: ScriptingBindings = new ScriptingBindings
@@ -97,7 +97,7 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
           val writer = new StringWriter()
           le.printStackTrace(new PrintWriter(writer))
           console.error(writer.toString)
-          exitCode = -1
+          exitCode = ExitCodes.FAILURE
         }
       }
     } else {
@@ -111,7 +111,7 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
           val created = parentFile.mkdirs()
           if (!created) {
             console.error(s"Unable to create output file folder: `${outputFile.getParent}`.")
-            return -1
+            return ExitCodes.FAILURE
           }
         }
         new FileOutputStream(outputFile)
@@ -126,7 +126,7 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
       } else {
         console.error("Error while executing the script:")
         console.error(result.result())
-        exitCode = -1
+        exitCode = ExitCodes.FAILURE
       }
     }
     exitCode

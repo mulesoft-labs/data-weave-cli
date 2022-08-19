@@ -35,10 +35,10 @@ class SpellsUtils(console: Console) {
     }
   }
 
-  def hoursSinceLastUpdate(): Int = {
+  def daysSinceLastUpdate(): Int = {
     val lastModified = lastUpdatedMarkFile().lastModified()
     val millis = System.currentTimeMillis() - lastModified
-    (millis / (1000 * 60 * 20)).asInstanceOf[Int]
+    (millis / (1000 * 60 * 20 * 24)).asInstanceOf[Int]
   }
 
   def grimoireFolder(wizard: String): File = {

@@ -11,7 +11,15 @@ import scala.util.Try
   */
 trait Console {
 
+  private var silentEnabled = false
   private var debugEnabled = false
+
+  def enableSilent(): Console = {
+    silentEnabled = true
+    this
+  }
+
+  def isSilentEnabled(): Boolean = silentEnabled
 
   /**
     * Returns true if the debug is enabled
@@ -29,15 +37,33 @@ trait Console {
     this
   }
 
-  def debug(message: String): Unit
+  def debug(message: String): Unit = {
+    if (!isSilentEnabled() && isDebugEnabled()) {
+      doDebug(message)
+    }
+  }
 
-  def info(message: String): Unit
+  def info(message: String): Unit = {
+    if (!isSilentEnabled()) {
+      doInfo(message)
+    }
+  }
+
+  def warn(message: String): Unit = {
+    if (!isSilentEnabled()) {
+      doWarn(message)
+    }
+  }
+
+  protected def doDebug(message: String): Unit
+
+  protected def doInfo(message: String): Unit
+
+  protected def doWarn(message: String): Unit
 
   def error(message: String): Unit
 
   def fatal(message: String): Unit
-
-  def warn(message: String): Unit
 
   def clear(): Unit
 
@@ -46,7 +72,7 @@ trait Console {
 }
 
 object DefaultConsole extends Console {
-  override def info(message: String): Unit = {
+  override def doInfo(message: String): Unit = {
     println(message)
   }
 
@@ -73,14 +99,14 @@ object DefaultConsole extends Console {
 
   override def out: OutputStream = System.out
 
-  override def warn(message: String): Unit = {
+  override def doWarn(message: String): Unit = {
     println(AnsiColor.yellow(message))
   }
 
   override def envVar(name: String): Option[String] = Option(System.getenv(name))
 
-  override def debug(message: String): Unit = {
-    if (isDebugEnabled())
-      println(AnsiColor.green(message))
+  override def doDebug(message: String): Unit = {
+
+    println(AnsiColor.green(message))
   }
 }

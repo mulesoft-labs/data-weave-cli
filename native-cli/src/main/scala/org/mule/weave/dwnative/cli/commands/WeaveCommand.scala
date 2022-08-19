@@ -12,3 +12,8 @@ trait WeaveCommand {
     */
   def exec(): Int
 }
+
+object ExitCodes {
+  val SUCCESS: Int = 0
+  val FAILURE: Int = -1
+}

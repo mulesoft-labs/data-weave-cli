@@ -11,6 +11,6 @@ class VersionCommand(logger: Console) extends WeaveCommand {
   def exec(): Int = {
     logger.info(" - DataWeave Command Line : V" + DW_CLI_VERSION)
     logger.info(" - DataWeave Runtime: V" + DW_RUNTIME_VERSION)
-    0
+    ExitCodes.SUCCESS
   }
 }

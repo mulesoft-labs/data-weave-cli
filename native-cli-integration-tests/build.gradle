@@ -4,14 +4,19 @@ plugins {
 
 
 dependencies {
-    compile project(":native-cli")
-    testCompile group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
-    testCompile group: 'org.mule.weave', name: 'parser', version: weaveVersion
-    testCompile group: 'org.mule.weave', name: 'test-helpers', version: weaveVersion
-    testCompile "org.mule.weave:runtime:${weaveVersion}:test@zip"
-    testCompile "org.mule.weave:yaml-module:${weaveVersion}:test@zip"
-    testCompile 'commons-io:commons-io:2.11.0'
-    testRuntime 'org.pegdown:pegdown:1.6.0'
+    api project(":native-cli")
+    testImplementation group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
+    testImplementation group: 'org.mule.weave', name: 'parser', version: weaveVersion
+    testImplementation group: 'org.mule.weave', name: 'test-helpers', version: weaveVersion
+    testImplementation "org.mule.weave:runtime:${weaveVersion}:test@zip"
+    testImplementation "org.mule.weave:yaml-module:${weaveVersion}:test@zip"
+    testImplementation 'commons-io:commons-io:2.11.0'
+    testRuntimeOnly 'org.pegdown:pegdown:1.6.0'
+
+    testImplementation group: 'com.sun.mail', name: 'jakarta.mail', version: '1.6.4'
+    testImplementation group: 'xerces', name: 'xercesImpl', version: '2.12.1'
+    testImplementation group: 'xalan', name: 'xalan', version: '2.7.2'
+    testImplementation group: 'commons-beanutils', name: 'commons-beanutils', version: '1.9.4'
 }
 
 test.dependsOn(":native-cli:nativeCompile")

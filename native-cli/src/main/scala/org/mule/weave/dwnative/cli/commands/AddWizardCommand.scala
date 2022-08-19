@@ -16,7 +16,7 @@ class AddWizardCommand(config: CloneWizardConfig, console: Console) extends Weav
     val wizardFolder = utils.grimoireFolder(wizard)
     if (wizardFolder.exists()) {
       console.error(s"Wizard `$wizard` was already added.")
-      -1
+      ExitCodes.FAILURE
     } else {
       console.warn(s"You are adding `$wizardName's` Grimoire, are you sure? [y/n]")
       val trustWizard = StdIn.readBoolean()
@@ -28,7 +28,7 @@ class AddWizardCommand(config: CloneWizardConfig, console: Console) extends Weav
         processBuilder.start().waitFor()
       } else {
         console.warn(s"Wizard `$wizardName' was not added.")
-        0
+        ExitCodes.SUCCESS
       }
     }
   }

@@ -16,6 +16,7 @@ object Options {
   val PRIVILEGES = "privileges"
   val PARAMETER = "parameter"
   val SPELL = "spell"
+  val SILENT = "silent"
   val UNTRUSTED_CODE = "untrusted-code"
   val UPDATE_GRIMOIRES = "update-grimoires"
   val VERBOSE = "verbose"
@@ -80,6 +81,12 @@ object Options {
       .hasArg(true)
       .argName("spell-name")
       .desc(s"$EXPERIMENTAL_TAG Runs a spell. Use the <spellName> or <wizard>/<spellName> for spells from a given wizard.")
+      .build())
+
+
+    options.addOption(Option.builder()
+      .longOpt(SILENT)
+      .desc(s"Executes the script in silent mode, where all info messages is not going to be shown.")
       .build())
   
     options.addOption(Option.builder()

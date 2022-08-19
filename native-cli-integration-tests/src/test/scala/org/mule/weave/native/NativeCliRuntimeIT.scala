@@ -45,31 +45,31 @@ import scala.collection.JavaConverters._
 import scala.io.Source.fromFile
 import scala.util.Try
 
-class NativeCliRuntimeIT extends FunSpec 
-  with Matchers 
-  with FolderBasedTest 
-  with ResourceResolver 
+class NativeCliRuntimeIT extends FunSpec
+  with Matchers
+  with FolderBasedTest
+  with ResourceResolver
   with OSSupport {
 
   private val TIMEOUT: (Int, TimeUnit) = (30, TimeUnit.SECONDS)
-  private val INPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile( "in[0-9]+-config\\.properties")
-  private val OUTPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile( "out[0-9]+-config\\.properties")
-  private val INPUT_FILE_PATTERN = Pattern.compile( "in[0-9]+\\.[a-zA-Z]+")
+  private val INPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile("in[0-9]+-config\\.properties")
+  private val OUTPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile("out[0-9]+-config\\.properties")
+  private val INPUT_FILE_PATTERN = Pattern.compile("in[0-9]+\\.[a-zA-Z]+")
   private val OUTPUT_FILE_PATTERN = Pattern.compile("out\\.[a-zA-Z]+")
-  
+
   val testSuites =
     Seq(
       TestSuite("master", loadTestZipFile("access_raw_value")),
       TestSuite("yaml", loadTestZipFile("comments"))
     )
-  
+
   private def loadTestZipFile(testSuiteExample: String): File = {
     val url = getResource(testSuiteExample)
     val connection = url.openConnection.asInstanceOf[JarURLConnection]
     val zipFile = new File(connection.getJarFileURL.toURI)
     zipFile
   }
-  
+
   testSuites.foreach {
     testSuite => {
       val wd = Files.createTempDirectory(testSuite.name).toFile
@@ -82,13 +82,13 @@ class NativeCliRuntimeIT extends FunSpec
       runTestSuite(wd)
     }
   }
-  
+
   private def runTestSuite(testsSuiteFolder: File): Unit = {
-    
+
     def isEmpty(source: Array[String]): Boolean = {
       source == null || source.isEmpty
     }
-    
+
     val testFolders = testsSuiteFolder.listFiles(new FileFilter {
       override def accept(pathname: File): Boolean = {
         var accept = false
@@ -99,16 +99,16 @@ class NativeCliRuntimeIT extends FunSpec
               val extension = FilenameUtils.getExtension(name)
               val isInput = INPUT_FILE_PATTERN.matcher(name).matches()
               val isOutput = OUTPUT_FILE_PATTERN.matcher(name).matches()
-              "dwl" ==  extension && !isInput && !isOutput
+              "dwl" == extension && !isInput && !isOutput
             })
-            
+
             // Ignore test case with inX-config.properties or outX-config.properties
             val inputOrOutputConfigProperties: Array[String] = pathname.list((_: File, name: String) => {
               val isInput = INPUT_FILE_CONFIG_PROPERTY_PATTERN.matcher(name).matches()
               val isOutput = OUTPUT_FILE_CONFIG_PROPERTY_PATTERN.matcher(name).matches()
               isInput || isOutput
             })
-            
+
             // Ignore java use cases for now until we resolve classpath
             val javaCases: Array[String] = pathname.list((_: File, name: String) => {
               name.endsWith("groovy")
@@ -118,7 +118,7 @@ class NativeCliRuntimeIT extends FunSpec
             val configPropertyCase = pathname.list((_: File, name: String) => {
               "config.properties" == name
             })
-            
+
             accept = dwlFiles.length == 1 && isEmpty(inputOrOutputConfigProperties) && isEmpty(javaCases) && isEmpty(configPropertyCase)
           }
         }
@@ -129,7 +129,7 @@ class NativeCliRuntimeIT extends FunSpec
       runTestCase(testFolders)
     }
   }
-  
+
   def runTestCase(testFolders: Array[File]): Unit = {
     val unsortedScenarios = for {
       testFolder <- testFolders
@@ -152,7 +152,7 @@ class NativeCliRuntimeIT extends FunSpec
 
           // Add output
           val outputExtension = FilenameUtils.getExtension(scenario.output.getName)
-          val outputPath = Path.of(scenario.testFolder.getPath,s"cli-out.$outputExtension")
+          val outputPath = Path.of(scenario.testFolder.getPath, s"cli-out.$outputExtension")
           args = args :+ "-o"
           args = args :+ s"${outputPath.toString}"
 
@@ -160,11 +160,11 @@ class NativeCliRuntimeIT extends FunSpec
           val weaveResource = WeaveResourceFactory.fromFile(scenario.transform)
           val parser = MappingParser.parse(MappingParser.parsingPhase(), weaveResource, ParsingContextFactory.createParsingContext())
           val documentNode = parser.getResult().astNode
-          
+
           val headerDirectives: Seq[DirectiveNode] = documentNode.header.directives
-          
+
           val maybeOutputDirective = headerDirectives.find(dn => dn.isInstanceOf[OutputDirective]).map(_.asInstanceOf[OutputDirective])
-          
+
           var maybeEncoding: Option[String] = None
           var directives = headerDirectives
           implicit val ctx: EvaluationContext = EvaluationContext()
@@ -177,7 +177,7 @@ class NativeCliRuntimeIT extends FunSpec
           } else {
             val outputDirective = maybeOutputDirective.get
             maybeEncoding = getEncodingFromOutputDirective(outputDirective)
-            
+
             if (outputDirective.mime.isDefined) {
               val currentContentType = outputDirective.mime.get
               val maybeCurrentDataFormat = DataFormatManager.byContentType(currentContentType.mime)
@@ -193,37 +193,39 @@ class NativeCliRuntimeIT extends FunSpec
               }
             }
           }
-          
+
           documentNode.header.directives = directives
           val settings = CodeGeneratorSettings(InfixOptions.KEEP, alwaysInsertVersion = false, newLineBetweenFunctions = true, orderDirectives = false)
           val code = CodeGenerator.generate(documentNode, settings)
           val cliTransform = new File(scenario.testFolder, s"cli-transform-$outputExtension.dwl")
-          
+
           try {
             Files.write(cliTransform.toPath, code.getBytes(StandardCharsets.UTF_8))
-          }  catch {
+          } catch {
             case ioe: IOException =>
               throw ioe
           }
-          
+
           args = args :+ "-f"
           args = args :+ cliTransform.getAbsolutePath
 
           val (exitCode, _) = NativeCliITTestRunner(args).execute(TIMEOUT._1, TIMEOUT._2)
-          
+
           exitCode shouldBe 0
           doAssert(outputPath.toFile, scenario.output, maybeEncoding)
         }
     }
   }
-  
+
   private def getEncodingFromOutputDirective(outputDirective: OutputDirective): Option[String] = {
     val maybeEncodingOption = outputDirective.options.flatMap(opts => {
-      opts.find(opt => {"encoding" == opt.name.name})
+      opts.find(opt => {
+        "encoding" == opt.name.name
+      })
     })
     maybeEncodingOption.map(d => d.value.asInstanceOf[StringNode].literalValue)
   }
-  
+
   private def extractArchive(archiveFile: Path, destPath: Path): Unit = {
     Files.createDirectories(destPath)
     val archive = new ZipFile(archiveFile.toFile)
@@ -243,7 +245,7 @@ class NativeCliRuntimeIT extends FunSpec
     }
     println(s"Extract content from: $archiveFile at $destPath")
   }
-  
+
   private def doAssert(actualFile: File, expectedFile: File, maybeEncoding: Option[String] = None) = {
     val bytes: Array[Byte] = IOUtils.toByteArray(new FileInputStream(actualFile))
     val encoding = maybeEncoding.getOrElse("UTF-8")
@@ -279,8 +281,8 @@ class NativeCliRuntimeIT extends FunSpec
       case "properties" =>
         val actual: String = new String(bytes, "UTF-8")
         actual should matchProperties(readFile(expectedFile).trim)
-      
-      case "multipart" => 
+
+      case "multipart" =>
         matchMultipart(expectedFile, bytes)
 
       case "yml" | "yaml" =>
@@ -292,7 +294,7 @@ class NativeCliRuntimeIT extends FunSpec
   private def assertBinaryFile(result: Array[Byte], expectedFile: File): Assertion = {
     result should matchBin(expectedFile)
   }
-  
+
   private def matchMultipart(output: File, result: Array[Byte]): Unit = {
     val expected = new MimeMultipart(new ByteArrayDataSource(new FileInputStream(output), "multipart/form-data"))
     val actual = new MimeMultipart(new ByteArrayDataSource(new ByteArrayInputStream(result), "multipart/form-data"))
@@ -320,11 +322,11 @@ class NativeCliRuntimeIT extends FunSpec
         case _ =>
           String.valueOf(expectedContent);
       }
-      
+
       val actualContentNormalized = actualContentString.stripMarginAndNormalizeEOL
       val expectedContentNormalized = expectedContentString.stripMarginAndNormalizeEOL
       actualContentNormalized shouldBe expectedContentNormalized
-      
+
       i = i + 1
     }
   }
@@ -340,7 +342,8 @@ class NativeCliRuntimeIT extends FunSpec
             source.mkString
           } finally {
             source.close()
-          }})
+          }
+        })
     }
     expectedText
   }
@@ -348,44 +351,45 @@ class NativeCliRuntimeIT extends FunSpec
   override def ignoreTests(): Array[String] = {
     // Encoding issues
     Array("csv-invalid-utf8") ++
-    // Fail in java11 because broken backwards
-    Array("coerciones_toString", "date-coercion") ++
-    // Use resources (dwl files) that is present in the Tests but not in Cli (e.g: org::mule::weave::v2::libs::)
-    Array("full-qualified-name-ref",
-      "import-component-alias-lib",
-      "import-lib",
-      "import-lib-with-alias",
-      "import-named-lib",
-      "import-star",
-      "module-singleton",
-      "multipart-write-binary",
-      "read-binary-files",
-      "try",
-      "urlEncodeDecode") ++
-    // Uses resource name that is different on Cli than in the Tests 
-    Array("try-recursive-call", "runtime_orElseTry") ++
-    // Use readUrl from classpath
-    Array("dw-binary", "read_lines") ++
-    // Uses java module
-    Array("java-big-decimal",
-      "java-field-ref",
-      "java-interop-enum",
-      "java-interop-function-call",
-      "runtime_run_coercionException",
-      "runtime_run_fibo",
-      "runtime_run_null_java",
-      "write-function-with-null"
-    ) ++
-    // Multipart Object has empty `parts` and expects at least one part
-    Array("multipart-mixed-message", "multipart-write-message", "multipart-write-subtype-override") ++
-    // Fail pattern match on complex object
-    Array("pattern-match-complex-type") ++
-    // DataFormats
-    Array("runtime_dataFormatsDescriptors") ++
-    // Cannot coerce Null (null) to Number
-    Array("update-op") ++
-    // Take too long time
-    Array("array-concat")
+      // Fail in java11 because broken backwards
+      Array("coerciones_toString", "date-coercion") ++
+      // Use resources (dwl files) that is present in the Tests but not in Cli (e.g: org::mule::weave::v2::libs::)
+      Array("full-qualified-name-ref",
+        "import-component-alias-lib",
+        "import-lib",
+        "import-lib-with-alias",
+        "import-named-lib",
+        "import-star",
+        "module-singleton",
+        "multipart-write-binary",
+        "read-binary-files",
+        "try",
+        "urlEncodeDecode") ++
+      // Uses resource name that is different on Cli than in the Tests
+      Array("try-recursive-call", "runtime_orElseTry") ++
+      // Use readUrl from classpath
+      Array("dw-binary", "read_lines") ++
+      // Uses java module
+      Array("java-big-decimal",
+        "java-field-ref",
+        "java-interop-enum",
+        "java-interop-function-call",
+        "runtime_run_coercionException",
+        "runtime_run_fibo",
+        "runtime_run_null_java",
+        "write-function-with-null"
+      ) ++
+      // Multipart Object has empty `parts` and expects at least one part
+      Array("multipart-mixed-message", "multipart-write-message", "multipart-write-subtype-override") ++
+      // Fail pattern match on complex object
+      Array("pattern-match-complex-type") ++
+      // DataFormats
+      Array("runtime_dataFormatsDescriptors") ++
+      // Cannot coerce Null (null) to Number
+      Array("update-op") ++
+      // Take too long time
+      Array("array-concat") ++
+      Array("runtime_run")
   }
 }
 
