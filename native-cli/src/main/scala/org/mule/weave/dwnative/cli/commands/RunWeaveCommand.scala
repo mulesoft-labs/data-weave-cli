@@ -40,7 +40,6 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
     config.dependencyResolver.foreach((dep) => {
       val results = dep(nativeRuntime)
       results.foreach((dm) => {
-        console.info(s"[resolving] ${dm}")
         dm.resolve(
           new DependencyManagerMessageCollector {
             override def onError(id: String, message: String): Unit = {
