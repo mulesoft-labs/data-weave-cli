@@ -23,7 +23,6 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
   "should take into account the env variable for default output" in {
     val console = new TestConsole(System.in, System.out, Map())
     new DataWeaveCLIRunner().run(Array("--list-spells"), console)
-
     console.fatalMessages.isEmpty shouldBe true
   }
 
@@ -56,6 +55,16 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result: String = source.mkString
     result.trim shouldBe "\"DW Rules\""
+  }
+
+  "should be able to run a local spell with a dependency" in {
+    val stream = new ByteArrayOutputStream()
+    val localSpell: File = TestUtils.getSimpleSpellWithDependencies
+    val exitCode = new DataWeaveCLIRunner().run(Array("--local-spell", localSpell.getAbsolutePath), new TestConsole(System.in, stream))
+    exitCode shouldBe 0
+    val source = Source.fromBytes(stream.toByteArray, "UTF-8")
+    val result: String = source.mkString
+    result.trim shouldBe "3"
   }
 
   "should work with simple script and not output" in {
@@ -124,10 +133,11 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result = source.mkString.trim
     source.close()
-    val expected = """
-               |{
-               |  "isEmpty": false
-               |}""".stripMarginAndNormalizeEOL.trim
+    val expected =
+      """
+        |{
+        |  "isEmpty": false
+        |}""".stripMarginAndNormalizeEOL.trim
     result shouldBe expected
   }
 
@@ -140,13 +150,14 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result = source.mkString.trim
     source.close()
-    val expected = """
-                     |{
-                     |  "isEmpty": false
-                     |}""".stripMarginAndNormalizeEOL.trim
+    val expected =
+      """
+        |{
+        |  "isEmpty": false
+        |}""".stripMarginAndNormalizeEOL.trim
     result shouldBe expected
   }
-  
+
   "should fail running a script with requires privileges in untrusted mode" in {
     val stream = new ByteArrayOutputStream()
     val script = """import props from dw::Runtime output application/json --- {isEmpty: isEmpty(props())}""".stripMargin
@@ -173,15 +184,16 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     new DataWeaveCLIRunner().run(Array(
       "-p", "name", "Mariano",
       "-p", "lastname", "Lischetti",
-      "{fullName: params.name ++ \" \" ++  params.lastname}"), 
+      "{fullName: params.name ++ \" \" ++  params.lastname}"),
       new TestConsole(System.in, stream))
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result = source.mkString.trim
     source.close()
-    val expected = """
-                     |{
-                     |  "fullName": "Mariano Lischetti"
-                     |}
+    val expected =
+      """
+        |{
+        |  "fullName": "Mariano Lischetti"
+        |}
                      """.stripMarginAndNormalizeEOL.trim
     result shouldBe expected
   }

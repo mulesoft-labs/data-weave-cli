@@ -3,6 +3,8 @@ package org.mule.weave.dwnative.cli.commands
 import org.mule.weave.dwnative.NativeRuntime
 import org.mule.weave.dwnative.WeaveExecutionResult
 import org.mule.weave.dwnative.cli.Console
+import org.mule.weave.dwnative.dependencies.DependencyManagerMessageCollector
+import org.mule.weave.dwnative.dependencies.DependencyResolutionResult
 import org.mule.weave.dwnative.utils.DataWeaveUtils
 import org.mule.weave.dwnative.utils.DataWeaveUtils.DW_DEFAULT_INPUT_MIMETYPE_VAR
 import org.mule.weave.dwnative.utils.DataWeaveUtils.DW_DEFAULT_OUTPUT_MIMETYPE_VAR
@@ -28,13 +30,28 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
   val weaveUtils = new DataWeaveUtils(console)
 
   private val DEFAULT_MIME_TYPE: String = "application/json"
-  
+
   @volatile
   private var keepRunning = true
 
   def exec(): Int = {
     val path: Array[File] = config.path.map(new File(_))
     val nativeRuntime: NativeRuntime = new NativeRuntime(weaveUtils.getLibPathHome(), path, console)
+    config.dependencyResolver.foreach((dep) => {
+      val results = dep(nativeRuntime)
+      results.foreach((dm) => {
+        console.info(s"[resolving] ${dm}")
+        dm.resolve(
+          new DependencyManagerMessageCollector {
+            override def onError(id: String, message: String): Unit = {
+              console.error(s"${id} ${message}")
+            }
+          }
+        ).foreach((a) => {
+          nativeRuntime.addJarToClassPath(a)
+        })
+      })
+    })
     doRun(config, nativeRuntime)
   }
 
@@ -62,13 +79,13 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
       })
     }
 
-    val value = config.params.toSeq.map( prop =>
+    val value = config.params.toSeq.map(prop =>
       KeyValuePair(KeyValue(prop._1), StringValue(prop._2))
     ).to
-    
+
     val params = ObjectValue(value)
     scriptingBindings.addBinding("params", params)
-    
+
     val module: WeaveModule = config.scriptToRun(nativeRuntime)
     if (config.eval) {
       keepRunning = true
@@ -136,9 +153,11 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
 case class WeaveRunnerConfig(path: Array[String],
                              eval: Boolean,
                              scriptToRun: NativeRuntime => WeaveModule,
+                             dependencyResolver: Option[(NativeRuntime) => Array[DependencyResolutionResult]],
                              params: Map[String, String],
                              inputs: Map[String, File],
                              outputPath: Option[String],
                              maybePrivileges: Option[Seq[String]])
+
 
 case class WeaveModule(content: String, nameIdentifier: String)

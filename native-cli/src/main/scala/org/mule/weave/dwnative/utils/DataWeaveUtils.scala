@@ -29,7 +29,6 @@ class DataWeaveUtils(console: Console) {
       }
       home
     } else {
-
       console.debug("Env not working trying home directory")
       val defaultDWHomeDir: File = getDefaultDWHome()
       if (defaultDWHomeDir.exists()) {
@@ -100,5 +99,7 @@ class DataWeaveUtils(console: Console) {
     }
   }
 
-  def sanitizeFilename(inputName: String): String = inputName.replaceAll("[^a-zA-Z0-9-_.]", "_")
+  def getCacheHome(): File = {
+    new File(getDWHome(), "cache")
+  }
 }

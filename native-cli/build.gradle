@@ -3,7 +3,7 @@ plugins {
     id "com.github.maiflai.scalatest" version "${scalaTestPluginVersion}"
     id 'application'
     // Apply GraalVM Native Image plugin
-    id 'org.graalvm.buildtools.native' version '0.9.13'
+    id 'org.graalvm.buildtools.native' version '0.9.14'
 }
 
 sourceSets {
@@ -19,6 +19,9 @@ mainClassName = 'org.mule.weave.dwnative.cli.DataWeaveCLI'
 dependencies {
     api group: 'org.mule.weave', name: 'runtime', version: weaveVersion
     compileOnly group: 'org.graalvm.sdk', name: 'graal-sdk', version: graalvmVersion
+    implementation group: 'io.get-coursier', name: 'coursier-core_2.12', version: '1.1.0-M14-7'
+    implementation group: 'io.get-coursier', name: 'coursier_2.12', version: '1.1.0-M14-7'
+    implementation group: 'io.get-coursier', name: 'coursier-cache_2.12', version: '1.1.0-M14-7'
     implementation group: 'org.mule.weave', name: 'core-modules', version: weaveVersion
     implementation group: 'org.mule.weave', name: 'yaml-module', version: weaveVersion
     implementation group: 'org.mule.weave', name: 'http-module', version: ioVersion
@@ -116,6 +119,7 @@ graalvmNative {
                     "org.asynchttpclient," +
                     "org.mule.weave.v2.module.http.netty.HttpAsyncClientService," +
                     "scala.util.Random," +
+                    "coursier.," +
                     "org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider\$")
             buildArgs.add("--initialize-at-build-time=" +
                     "sun.instrument.InstrumentationImpl," +
@@ -143,6 +147,7 @@ graalvmNative {
 //            "org.mule.weave.v2.model.types.,"
 //            "org.mule.weave.v2.core.functions."
 //    option "-H:+TraceClassInitialization"
+            buildArgs.add("--trace-class-initialization=coursier.core.Type\$")
             buildArgs.add("-H:DeadlockWatchdogInterval=1000")
             buildArgs.add("--report-unsupported-elements-at-runtime")
             buildArgs.add("-H:CompilationExpirationPeriod=0")
