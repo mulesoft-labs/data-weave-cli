@@ -56,7 +56,6 @@ class MavenDependencyManager(
 
     val repositories: Seq[MavenRepository] = if (mdm.repository.isEmpty) {
       Seq(
-        Dangerous.maven2Local,
         MavenRepository("https://maven.anypoint.mulesoft.com/api/v3/maven"),
         MavenRepository("https://repository.mulesoft.org/nexus/content/repositories/releases/"),
         MavenRepository("https://repository.mulesoft.org/nexus/content/repositories/snapshots/", changing = Some(true)),
