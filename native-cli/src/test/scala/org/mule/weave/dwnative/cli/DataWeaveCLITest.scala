@@ -60,7 +60,18 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
   "should be able to run a local spell with a dependency" in {
     val stream = new ByteArrayOutputStream()
     val localSpell: File = TestUtils.getSimpleSpellWithDependencies
-    val exitCode = new DataWeaveCLIRunner().run(Array("--local-spell", localSpell.getAbsolutePath), new TestConsole(System.in, stream))
+    val console = new TestConsole(System.in, stream)
+    val exitCode = new DataWeaveCLIRunner().run(Array("--local-spell", localSpell.getAbsolutePath), console)
+    console.infoMessages.foreach((m) => {
+      println(s"[INFO] ${m}")
+    })
+    console.errorMessages.foreach((m) => {
+      println(s"[ERROR] ${m}")
+    })
+
+    console.fatalMessages.foreach((m) => {
+      println(s"[FATAL] ${m}")
+    })
     exitCode shouldBe 0
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result: String = source.mkString
