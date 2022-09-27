@@ -41,16 +41,24 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
     config.dependencyResolver.foreach((dep) => {
       val results = dep(nativeRuntime)
       results.foreach((dm) => {
-        dm.resolve(
+        val resolvedDependencies = dm.resolve(
           new ResolutionErrorHandler {
             override def onError(id: String, message: String): Unit = {
               console.error(s"Unable to resolve: `${id}`. Reason: ${message}")
               exitCode = ExitCodes.FAILURE
             }
           }
-        ).foreach((a) => {
-          nativeRuntime.addJarToClassPath(a)
-        })
+        )
+        if (resolvedDependencies.isEmpty) {
+          console.error(s"${dm.id} didn't resolve to any artifact.")
+          exitCode = ExitCodes.FAILURE
+        } else {
+
+          resolvedDependencies.foreach((a) => {
+            println("Adding jar " + a.getAbsolutePath)
+            nativeRuntime.addJarToClassPath(a)
+          })
+        }
       })
     })
     if (exitCode == ExitCodes.SUCCESS) {

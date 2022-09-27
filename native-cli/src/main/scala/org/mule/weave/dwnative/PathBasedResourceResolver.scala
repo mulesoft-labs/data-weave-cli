@@ -108,15 +108,19 @@ class JarContentResolver(jarFile: => File) extends ContentResolver {
   lazy val zipFile = new ZipFile(jarFile)
 
   override def resolve(path: String): Option[InputStream] = {
-    val zipEntry = if (path.startsWith("/")) {
-      path.substring(1)
-    } else {
-      path
-    }
+    println(s"Looking for ${path} in " + jarFile.getAbsolutePath)
+    val zipEntry: String =
+      if (path.startsWith("/")) {
+        path.substring(1)
+      } else {
+        path
+      }
     val pathEntry = zipFile.getEntry(zipEntry)
     if (pathEntry != null) {
+      println("Found!!!")
       Some(zipFile.getInputStream(pathEntry))
     } else {
+      println("Not found :( ")
       None
     }
   }
