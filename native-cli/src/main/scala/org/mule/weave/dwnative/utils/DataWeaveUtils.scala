@@ -69,7 +69,7 @@ class DataWeaveUtils(console: Console) {
     if (weavehome.isDefined) {
       val home = new File(weavehome.get)
       if (!home.exists()) {
-        console.envVar(s"Weave Working Home Directory `${weavehome}` declared on environment variable `$DW_WORKING_DIRECTORY_VAR` does not exists.")
+        console.error(s"Weave Working Home Directory `${weavehome}` declared on environment variable `$DW_WORKING_DIRECTORY_VAR` does not exists.")
       }
       home
     } else {
@@ -91,7 +91,7 @@ class DataWeaveUtils(console: Console) {
     if (weavehome.isDefined) {
       val home = new File(weavehome.get)
       if (!home.exists()) {
-        console.envVar(s"Weave Library Home Directory `${weavehome}` declared on environment variable `$DW_LIB_PATH_VAR` does not exists.")
+        console.error(s"Weave Library Home Directory `${weavehome}` declared on environment variable `$DW_LIB_PATH_VAR` does not exists.")
       }
       home
     } else {

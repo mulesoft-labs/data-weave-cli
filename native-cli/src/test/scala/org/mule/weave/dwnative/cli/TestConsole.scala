@@ -33,7 +33,9 @@ class TestConsole(val in: InputStream = System.in, val out: OutputStream = Syste
     clearCount = clearCount + 1
   }
 
-  override def envVar(name: String): Option[String] = envVars.get(name)
+  override def envVar(name: String): Option[String] = {
+    envVars.get(name).orElse(Option(System.getenv(name)))
+  }
 
   override def doDebug(message: String): Unit = DefaultConsole.debug(message)
 }
