@@ -8,6 +8,7 @@ import org.scalatest.Matchers
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.nio.file.Files
 import scala.io.Source
 
 class DataWeaveCLITest extends FreeSpec with Matchers {
@@ -60,7 +61,7 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
   "should be able to run a local spell with a dependency" in {
     val stream = new ByteArrayOutputStream()
     val localSpell: File = TestUtils.getSimpleSpellWithDependencies
-    val console = new TestConsole(System.in, stream)
+    val console = new TestConsole(System.in, stream, envVars = Map(DataWeaveUtils.DW_HOME_VAR -> Files.createTempDirectory("dw").toFile.getAbsolutePath))
     val exitCode = new DataWeaveCLIRunner().run(Array("--local-spell", localSpell.getAbsolutePath), console)
     console.infoMessages.foreach((m) => {
       println(s"[INFO] ${m}")
