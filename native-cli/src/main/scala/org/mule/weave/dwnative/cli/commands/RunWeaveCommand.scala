@@ -55,7 +55,6 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
         } else {
 
           resolvedDependencies.foreach((a) => {
-            println("Adding jar " + a.getAbsolutePath)
             nativeRuntime.addJarToClassPath(a)
           })
         }

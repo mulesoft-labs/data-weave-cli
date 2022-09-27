@@ -103,7 +103,6 @@ class JarContentResolver(jarFile: => File) extends ContentResolver {
 
   override def resolve(ni: NameIdentifier): Option[InputStream] = {
     val path = NameIdentifierHelper.toWeaveFilePath(ni, "/") //Use unix based system
-    println(s"Looking for ${path} in " + jarFile.getAbsolutePath)
 
     val zipEntry: String =
       if (path.startsWith("/")) {
@@ -113,10 +112,8 @@ class JarContentResolver(jarFile: => File) extends ContentResolver {
       }
     val pathEntry = zipFile.getEntry(zipEntry)
     if (pathEntry != null) {
-      println("Found!!!")
       Some(zipFile.getInputStream(pathEntry))
     } else {
-      println("Not found :( ")
       None
     }
   }
