@@ -42,6 +42,7 @@ import org.mule.weave.v2.runtime.ModuleComponentsFactory
 import org.mule.weave.v2.runtime.ParserConfiguration
 import org.mule.weave.v2.runtime.ScriptingBindings
 import org.mule.weave.v2.runtime.ScriptingEngineSetupException
+import org.mule.weave.v2.sdk.NameIdentifierHelper
 import org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider
 import org.mule.weave.v2.sdk.TwoLevelWeaveResourceResolver
 import org.mule.weave.v2.sdk.WeaveResourceResolver
@@ -147,12 +148,7 @@ class WeavePathProtocolHandler(path: PathBasedResourceResolver) extends ReadFunc
 
   override def createSourceProvider(url: String, locatable: LocationCapable, charset: Charset): SourceProvider = {
     val uri = url.stripPrefix(CLASSPATH_PREFIX)
-    val wellFormedUri = if (uri.startsWith("/")) {
-      uri.substring(1)
-    } else {
-      uri
-    }
-    val maybeResource = path.resolve(wellFormedUri)
+    val maybeResource = path.resolve(uri)
     maybeResource match {
       case Some(value) => {
         SourceProvider(value, charset)

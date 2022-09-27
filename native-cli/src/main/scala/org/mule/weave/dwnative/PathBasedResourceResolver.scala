@@ -22,11 +22,12 @@ class PathBasedResourceResolver(paths: mutable.ArrayBuffer[ContentResolver]) ext
   }
 
   override def resolve(name: NameIdentifier): Option[WeaveResource] = {
-    val filePath = NameIdentifierHelper.toWeaveFilePath(name)
+
     val iterator = paths.iterator
     while (iterator.hasNext) {
-      val maybeResource = iterator.next().resolve(filePath)
+      val maybeResource: Option[InputStream] = iterator.next().resolve(name)
       if (maybeResource.isDefined) {
+        val filePath = NameIdentifierHelper.toWeaveFilePath(name, "/") //Use unix based system
         return Some(WeaveResource(filePath, toString(maybeResource.get)))
       }
     }
@@ -43,9 +44,10 @@ class PathBasedResourceResolver(paths: mutable.ArrayBuffer[ContentResolver]) ext
   }
 
   def resolve(filePath: String): Option[InputStream] = {
+    val ni = NameIdentifierHelper.fromWeaveFilePath(filePath, "/")
     val iterator = paths.iterator
     while (iterator.hasNext) {
-      val maybeResource = iterator.next().resolve(filePath)
+      val maybeResource = iterator.next().resolve(ni)
       if (maybeResource.isDefined) {
         return maybeResource
       }
@@ -55,10 +57,12 @@ class PathBasedResourceResolver(paths: mutable.ArrayBuffer[ContentResolver]) ext
 
 
   override def resolveAll(name: NameIdentifier): Seq[WeaveResource] = {
-    val filePath = NameIdentifierHelper.toWeaveFilePath(name)
     paths
-      .flatMap(_.resolve(filePath))
-      .map((content) => WeaveResource(filePath, toString(content)))
+      .flatMap(_.resolve(name))
+      .map((content) => {
+        val path = NameIdentifierHelper.toWeaveFilePath(name, "/")
+        WeaveResource(path, toString(content))
+      })
   }
 }
 
@@ -66,18 +70,7 @@ class PathBasedResourceResolver(paths: mutable.ArrayBuffer[ContentResolver]) ext
   *
   */
 trait ContentResolver {
-  def resolve(path: String): Option[InputStream]
-}
-
-class CompositeContentResolver(contents: Seq[ContentResolver]) extends ContentResolver {
-  override def resolve(path: String): Option[InputStream] = {
-    contents
-      .toStream
-      .flatMap((content) => {
-        content.resolve(path)
-      })
-      .headOption
-  }
+  def resolve(path: NameIdentifier): Option[InputStream]
 }
 
 
@@ -93,7 +86,8 @@ object ContentResolver {
 
 class DirectoryContentResolver(directory: File) extends ContentResolver {
 
-  override def resolve(path: String): Option[InputStream] = {
+  override def resolve(ni: NameIdentifier): Option[InputStream] = {
+    val path = NameIdentifierHelper.toWeaveFilePath(ni, File.separator) //Use unix based system
     val file = new File(directory, path)
     if (file.isFile) {
       Some(new FileInputStream(file))
@@ -107,8 +101,10 @@ class JarContentResolver(jarFile: => File) extends ContentResolver {
 
   lazy val zipFile = new ZipFile(jarFile)
 
-  override def resolve(path: String): Option[InputStream] = {
+  override def resolve(ni: NameIdentifier): Option[InputStream] = {
+    val path = NameIdentifierHelper.toWeaveFilePath(ni, "/") //Use unix based system
     println(s"Looking for ${path} in " + jarFile.getAbsolutePath)
+
     val zipEntry: String =
       if (path.startsWith("/")) {
         path.substring(1)
