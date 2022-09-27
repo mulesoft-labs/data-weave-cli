@@ -1,7 +1,7 @@
 package org.mule.weave.dwnative.cli
 
 import org.mule.weave.dwnative.NativeRuntime
-import org.mule.weave.dwnative.dependencies.DependencyManagerMessageCollector
+import org.mule.weave.dwnative.dependencies.ResolutionErrorHandler
 import org.mule.weave.dwnative.dependencies.DependencyModel
 import org.mule.weave.dwnative.dependencies.DependencyResolutionResult
 import org.mule.weave.dwnative.dependencies.MavenDependencyModel
@@ -43,9 +43,9 @@ class DependencyManagerTest extends FreeSpec with Matchers {
     val results: Array[DependencyResolutionResult] = manager.resolveDependencies(nativeRuntime)
     assert(results.length == 1)
     val artifacts = results.flatMap((a) => {
-      a.resolve(new DependencyManagerMessageCollector {
+      a.resolve(new ResolutionErrorHandler {
         override def onError(id: String, message: String): Unit = {
-          testConsole.error(s"${id} : ${message}")
+          fail(s"${id} : ${message}")
         }
       })
     })

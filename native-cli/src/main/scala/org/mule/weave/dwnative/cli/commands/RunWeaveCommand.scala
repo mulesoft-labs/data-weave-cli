@@ -3,7 +3,7 @@ package org.mule.weave.dwnative.cli.commands
 import org.mule.weave.dwnative.NativeRuntime
 import org.mule.weave.dwnative.WeaveExecutionResult
 import org.mule.weave.dwnative.cli.Console
-import org.mule.weave.dwnative.dependencies.DependencyManagerMessageCollector
+import org.mule.weave.dwnative.dependencies.ResolutionErrorHandler
 import org.mule.weave.dwnative.dependencies.DependencyResolutionResult
 import org.mule.weave.dwnative.utils.DataWeaveUtils
 import org.mule.weave.dwnative.utils.DataWeaveUtils.DW_DEFAULT_INPUT_MIMETYPE_VAR
@@ -35,15 +35,17 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
   private var keepRunning = true
 
   def exec(): Int = {
+    var exitCode = ExitCodes.SUCCESS
     val path: Array[File] = config.path.map(new File(_))
     val nativeRuntime: NativeRuntime = new NativeRuntime(weaveUtils.getLibPathHome(), path, console)
     config.dependencyResolver.foreach((dep) => {
       val results = dep(nativeRuntime)
       results.foreach((dm) => {
         dm.resolve(
-          new DependencyManagerMessageCollector {
+          new ResolutionErrorHandler {
             override def onError(id: String, message: String): Unit = {
               console.error(s"${id} ${message}")
+              exitCode = ExitCodes.FAILURE
             }
           }
         ).foreach((a) => {
@@ -51,7 +53,11 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
         })
       })
     })
-    doRun(config, nativeRuntime)
+    if (exitCode == ExitCodes.SUCCESS) {
+      doRun(config, nativeRuntime)
+    } else {
+      exitCode
+    }
   }
 
 

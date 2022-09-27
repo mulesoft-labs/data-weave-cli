@@ -35,13 +35,13 @@ trait DependencyManager {
 }
 
 case class DependencyResolutionResult(id: String, kind: String, artifact: Future[Seq[File]]) {
-  def resolve(messageCollector: DependencyManagerMessageCollector): Array[File] = {
+  def resolve(errorHandler: ResolutionErrorHandler): Array[File] = {
     try {
       val files = Await.result(artifact, Duration.Inf)
       files.toArray
     } catch {
       case e: Exception => {
-        messageCollector.onError(s"${id}", e.getMessage)
+        errorHandler.onError(s"${id}", e.getMessage)
         Array.empty
       }
     }
@@ -52,7 +52,7 @@ case class DependencyResolutionResult(id: String, kind: String, artifact: Future
 /**
   * Callback that handles all messages when resolving an artifact
   */
-trait DependencyManagerMessageCollector {
+trait ResolutionErrorHandler {
 
   /**
     * When an error occurred when trying to resolve an artifact id
