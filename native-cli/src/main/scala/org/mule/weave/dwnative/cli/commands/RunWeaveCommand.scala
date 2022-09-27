@@ -44,7 +44,7 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
         dm.resolve(
           new ResolutionErrorHandler {
             override def onError(id: String, message: String): Unit = {
-              console.error(s"${id} ${message}")
+              console.error(s"Unable to resolve: `${id}`. Reason: ${message}")
               exitCode = ExitCodes.FAILURE
             }
           }
