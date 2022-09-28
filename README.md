@@ -1,11 +1,16 @@
 # DataWeave CLI
 
-**DataWeave CLI** is a command-line interface that allows `querying`, `filtering`, and `mapping` structured data from
-different data sources like `JSON`, `XML`, `CSV`, `YML` to other data formats. It also allows to easily create data in
-such formats.
+**DataWeave CLI** is a command-line interface that allows `querying`, `filtering`, and `mapping` structured data from different data sources like `JSON`, `XML`, `CSV`, `YML` to other data formats. It also allows to easily create data in such formats, all through the DataWeave language. For example:
 
-For more info about the `DataWeave` language visit
-the [documenation site](https://docs.mulesoft.com/mule-runtime/latest/dataweave)
+`dw 'output json --- { message: ["Hello", "world"] joinBy " "}'`
+
+The DataWeave language is in the process of being open-sourced. You can read our announcement [here](https://blogs.mulesoft.com/news/dataweave/). Our journey has just begun and it will take some time for the code to be available. In the meantime, we want to start engaging with our community to understand how DataWeave could be used and integrated. 
+
+If you are interested on leveraging DataWeave:
+ 1. Join our community [Slack](https://join.slack.com/t/dataweavelanguage/shared_invite/zt-1f3xmq8n6-MVoUj7dDamxyu_Zyf62ERQ)
+ 2. Join the `#opensource` channel
+
+For more news and all things DataWeave, visit our [site](https://dataweave.mulesoft.com/) 
 
 ## What is Included?
 
@@ -293,5 +298,5 @@ Before creating a pull request review the following:
 * [SECURITY](SECURITY.md)
 * [CODE_OF_CONDUCT](CODE_OF_CONDUCT.md)
 
-When you submit your pull request, you are asked to sign a contributor license agreement (CLA) if we don't have one on
-file for you.
+
+When you submit your pull request, you are asked to sign a contributor license agreement (CLA) if we don't have one on file for you.
