@@ -42,6 +42,7 @@ import org.mule.weave.v2.runtime.ModuleComponentsFactory
 import org.mule.weave.v2.runtime.ParserConfiguration
 import org.mule.weave.v2.runtime.ScriptingBindings
 import org.mule.weave.v2.runtime.ScriptingEngineSetupException
+import org.mule.weave.v2.sdk.NameIdentifierHelper
 import org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider
 import org.mule.weave.v2.sdk.TwoLevelWeaveResourceResolver
 import org.mule.weave.v2.sdk.WeaveResourceResolver
@@ -58,7 +59,7 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
   private val dataWeaveUtils = new DataWeaveUtils(console)
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
-  
+
   private val weaveScriptingEngine: DataWeaveScriptingEngine = {
     setupEnv()
     DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration())
@@ -66,6 +67,10 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
 
   if (console.isDebugEnabled()) {
     weaveScriptingEngine.enableProfileParsing()
+  }
+
+  def addJarToClassPath(file: File): Unit = {
+    pathBasedResourceResolver.addContent(ContentResolver(file))
   }
 
   /**
@@ -103,9 +108,9 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
   private def compileScript(script: String, inputs: ScriptingBindings, nameIdentifier: NameIdentifier, defaultOutputMimeType: String) = {
     weaveScriptingEngine.compile(script, nameIdentifier, inputs.entries().map(wi => new InputType(wi, None)).toArray, defaultOutputMimeType)
   }
-  
+
   private def createServiceManager(maybePrivileges: Option[Seq[String]] = None): ServiceManager = {
-    
+
     val charsetProviderService = new CharsetProviderService {
       override def defaultCharset(): Charset = {
         StandardCharsets.UTF_8
@@ -120,7 +125,7 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console) {
     if (maybePrivileges.isDefined) {
       val privileges = maybePrivileges.get
       val weaveRuntimePrivileges = privileges.map(WeaveRuntimePrivilege(_)).toArray
-      customServices = customServices + (classOf[SecurityManagerService] -> new DefaultSecurityManagerService(weaveRuntimePrivileges)) 
+      customServices = customServices + (classOf[SecurityManagerService] -> new DefaultSecurityManagerService(weaveRuntimePrivileges))
     }
     ServiceManager(new ConsoleLogger(console), customServices)
   }
@@ -143,12 +148,7 @@ class WeavePathProtocolHandler(path: PathBasedResourceResolver) extends ReadFunc
 
   override def createSourceProvider(url: String, locatable: LocationCapable, charset: Charset): SourceProvider = {
     val uri = url.stripPrefix(CLASSPATH_PREFIX)
-    val wellFormedUri = if (uri.startsWith("/")) {
-      uri.substring(1)
-    } else {
-      uri
-    }
-    val maybeResource = path.resolve(wellFormedUri)
+    val maybeResource = path.resolve(uri)
     maybeResource match {
       case Some(value) => {
         SourceProvider(value, charset)

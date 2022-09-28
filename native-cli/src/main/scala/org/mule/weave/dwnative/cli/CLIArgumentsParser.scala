@@ -16,6 +16,8 @@ import org.mule.weave.dwnative.cli.commands.WeaveCommand
 import org.mule.weave.dwnative.cli.commands.WeaveModule
 import org.mule.weave.dwnative.cli.commands.WeaveRunnerConfig
 import org.mule.weave.dwnative.cli.utils.SpellsUtils
+import org.mule.weave.dwnative.dependencies.DependencyResolutionResult
+import org.mule.weave.dwnative.dependencies.SpellDependencyManager
 import org.mule.weave.v2.io.FileHelper
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.runtime.utils.AnsiColor.red
@@ -37,6 +39,8 @@ class CLIArgumentsParser(console: Console) {
     var output: Option[String] = None
     var eval: Boolean = false
     var maybePrivileges: Option[Seq[String]] = None
+
+    var dependencyResolver: Option[(NativeRuntime) => Array[DependencyResolutionResult]] = None
 
     val inputs: mutable.Map[String, File] = mutable.Map()
     val params: mutable.Map[String, String] = mutable.Map()
@@ -109,7 +113,7 @@ class CLIArgumentsParser(console: Console) {
           } else {
             null
           }
-          var spellName = if (spell.contains("/")) {
+          var spellName: String = if (spell.contains("/")) {
             spell.split("/")(1)
           } else {
             spell
@@ -140,10 +144,13 @@ class CLIArgumentsParser(console: Console) {
             return Right(s"Unable to get Wise `$wizardName's` Grimoire.")
           }
 
-          val spellFolder = new File(wizardGrimoire, spellName)
+          val spellFolder: File = new File(wizardGrimoire, spellName)
           if (!spellFolder.exists()) {
             new UpdateGrimoireCommand(UpdateGrimoireConfig(wizardGrimoire), console).exec()
           }
+
+          val manager = new SpellDependencyManager(spellFolder, console)
+          dependencyResolver = Some(manager.resolveDependencies)
 
           if (!spellFolder.exists()) {
             return Right(s"Unable find $spellName in Wise `$wizardName's` Grimoire.")
@@ -184,6 +191,10 @@ class CLIArgumentsParser(console: Console) {
           if (!spellFolder.exists()) {
             return Right(s"Unable find `$spellName` folder.")
           }
+
+          val manager = new SpellDependencyManager(spellFolder, console)
+          dependencyResolver = Some(manager.resolveDependencies)
+
           val srcFolder = new File(spellFolder, "src")
 
           val mainFile = new File(srcFolder, fileName)
@@ -278,7 +289,8 @@ class CLIArgumentsParser(console: Console) {
     if (scriptToRun.isEmpty) {
       Right(s"Missing <script-content> or -f <file-path> or --spell ")
     } else {
-      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, eval, scriptToRun.get, params.toMap, inputs.toMap, output, maybePrivileges)
+
+      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, eval, scriptToRun.get, dependencyResolver ,params.toMap, inputs.toMap, output, maybePrivileges)
       Left(new RunWeaveCommand(config, console))
     }
   }

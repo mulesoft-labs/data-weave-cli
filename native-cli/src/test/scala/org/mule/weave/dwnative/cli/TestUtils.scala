@@ -20,6 +20,12 @@ object TestUtils {
     localSpell
   }
 
+  def getSimpleSpellWithDependencies = {
+    val file = getSpellsFolder()
+    val localSpell = new File(file, "SimpleSpellWithDependencies")
+    localSpell
+  }
+
 
   def getSpellsFolder(): File = {
     val spellsUrls = getClass.getClassLoader.getResource("spells/spells.txt")

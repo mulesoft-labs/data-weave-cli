@@ -13,9 +13,12 @@ If you are interested on leveraging DataWeave:
 For more news and all things DataWeave, visit our [site](https://dataweave.mulesoft.com/) 
 
 ## What is Included?
-The binary distribution already ships with a set of modules and data formats that makes this useful for a very interesting and broad set of use cases.
+
+The binary distribution already ships with a set of modules and data formats that makes this useful for a very
+interesting and broad set of use cases.
 
 ### Included Modules
+
 - [DataWeave Standard Library](https://github.com/mulesoft/data-weave/tree/master/wlang)
 
 ### Supported Data Formats
@@ -33,7 +36,7 @@ The binary distribution already ships with a set of modules and data formats tha
 | `text/plain`                        |    `text`    |                        [Text Plain Format](https://docs.mulesoft.com/dataweave/latest/dataweave-formats-text) |
 | `text/x-java-properties`            | `properties` |               [Text Java Properties](https://docs.mulesoft.com/dataweave/latest/dataweave-formats-properties) |
 
-## Installation 
+## Installation
 
 ### Homebrew (Mac)
 
@@ -43,18 +46,22 @@ brew install dw
 ```
 
 ### Manual Installation
+
 1. Download the latest [release version](https://github.com/mulesoft-labs/data-weave-cli/releases) according to your OS.
 2. Unzip the file on your `<user.home>/.dw`
 3. Add `<user.home>/.dw/bin` to your **PATH**
 
 ### Build and Install
 
-To build the project, you need to run gradlew with the graalVM distribution based on Java 11. You can download it at https://github.com/graalvm/graalvm-ce-builds/releases
+To build the project, you need to run gradlew with the graalVM distribution based on Java 11. You can download it
+at https://github.com/graalvm/graalvm-ce-builds/releases
 Set:
+
 ```bash
 export GRAALVM_HOME=<pathToGraalVMFolder>/graalvm-ce-java11-21.2.0/Contents/Home
 export JAVA_HOME=<pathToGraalVMFolder>/graalvm-ce-java11-21.2.0/Contents/Home
 ```
+
 Execute the gradle task `nativeCompile`
 
 ```bash
@@ -67,11 +74,12 @@ Once it finishes you will find the `dw` binary in `native-cli/build/native/nativ
 
 ## How to Use It
 
-If the directory containing the `dw` executable is in your _PATH_, you can run `dw` from anywhere. 
+If the directory containing the `dw` executable is in your _PATH_, you can run `dw` from anywhere.
 
 If it is not, go to the `bin` directory referenced in the installation instructions and run `dw` from there.
 
-The following example shows the DataWeave CLI documentation 
+The following example shows the DataWeave CLI documentation
+
 ```bash
 dw --help
 ```
@@ -149,6 +157,28 @@ The following are the DataWeave CLI environment variables that you can set in yo
 | `DW_DEFAULT_INPUT_MIMETYPE`  | The default `mimeType` that is going to be used for the standard input. If not defined `application/json` will be used. |
 | `DW_DEFAULT_OUTPUT_MIMETYPE` | The default output `mimeType` that is going to be if not defined. If not defined `application/json` will be used.       |
 
+## Dependency Manager
+
+In order for a spell to depend on a library it can include a library it can use the dependencies.dwl to specify the list of dependencies that it should be included and download
+
+```data-weave
+%dw 2.0
+var mavenRepositories = [{
+    url: "https://maven.anypoint.mulesoft.com/api/v3/maven"
+}]
+---
+{
+  dependencies: [
+    {
+      kind: "maven",
+      artifactId: "data-weave-analytics-library",
+      groupId: "68ef9520-24e9-4cf2-b2f5-620025690913",
+      version: "1.0.1",
+      repositories: mavenRepositories // By default mulesoft, exchange and central are being added
+    }
+  ]
+}
+```
 
 ### Querying Content From a File
 
@@ -206,7 +236,6 @@ dw -i payload <fullpathToUsers.json> "output application/json --- payload filter
 cat <fullpathToUser.json> | dw "output application/json --- payload filter (item) -> item.age > 17"
 ```
 
-
 ### Redirecting the Output to a File
 
 ```bash 
@@ -234,9 +263,11 @@ curl "https://api.github.com/repos/mulesoft/mule/commits?per_page=5" | dw "{mess
 ``` 
 
 ### Generate a Request with Body
+
 This example uses the [jsonplaceholder API](https://jsonplaceholder.typicode.com/) to update a resource.
 
 Steps:
+
 1. Search the post resource with the `id = 1`.
 2. Use DataWeave CLI to create a JSON output changing the post title `My new title`.
 3. Finally, update the post resource.
@@ -246,6 +277,7 @@ curl https://jsonplaceholder.typicode.com/posts/1 | dw "output application/json 
 ```
 
 #### Output
+
 ```json
 {
   "id": 1,
@@ -265,5 +297,6 @@ Before creating a pull request review the following:
 * [LICENSE](LICENSE.txt)
 * [SECURITY](SECURITY.md)
 * [CODE_OF_CONDUCT](CODE_OF_CONDUCT.md)
+
 
 When you submit your pull request, you are asked to sign a contributor license agreement (CLA) if we don't have one on file for you.
