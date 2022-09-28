@@ -56,10 +56,10 @@ object Options {
       .longOpt(FILE)
       .hasArg()
       .argName("file-path")
-      .desc("Specifies output file for the transformation if not standard output will be used.")
+      .desc("Specifies the DataWeave file path to execute.")
       .build())
     
-    options.addOption(null, EVAL, false, "Evaluates the script instead of writing it.")
+    options.addOption(null, EVAL, false, "Executes the script but it doesn't use the writer. This is useful when launching a webserver.")
     
     options.addOption(null, VERSION, false, "The version of the CLI and Runtime.")
     
