@@ -29,7 +29,6 @@ class DataWeaveUtils(console: Console) {
       }
       home
     } else {
-
       console.debug("Env not working trying home directory")
       val defaultDWHomeDir: File = getDefaultDWHome()
       if (defaultDWHomeDir.exists()) {
@@ -70,7 +69,7 @@ class DataWeaveUtils(console: Console) {
     if (weavehome.isDefined) {
       val home = new File(weavehome.get)
       if (!home.exists()) {
-        console.envVar(s"Weave Working Home Directory `${weavehome}` declared on environment variable `$DW_WORKING_DIRECTORY_VAR` does not exists.")
+        console.error(s"Weave Working Home Directory `${weavehome}` declared on environment variable `$DW_WORKING_DIRECTORY_VAR` does not exists.")
       }
       home
     } else {
@@ -92,7 +91,7 @@ class DataWeaveUtils(console: Console) {
     if (weavehome.isDefined) {
       val home = new File(weavehome.get)
       if (!home.exists()) {
-        console.envVar(s"Weave Library Home Directory `${weavehome}` declared on environment variable `$DW_LIB_PATH_VAR` does not exists.")
+        console.error(s"Weave Library Home Directory `${weavehome}` declared on environment variable `$DW_LIB_PATH_VAR` does not exists.")
       }
       home
     } else {
@@ -100,5 +99,7 @@ class DataWeaveUtils(console: Console) {
     }
   }
 
-  def sanitizeFilename(inputName: String): String = inputName.replaceAll("[^a-zA-Z0-9-_.]", "_")
+  def getCacheHome(): File = {
+    new File(getDWHome(), "cache")
+  }
 }

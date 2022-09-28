@@ -363,6 +363,7 @@ class NativeCliRuntimeIT extends FunSpec
         "module-singleton",
         "multipart-write-binary",
         "read-binary-files",
+        "underflow",
         "try",
         "urlEncodeDecode") ++
       // Uses resource name that is different on Cli than in the Tests
