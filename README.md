@@ -7,7 +7,7 @@
 The DataWeave language is in the process of being open-sourced. You can read our announcement [here](https://blogs.mulesoft.com/news/dataweave/). Our journey has just begun and it will take some time for the code to be available. In the meantime, we want to start engaging with our community to understand how DataWeave could be used and integrated. 
 
 If you are interested on leveraging DataWeave:
- 1. Join our community [Slack](https://join.slack.com/t/dataweavelanguage/shared_invite/zt-1f3xmq8n6-MVoUj7dDamxyu_Zyf62ERQ)
+ 1. Join our community [Slack](https://join.slack.com/t/dataweavelanguage/shared_invite/zt-1ewv2igp0-3ZiqQqaMdO_utwaEjxBpTw)
  2. Join the `#opensource` channel
 
 For more news and all things DataWeave, visit our [site](https://dataweave.mulesoft.com/) 
