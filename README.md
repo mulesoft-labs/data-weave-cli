@@ -289,7 +289,7 @@ curl https://jsonplaceholder.typicode.com/posts/1 | dw "output application/json 
 
 ### Using Parameters
 
-Using the internal map `params`, we can access to an injected parameter in the command line with the -p option
+Using the internal map `params`, we can access injected parameters in the command line with the `-p` option:
 
 ```
 dw -p myName Julian "output applcation/json --- { name : params.myName }"
