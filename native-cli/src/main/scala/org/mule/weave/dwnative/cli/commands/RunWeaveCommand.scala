@@ -24,6 +24,7 @@ import java.io.FileOutputStream
 import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
+import scala.collection.immutable
 import scala.util.Try
 
 class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends WeaveCommand {
@@ -91,9 +92,9 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
       })
     }
 
-    val value = config.params.toSeq.map(prop =>
+    val value: Array[KeyValuePair] = config.params.toSeq.map(prop =>
       KeyValuePair(KeyValue(prop._1), StringValue(prop._2))
-    ).to
+    ).toArray
 
     val params = ObjectValue(value)
     scriptingBindings.addBinding("params", params)
