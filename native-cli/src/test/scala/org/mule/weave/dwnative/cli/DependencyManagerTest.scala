@@ -35,21 +35,21 @@ class DependencyManagerTest extends FreeSpec with Matchers {
   }
 
 
-  "it should resolve the artifacts correctly" in {
-    val simpleSpellWithDependencies = new File(TestUtils.getSpellsFolder(), "SimpleSpellWithDependencies")
-    val testConsole = DefaultConsole
-    val manager = new SpellDependencyManager(simpleSpellWithDependencies, testConsole)
-    val nativeRuntime = new NativeRuntime(TestUtils.getMyLocalSpellWithLib, Array.empty, testConsole)
-    val results: Array[DependencyResolutionResult] = manager.resolveDependencies(nativeRuntime)
-    assert(results.length == 1)
-    val artifacts = results.flatMap((a) => {
-      a.resolve(new ResolutionErrorHandler {
-        override def onError(id: String, message: String): Unit = {
-          fail(s"${id} : ${message}")
-        }
-      })
-    })
-    assert(!artifacts.isEmpty)
-  }
+//  "it should resolve the artifacts correctly" in {
+//    val simpleSpellWithDependencies = new File(TestUtils.getSpellsFolder(), "SimpleSpellWithDependencies")
+//    val testConsole = DefaultConsole
+//    val manager = new SpellDependencyManager(simpleSpellWithDependencies, testConsole)
+//    val nativeRuntime = new NativeRuntime(TestUtils.getMyLocalSpellWithLib, Array.empty, testConsole)
+//    val results: Array[DependencyResolutionResult] = manager.resolveDependencies(nativeRuntime)
+//    assert(results.length == 1)
+//    val artifacts = results.flatMap((a) => {
+//      a.resolve(new ResolutionErrorHandler {
+//        override def onError(id: String, message: String): Unit = {
+//          fail(s"${id} : ${message}")
+//        }
+//      })
+//    })
+//    assert(!artifacts.isEmpty)
+//  }
 
 }

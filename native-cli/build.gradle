@@ -24,6 +24,7 @@ dependencies {
     implementation group: 'io.get-coursier', name: 'coursier-cache_2.12', version: '1.1.0-M14-7'
     implementation group: 'org.mule.weave', name: 'core-modules', version: weaveVersion
     implementation group: 'org.mule.weave', name: 'yaml-module', version: weaveVersion
+    implementation group: 'org.mule.weave', name: 'jsonschema-module', version: weaveVersion
     implementation group: 'org.mule.weave', name: 'http-module', version: ioVersion
     implementation group: 'org.mule.weave', name: 'process-module', version: ioVersion
     implementation(group: 'org.mule.weave', name: 'http-netty-module', version: ioVersion) {
