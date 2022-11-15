@@ -33,6 +33,7 @@ import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.net.JarURLConnection
+import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -42,6 +43,8 @@ import java.util.zip.ZipFile
 import javax.mail.internet.MimeMultipart
 import javax.mail.util.ByteArrayDataSource
 import scala.collection.JavaConverters._
+import scala.io.BufferedSource
+import scala.io.Source
 import scala.io.Source.fromFile
 import scala.util.Try
 
@@ -254,40 +257,40 @@ class NativeCliRuntimeIT extends FunSpec
       case "json" =>
         val actual: String = new String(bytes, encoding)
         val actualNormalized = actual.stripMarginAndNormalizeEOL.replace("\\r\\n", "\\n")
-        actualNormalized should matchJson(readFile(expectedFile))
+        actualNormalized should matchJson(readFile(expectedFile, encoding))
       case "xml" =>
         val actual: String = new String(bytes, encoding)
-        actual.stripMarginAndNormalizeEOL should matchXml(readFile(expectedFile))
+        actual.stripMarginAndNormalizeEOL should matchXml(readFile(expectedFile, encoding))
       case "dwl" =>
         val actual: String = new String(bytes, "UTF-8")
-        actual should matchString(readFile(expectedFile))(after being whiteSpaceNormalised)
+        actual should matchString(readFile(expectedFile, encoding))(after being whiteSpaceNormalised)
       case "csv" =>
         val actual: String = new String(bytes, encoding).trim
         val actualNormalized = actual.stripMarginAndNormalizeEOL
-        val expected = readFile(expectedFile).trim
+        val expected = readFile(expectedFile, encoding).trim
         val expectedNormalized = expected.stripMarginAndNormalizeEOL
         actualNormalized should matchString(expectedNormalized)
       case "txt" =>
         val actual: String = new String(bytes, encoding).trim
         val actualNormalized = actual.stripMarginAndNormalizeEOL
-        val expected = readFile(expectedFile).trim
+        val expected = readFile(expectedFile, encoding).trim
         val expectedNormalized = expected.stripMarginAndNormalizeEOL
         actualNormalized should matchString(expectedNormalized)
       case "bin" =>
         assertBinaryFile(bytes, expectedFile)
       case "urlencoded" =>
         val actual: String = new String(bytes, "UTF-8")
-        actual should matchString(readFile(expectedFile).trim)
+        actual should matchString(readFile(expectedFile, encoding).trim)
       case "properties" =>
         val actual: String = new String(bytes, "UTF-8")
-        actual should matchProperties(readFile(expectedFile).trim)
+        actual should matchProperties(readFile(expectedFile, encoding).trim)
 
       case "multipart" =>
         matchMultipart(expectedFile, bytes)
 
       case "yml" | "yaml" =>
         val actual: String = new String(bytes, "UTF-8")
-        actual.trim should matchString(readFile(expectedFile).trim)
+        actual.trim should matchString(readFile(expectedFile, encoding).trim)
     }
   }
 
@@ -331,19 +334,20 @@ class NativeCliRuntimeIT extends FunSpec
     }
   }
 
-  private def readFile(expectedFile: File): String = {
+  private def readFile(expectedFile: File, charset: String): String = {
     val expectedText: String = {
       if (expectedFile.getName endsWith ".bin")
         ""
-      else
-        Try(fileToString(expectedFile)).getOrElse({
-          val source = fromFile(expectedFile)(scala.io.Codec("UTF-16"))
-          try {
-            source.mkString
-          } finally {
-            source.close()
-          }
-        })
+      else {
+        var value1: BufferedSource = null
+        try {
+          value1 = Source.fromFile(expectedFile, charset)
+          value1.mkString
+        } finally {
+          value1.close()
+        }
+      }
+
     }
     expectedText
   }
