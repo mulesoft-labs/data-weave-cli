@@ -58,8 +58,8 @@ at https://github.com/graalvm/graalvm-ce-builds/releases
 Set:
 
 ```bash
-export GRAALVM_HOME=`pwd`/.graalvm/graalvm-ce-java11-22.0.0.2/Contents/Home
-export JAVA_HOME=`pwd`/.graalvm/graalvm-ce-java11-22.0.0.2/Contents/Home
+export GRAALVM_HOME=`pwd`/.graalvm/graalvm-ce-java11-22.3.0/Contents/Home
+export JAVA_HOME=`pwd`/.graalvm/graalvm-ce-java11-22.3.0/Contents/Home
 ```
 
 Execute the gradle task `nativeCompile`
