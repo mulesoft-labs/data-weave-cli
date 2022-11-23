@@ -86,10 +86,11 @@ dw --help
 
 ```bash
 usage: dw [--eval] [-f <file-path>] [--help] [-i <input-name input-path>]
-       [-o <output-path>] [-p <param-name param-value>] [--privileges
-       <privileges>] [--untrusted-code] [-v] [--version] [--add-wizard
-       <wizard-name>] [--list-spells] [--local-spell <spell-folder>]
-       [--new-spell <spell-name>] [-s <spell-name>] [--update-grimoires]
+       [--migrate <dw1-file-path>] [-o <output-path>] [-p <param-name
+       param-value>] [--privileges <privileges>] [--silent]
+       [--untrusted-code] [-v] [--version] [--add-wizard <wizard-name>]
+       [--list-spells] [--local-spell <spell-folder>] [--new-spell
+       <spell-name>] [-s <spell-name>] [--update-grimoires]
 
 
 .........................................................................
@@ -100,20 +101,29 @@ usage: dw [--eval] [-f <file-path>] [--help] [-i <input-name input-path>]
 .%%%%%...%%..%%....%%....%%..%%...%%.%%...%%%%%%..%%..%%....%%....%%%%%%.
 .........................................................................
 
-    --eval                                 Evaluates the script instead of
-                                           writing it.
- -f,--file <file-path>                     Specifies output file for the
-                                           transformation if not standard
-                                           output will be used.
+    --eval                                 Executes the script but it
+                                           doesn't use the writer. This is
+                                           useful when launching a
+                                           webserver.
+ -f,--file <file-path>                     Specifies the DataWeave file
+                                           path to execute.
     --help                                 Shows the help.
  -i,--input <input-name input-path>        Declares a new input.
+    --migrate <dw1-file-path>              Migrates a DW1 file to DW2 and
+                                           outputs the result.
  -o,--output <output-path>                 Specifies output file for the
                                            transformation if not standard
                                            output will be used.
- -p,--parameter <param-name param-value>   Parameter to be passed.
+ -p,--parameter <param-name param-value>   Parameter to be passed. All
+                                           input parameters are accessible
+                                           through the variable `params`
+                                           of type object.
     --privileges <privileges>              A comma separated set of the
                                            privileges for the script
                                            execution.
+    --silent                               Executes the script in silent
+                                           mode, where all info messages
+                                           is not going to be shown.
     --untrusted-code                       Run the script as untrusted,
                                            which means that the script has
                                            no privileges.
@@ -145,6 +155,7 @@ filter (item) -> item.age > 17"
  Documentation reference:
 
  https://docs.mulesoft.com/dataweave/latest/
+
 ```
 
 ### DataWeave CLI Environment Variables
