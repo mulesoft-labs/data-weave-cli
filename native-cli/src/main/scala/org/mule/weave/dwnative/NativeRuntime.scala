@@ -12,15 +12,7 @@ import org.mule.weave.v2.io.service.CustomWorkingDirectoryService
 import org.mule.weave.v2.io.service.WorkingDirectoryService
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
-import org.mule.weave.v2.model.service.CharsetProviderService
-import org.mule.weave.v2.model.service.DefaultSecurityManagerService
-import org.mule.weave.v2.model.service.LoggingService
-import org.mule.weave.v2.model.service.ProtocolUrlSourceProviderResolverService
-import org.mule.weave.v2.model.service.ReadFunctionProtocolHandler
-import org.mule.weave.v2.model.service.SecurityManagerService
-import org.mule.weave.v2.model.service.UrlProtocolHandler
-import org.mule.weave.v2.model.service.UrlSourceProviderResolverService
-import org.mule.weave.v2.model.service.WeaveRuntimePrivilege
+import org.mule.weave.v2.model.service.{CharsetProviderService, DefaultLanguageLevelService, DefaultSecurityManagerService, LanguageLevelService, LoggingService, ProtocolUrlSourceProviderResolverService, ReadFunctionProtocolHandler, SecurityManagerService, UrlProtocolHandler, UrlSourceProviderResolverService, WeaveLanguageLevelService, WeaveRuntimePrivilege}
 import org.mule.weave.v2.model.values.BinaryValue
 import org.mule.weave.v2.module.reader.AutoPersistedOutputStream
 import org.mule.weave.v2.module.reader.SourceProvider
@@ -46,6 +38,7 @@ import org.mule.weave.v2.sdk.NameIdentifierHelper
 import org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider
 import org.mule.weave.v2.sdk.TwoLevelWeaveResourceResolver
 import org.mule.weave.v2.sdk.WeaveResourceResolver
+import org.mule.weave.v2.utils.DataWeaveVersion
 
 import java.io.File
 import java.io.OutputStream
@@ -53,16 +46,24 @@ import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
+import java.util.Properties
 
-class NativeRuntime(libDir: File, path: Array[File], console: Console) {
+class NativeRuntime(libDir: File, path: Array[File], console: Console, maybeLanguageLevel: Option[DataWeaveVersion] = None) {
 
   private val dataWeaveUtils = new DataWeaveUtils(console)
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
+  private val languageLevelService: LanguageLevelService = {
+    maybeLanguageLevel match {
+      case Some(version) => WeaveLanguageLevelService(version)
+      case None => DefaultLanguageLevelService
+    }
+  }
+
   private val weaveScriptingEngine: DataWeaveScriptingEngine = {
     setupEnv()
-    DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration())
+    new DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration(), new Properties(), languageLevelService = languageLevelService)
   }
 
   if (console.isDebugEnabled()) {

@@ -16,6 +16,7 @@ import org.mule.weave.v2.model.values.StringValue
 import org.mule.weave.v2.module.DataFormatManager
 import org.mule.weave.v2.runtime.ExecuteResult
 import org.mule.weave.v2.runtime.ScriptingBindings
+import org.mule.weave.v2.utils.DataWeaveVersion
 import sun.misc.Signal
 import sun.misc.SignalHandler
 
@@ -24,7 +25,6 @@ import java.io.FileOutputStream
 import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
-import scala.collection.immutable
 import scala.util.Try
 
 class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends WeaveCommand {
@@ -38,7 +38,7 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
   def exec(): Int = {
     var exitCode = ExitCodes.SUCCESS
     val path: Array[File] = config.path.map(new File(_))
-    val nativeRuntime: NativeRuntime = new NativeRuntime(weaveUtils.getLibPathHome(), path, console)
+    val nativeRuntime: NativeRuntime = new NativeRuntime(weaveUtils.getLibPathHome(), path, console, config.maybeLanguageLevel)
     config.dependencyResolver.foreach((dep) => {
       val results = dep(nativeRuntime)
       results.foreach((dm) => {
@@ -170,7 +170,8 @@ case class WeaveRunnerConfig(path: Array[String],
                              params: Map[String, String],
                              inputs: Map[String, File],
                              outputPath: Option[String],
-                             maybePrivileges: Option[Seq[String]])
+                             maybePrivileges: Option[Seq[String]],
+                             maybeLanguageLevel: Option[DataWeaveVersion])
 
 
 case class WeaveModule(content: String, nameIdentifier: String)
