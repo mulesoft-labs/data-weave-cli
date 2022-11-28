@@ -12,6 +12,7 @@ object Options {
   val LIST_SPELLS = "list-spells"
   val LOCAL_SPELL = "local-spell"
   val NEW_SPELL = "new-spell"
+  val MIGRATE = "migrate"
   val OUTPUT = "output"
   val PRIVILEGES = "privileges"
   val PARAMETER = "parameter"
@@ -33,7 +34,7 @@ object Options {
       .hasArgs()
       .numberOfArgs(2)
       .argName("param-name param-value")
-      .desc("Parameter to be passed.")
+      .desc("Parameter to be passed. All input parameters are accessible through the variable `params` of type object.")
       .build())
     
     options.addOption(Option.builder("i")
@@ -67,6 +68,15 @@ object Options {
     options.addOption("v", VERBOSE, false, "Enable verbose mode.")
     
     options.addOption(null, UNTRUSTED_CODE, false, "Run the script as untrusted, which means that the script has no privileges.")
+
+
+    options.addOption(Option.builder()
+      .longOpt(MIGRATE)
+      .hasArg(true)
+      .argName("dw1-file-path")
+      .desc(s"Migrates a DW1 file to DW2 and outputs the result.")
+      .build()
+    )
 
     options.addOption(Option.builder()
       .longOpt(PRIVILEGES)

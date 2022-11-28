@@ -7,6 +7,7 @@ import org.mule.weave.dwnative.cli.commands.CloneWizardConfig
 import org.mule.weave.dwnative.cli.commands.CreateSpellCommand
 import org.mule.weave.dwnative.cli.commands.HelpCommand
 import org.mule.weave.dwnative.cli.commands.ListSpellsCommand
+import org.mule.weave.dwnative.cli.commands.MigrateDW1Command
 import org.mule.weave.dwnative.cli.commands.RunWeaveCommand
 import org.mule.weave.dwnative.cli.commands.UpdateAllGrimoires
 import org.mule.weave.dwnative.cli.commands.UpdateGrimoireCommand
@@ -100,6 +101,15 @@ class CLIArgumentsParser(console: Console) {
           return Left(new CreateSpellCommand(spellName, console))
         } else {
           return Right("Missing <spell-name>")
+        }
+      }
+
+      if (commandLine.hasOption(Options.MIGRATE)) {
+        val oldFilePath = commandLine.getOptionValue(Options.MIGRATE)
+        if (oldFilePath != null && !oldFilePath.isBlank) {
+          return Left(new MigrateDW1Command(oldFilePath, console))
+        } else {
+          return Right("Missing <dw1-file-path>")
         }
       }
       
