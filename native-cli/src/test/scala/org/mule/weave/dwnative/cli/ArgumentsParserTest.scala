@@ -96,7 +96,15 @@ class ArgumentsParserTest extends FreeSpec with Matchers {
     val runWeaveCommand = commandToRun.asInstanceOf[CreateSpellCommand]
     assert(runWeaveCommand.spellName == "Test")
   }
-  
+
+  "should parse language-level correctly" in {
+    val parser = new CLIArgumentsParser(new TestConsole())
+    val value = parser.parse(Array("'Test'", "--language-level", "2.4"))
+    assert(value.isLeft)
+    val commandToRun = value.left.get
+    assert(commandToRun.isInstanceOf[RunWeaveCommand])
+  }
+
   "should fail parsing unrecognized argument" in {
     val parser = new CLIArgumentsParser(new TestConsole())
     val value = parser.parse(Array("-o", "/tmp/out.json", "--parameter", "p1", "p2", "p3", "1 to 10" ))

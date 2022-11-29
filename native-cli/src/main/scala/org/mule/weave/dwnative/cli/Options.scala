@@ -23,6 +23,7 @@ object Options {
   val VERBOSE = "verbose"
   val VERSION = "version"
   val EXPERIMENTAL_TAG = "[Experimental]"
+  val LANGUAGE_LEVEL = "language-level"
   
   val OPTIONS: CliOptions = {
     val options = new CliOptions()
@@ -123,7 +124,15 @@ object Options {
     )
     
     options.addOption(null, UPDATE_GRIMOIRES, false, s"$EXPERIMENTAL_TAG Update all wizard grimoires.")
-    
+
+    options.addOption(Option.builder()
+      .longOpt(LANGUAGE_LEVEL)
+      .hasArg(true)
+      .argName("language-level")
+      .desc(s"$LANGUAGE_LEVEL sets the language level under which the script runs")
+      .build()
+    )
+
     options
   }
 }

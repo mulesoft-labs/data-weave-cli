@@ -23,6 +23,7 @@ import org.mule.weave.v2.io.FileHelper
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
 import org.mule.weave.v2.runtime.utils.AnsiColor.red
 import org.mule.weave.v2.sdk.NameIdentifierHelper
+import org.mule.weave.v2.utils.DataWeaveVersion
 
 import java.io.File
 import scala.collection.mutable
@@ -40,6 +41,7 @@ class CLIArgumentsParser(console: Console) {
     var output: Option[String] = None
     var eval: Boolean = false
     var maybePrivileges: Option[Seq[String]] = None
+    var maybeLanguageLevel: Option[DataWeaveVersion] = None
 
     var dependencyResolver: Option[(NativeRuntime) => Array[DependencyResolutionResult]] = None
 
@@ -278,6 +280,11 @@ class CLIArgumentsParser(console: Console) {
         val privileges = commandLine.getOptionValue(Options.PRIVILEGES)
         maybePrivileges = Some(privileges.split(","))
       }
+
+      if (commandLine.hasOption(Options.LANGUAGE_LEVEL)) {
+        val languageLevelStr =  commandLine.getOptionValue(Options.LANGUAGE_LEVEL)
+        maybeLanguageLevel = Some(DataWeaveVersion(languageLevelStr))
+      }
       
       val commandLineArgs = commandLine.getArgs
       if (commandLineArgs != null) {
@@ -300,7 +307,7 @@ class CLIArgumentsParser(console: Console) {
       Right(s"Missing <script-content> or -f <file-path> or --spell ")
     } else {
 
-      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, eval, scriptToRun.get, dependencyResolver ,params.toMap, inputs.toMap, output, maybePrivileges)
+      val config: WeaveRunnerConfig = WeaveRunnerConfig(paths, eval, scriptToRun.get, dependencyResolver ,params.toMap, inputs.toMap, output, maybePrivileges, maybeLanguageLevel)
       Left(new RunWeaveCommand(config, console))
     }
   }
