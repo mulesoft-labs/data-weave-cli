@@ -3,6 +3,8 @@ package org.mule.weave.dwnative.cli
 import org.mule.weave.dwnative.cli.commands.CreateSpellCommand
 import org.mule.weave.dwnative.cli.commands.HelpCommand
 import org.mule.weave.dwnative.cli.commands.RunWeaveCommand
+import org.mule.weave.v2.utils.DataWeaveVersion
+
 import org.scalatest.FreeSpec
 import org.scalatest.Matchers
 
@@ -103,6 +105,24 @@ class ArgumentsParserTest extends FreeSpec with Matchers {
     assert(value.isLeft)
     val commandToRun = value.left.get
     assert(commandToRun.isInstanceOf[RunWeaveCommand])
+  }
+
+  "should fail if language level is badly written" in {
+    val parser = new CLIArgumentsParser(new TestConsole())
+    val value = parser.parse(Array("'Test'", "--language-level", "-2.4"))
+    assert(value.isRight)
+    val message = value.right.get
+    message shouldBe "Unrecognized language level"
+  }
+
+  "should fail if language level is greater than runtime" in {
+    val parser = new CLIArgumentsParser(new TestConsole())
+    val runtimeLL = DataWeaveVersion()
+    val badLL = s"${runtimeLL.major}.${runtimeLL.minor + 1}"
+    val value = parser.parse(Array("'Test'", "--language-level", badLL))
+    assert(value.isRight)
+    val message = value.right.get
+    message shouldBe s"Invalid language level, cannot be higher than ${runtimeLL.toString()}"
   }
 
   "should fail parsing unrecognized argument" in {
