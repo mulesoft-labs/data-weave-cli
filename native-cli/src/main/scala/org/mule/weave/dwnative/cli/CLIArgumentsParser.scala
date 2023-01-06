@@ -282,8 +282,18 @@ class CLIArgumentsParser(console: Console) {
       }
 
       if (commandLine.hasOption(Options.LANGUAGE_LEVEL)) {
+        val semVerPattern = "^([1-9]\\d*)\\.(0|[1-9]\\d*)".r
         val languageLevelStr =  commandLine.getOptionValue(Options.LANGUAGE_LEVEL)
-        maybeLanguageLevel = Some(DataWeaveVersion(languageLevelStr))
+        maybeLanguageLevel = semVerPattern.findFirstMatchIn(languageLevelStr) match {
+          case Some(languageLevel) => {
+            val version = new DataWeaveVersion(languageLevel.group(1).toInt, languageLevel.group(2).toInt)
+            if (version > DataWeaveVersion()) {
+              return Right(s"Invalid language level, cannot be higher than ${DataWeaveVersion().toString()}")
+            }
+            Some(version)
+          }
+          case None => return Right(s"Unrecognized language level")
+        }
       }
       
       val commandLineArgs = commandLine.getArgs
