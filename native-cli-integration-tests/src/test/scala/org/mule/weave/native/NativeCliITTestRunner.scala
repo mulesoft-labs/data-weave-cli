@@ -28,24 +28,27 @@ class NativeCliITTestRunner(args: Array[String])
     dwPath.getAbsolutePath
   }
   
-  def execute(): (Int, String) = {
+  def execute(): (Int, String, String) = {
     execute(5, TimeUnit.SECONDS)
   }
 
-  def execute(timeout: Long, unit: TimeUnit): (Int, String) = {
+  def execute(timeout: Long, unit: TimeUnit): (Int, String, String) = {
     val command = DW_CLI_EXECUTABLE +: args
     println(s"Executing command: ${command.mkString(" ")}")
     val proc = Runtime.getRuntime.exec(command)
     proc.waitFor(timeout, unit)
-    proc.exitValue()
     val source = Source.fromInputStream(proc.getInputStream)
+    val errorStream = Source.fromInputStream(proc.getErrorStream)
     var out = ""
+    var error = ""
     try {
       out = source.mkString.trim
+      error = errorStream.mkString.trim
     } finally {
       source.close()
+      errorStream.close()
     }
-    (proc.exitValue(), out)
+    (proc.exitValue(), out, error)
   }
 }
 

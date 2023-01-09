@@ -212,7 +212,7 @@ class NativeCliRuntimeIT extends FunSpec
           args = args :+ "-f"
           args = args :+ cliTransform.getAbsolutePath
 
-          val (exitCode, _) = NativeCliITTestRunner(args).execute(TIMEOUT._1, TIMEOUT._2)
+          val (exitCode, _, _) = NativeCliITTestRunner(args).execute(TIMEOUT._1, TIMEOUT._2)
 
           exitCode shouldBe 0
           doAssert(outputPath.toFile, scenario.output, maybeEncoding)
