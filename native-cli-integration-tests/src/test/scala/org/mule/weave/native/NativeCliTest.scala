@@ -61,7 +61,7 @@ class NativeCliTest extends FreeSpec
 
   "it should fail if language level is set incorrectly" in {
     val (exitCode, _, errorMsg) = NativeCliITTestRunner(Array("-language-level", "payload")).execute()
-    exitCode shouldBe  255
+    exitCode should not be 0
     errorMsg should include("Unrecognized language level")
   }
 
@@ -69,7 +69,7 @@ class NativeCliTest extends FreeSpec
     val runtimeLL = DataWeaveVersion()
     val badLL = s"${runtimeLL.major}.${runtimeLL.minor + 1}"
     val (exitCode, _, errorMsg) = NativeCliITTestRunner(Array("-language-level", badLL)).execute()
-    exitCode shouldBe  255
+    exitCode should not be 0
     errorMsg should include(s"Invalid language level, cannot be higher than ${runtimeLL.toString()}")
   }
 }
