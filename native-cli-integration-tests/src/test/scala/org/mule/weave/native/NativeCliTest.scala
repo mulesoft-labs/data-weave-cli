@@ -1,5 +1,6 @@
 package org.mule.weave.native
 
+import org.mule.weave.v2.utils.DataWeaveVersion
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.FreeSpec
 import org.scalatest.Matchers
@@ -26,7 +27,7 @@ class NativeCliTest extends FreeSpec
   "it should execute simple migration correctly" in {
     val stream: URL = getClass.getClassLoader.getResource("dw1/SimpleFile.dw1")
     val file = new File(stream.toURI)
-    val (_, output) = NativeCliITTestRunner(Array("--migrate", file.getAbsolutePath)).execute()
+    val (_, output, _) = NativeCliITTestRunner(Array("--migrate", file.getAbsolutePath)).execute()
     output.trim shouldBe
       """
         |%dw 2.0
@@ -41,20 +42,34 @@ class NativeCliTest extends FreeSpec
   }
 
   "it should execute simple case correctly" in {
-    val (_, output) = NativeCliITTestRunner("1 to 10").execute()
+    val (_, output, _) = NativeCliITTestRunner("1 to 10").execute()
     output shouldBe "[\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  10\n]"
   }
 
   "it should execute with input" in {
     val path = getResourcePath("inputs/payload.json")
-    val (_, output) = NativeCliITTestRunner(Array("-i", "payload", path, "payload.name")).execute()
+    val (_, output, _) = NativeCliITTestRunner(Array("-i", "payload", path, "payload.name")).execute()
     output shouldBe "\"Tomo\""
   }
 
   "it should execute with input and script" in {
     val inputPath = getResourcePath("inputs/payload.json")
     val transformationPath = getResourcePath("scripts/GetName.dwl")
-    val (_, output) = NativeCliITTestRunner(Array("-i", "payload", inputPath, "-f", transformationPath)).execute()
+    val (_, output, _) = NativeCliITTestRunner(Array("-i", "payload", inputPath, "-f", transformationPath)).execute()
     output shouldBe "\"Tomo\""
+  }
+
+  "it should fail if language level is set incorrectly" in {
+    val (exitCode, _, errorMsg) = NativeCliITTestRunner(Array("-language-level", "payload")).execute()
+    exitCode shouldBe  255
+    errorMsg should include("Unrecognized language level")
+  }
+
+  "should fail if language level is greater than runtime" in {
+    val runtimeLL = DataWeaveVersion()
+    val badLL = s"${runtimeLL.major}.${runtimeLL.minor + 1}"
+    val (exitCode, _, errorMsg) = NativeCliITTestRunner(Array("-language-level", badLL)).execute()
+    exitCode shouldBe  255
+    errorMsg should include(s"Invalid language level, cannot be higher than ${runtimeLL.toString()}")
   }
 }
