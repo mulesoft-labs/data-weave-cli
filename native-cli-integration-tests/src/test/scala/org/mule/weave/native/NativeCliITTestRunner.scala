@@ -37,7 +37,6 @@ class NativeCliITTestRunner(args: Array[String])
     println(s"Executing command: ${command.mkString(" ")}")
     val proc = Runtime.getRuntime.exec(command)
     proc.waitFor(timeout, unit)
-    proc.exitValue()
     val source = Source.fromInputStream(proc.getInputStream)
     val errorStream = Source.fromInputStream(proc.getErrorStream)
     var out = ""
