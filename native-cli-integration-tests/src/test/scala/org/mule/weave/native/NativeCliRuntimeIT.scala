@@ -21,10 +21,13 @@ import org.mule.weave.v2.parser.ast.header.directives.OutputDirective
 import org.mule.weave.v2.parser.ast.structure.StringNode
 import org.mule.weave.v2.sdk.ParsingContextFactory
 import org.mule.weave.v2.sdk.WeaveResourceFactory
+import org.mule.weave.v2.utils.DataWeaveVersion
 import org.mule.weave.v2.utils.StringHelper.toStringTransformer
+import org.mule.weave.v2.version.ComponentVersion
 import org.scalatest.Assertion
 import org.scalatest.FunSpec
 import org.scalatest.Matchers
+import sun.net.www.protocol.file.FileURLConnection
 
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -32,8 +35,6 @@ import java.io.FileFilter
 import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
-import java.net.JarURLConnection
-import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -45,8 +46,6 @@ import javax.mail.util.ByteArrayDataSource
 import scala.collection.JavaConverters._
 import scala.io.BufferedSource
 import scala.io.Source
-import scala.io.Source.fromFile
-import scala.util.Try
 
 class NativeCliRuntimeIT extends FunSpec
   with Matchers
@@ -55,21 +54,20 @@ class NativeCliRuntimeIT extends FunSpec
   with OSSupport {
 
   private val TIMEOUT: (Int, TimeUnit) = (30, TimeUnit.SECONDS)
-  private val INPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile("in[0-9]+-config\\.properties")
+  private val INPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile("in[0-9]+-config\\.propertqies")
   private val OUTPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile("out[0-9]+-config\\.properties")
   private val INPUT_FILE_PATTERN = Pattern.compile("in[0-9]+\\.[a-zA-Z]+")
   private val OUTPUT_FILE_PATTERN = Pattern.compile("out\\.[a-zA-Z]+")
 
-  val testSuites =
-    Seq(
-      TestSuite("master", loadTestZipFile("access_raw_value")),
-      TestSuite("yaml", loadTestZipFile("comments"))
+  val testSuites = Seq(
+      TestSuite("master", loadTestZipFile(s"weave-suites/runtime-${ComponentVersion.weaveSuiteVersion}-test.zip")),
+      TestSuite("yaml", loadTestZipFile(s"weave-suites/yaml-module-${ComponentVersion.weaveSuiteVersion}-test.zip"))
     )
 
   private def loadTestZipFile(testSuiteExample: String): File = {
     val url = getResource(testSuiteExample)
-    val connection = url.openConnection.asInstanceOf[JarURLConnection]
-    val zipFile = new File(connection.getJarFileURL.toURI)
+    val connection = url.openConnection.asInstanceOf[FileURLConnection]
+    val zipFile = new File(connection.getURL.toURI)
     zipFile
   }
 
@@ -140,7 +138,7 @@ class NativeCliRuntimeIT extends FunSpec
     } yield {
       Scenario(scenarioName(testFolder, output), testFolder, inputFiles(testFolder), new File(testFolder, mainTestFile), output, configProperty(testFolder))
     }
-    val scenarios = unsortedScenarios.sortBy(_.name)
+    val scenarios = filterScenarios(unsortedScenarios).sortBy(_.name)
     scenarios.foreach {
       scenario =>
         it(scenario.name) {
@@ -218,6 +216,15 @@ class NativeCliRuntimeIT extends FunSpec
           doAssert(outputPath.toFile, scenario.output, maybeEncoding)
         }
     }
+  }
+
+  private def filterScenarios(scenarios: Array[Scenario]): Array[Scenario] = {
+    val dwVersion = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
+    val skippedTests = IgnoredScenarios.skippedTests.getOrElse(dwVersion, Seq())
+    scenarios.filter(scenario => {
+      val scenarioName = scenario.name.substring(0, scenario.name.lastIndexOf('.')) //strip extension
+      !skippedTests.contains(scenarioName)
+    })
   }
 
   private def getEncodingFromOutputDirective(outputDirective: OutputDirective): Option[String] = {

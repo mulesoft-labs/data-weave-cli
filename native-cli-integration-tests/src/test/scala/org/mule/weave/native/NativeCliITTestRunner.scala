@@ -1,5 +1,8 @@
 package org.mule.weave.native
 
+import org.mule.weave.v2.utils.DataWeaveVersion
+import org.mule.weave.v2.version.ComponentVersion
+
 import java.io.File
 import java.util.concurrent.TimeUnit
 import scala.io.Source
@@ -33,7 +36,9 @@ class NativeCliITTestRunner(args: Array[String])
   }
 
   def execute(timeout: Long, unit: TimeUnit): (Int, String, String) = {
-    val command = DW_CLI_EXECUTABLE +: args
+    val languageLevel = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
+    val completeArgs: Array[String] =  Array.concat(args, Array("--language-level", languageLevel))
+    val command = DW_CLI_EXECUTABLE +: completeArgs
     println(s"Executing command: ${command.mkString(" ")}")
     val proc = Runtime.getRuntime.exec(command)
     proc.waitFor(timeout, unit)

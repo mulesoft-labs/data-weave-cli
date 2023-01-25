@@ -2,21 +2,45 @@ plugins {
     id "com.github.maiflai.scalatest" version "${scalaTestPluginVersion}"
 }
 
+configurations {
+    weaveSuite
+}
+
+sourceSets {
+    test {
+        resources {
+            srcDirs += ["build/resources"]
+        }
+    }
+}
 
 dependencies {
-    api project(":native-cli")
+    api(project(":native-cli"))
+
     testImplementation group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
     testImplementation group: 'org.mule.weave', name: 'parser', version: weaveVersion
     testImplementation group: 'org.mule.weave', name: 'test-helpers', version: weaveVersion
-    testImplementation "org.mule.weave:runtime:${weaveVersion}:test@zip"
-    testImplementation "org.mule.weave:yaml-module:${weaveVersion}:test@zip"
+
+    weaveSuite "org.mule.weave:runtime:${weaveTestSuiteVersion}:test@zip"
+    weaveSuite "org.mule.weave:yaml-module:${weaveTestSuiteVersion}:test@zip"
+
     testImplementation 'commons-io:commons-io:2.11.0'
     testRuntimeOnly 'org.pegdown:pegdown:1.6.0'
-
     testImplementation group: 'com.sun.mail', name: 'jakarta.mail', version: '1.6.4'
     testImplementation group: 'xerces', name: 'xercesImpl', version: '2.12.1'
     testImplementation group: 'xalan', name: 'xalan', version: '2.7.2'
     testImplementation group: 'commons-beanutils', name: 'commons-beanutils', version: '1.9.4'
 }
 
+task cleanTestSuites(type: Delete) {
+    delete "$projectDir/build/resources/weave-suites"
+}
+
+task downloadTestSuites(type: Copy) {
+    from configurations.weaveSuite
+    into "$projectDir/build/resources/weave-suites"
+}
+
+downloadTestSuites.dependsOn(cleanTestSuites)
+test.dependsOn(downloadTestSuites)
 test.dependsOn(":native-cli:nativeCompile")
