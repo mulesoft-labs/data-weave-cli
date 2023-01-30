@@ -4,7 +4,6 @@ import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.v2.V2LangMigrant
 
 import java.io.File
-import java.io.FileWriter
 import java.nio.charset.StandardCharsets
 import scala.io.Source
 
@@ -27,6 +26,4 @@ class MigrateDW1Command(val oldScriptPath: String, console: Console) extends Wea
     }
     statusCode
   }
-
-
 }

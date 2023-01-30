@@ -14,9 +14,11 @@ sourceSets {
     }
 }
 
-mainClassName = 'org.mule.weave.dwnative.cli.DataWeaveCLI'
+mainClassName = 'org.mule.weave.cli.DWCLI'
 
 dependencies {
+    implementation 'info.picocli:picocli:4.7.0'
+    annotationProcessor 'info.picocli:picocli-codegen:4.7.0'
     api group: 'org.mule.weave', name: 'runtime', version: weaveVersion
     compileOnly group: 'org.graalvm.sdk', name: 'graal-sdk', version: graalvmVersion
     implementation group: 'io.get-coursier', name: 'coursier-core_2.12', version: '1.1.0-M14-7'
@@ -32,7 +34,6 @@ dependencies {
         exclude group: 'org.slf4j'
     }
     implementation group: 'org.mule.weave', name: 'ndjson-module', version: weaveVersion
-    implementation group: 'commons-cli', name: 'commons-cli', version: '1.4'
     testImplementation group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
     testRuntimeOnly 'org.pegdown:pegdown:1.6.0'
 }
@@ -108,7 +109,7 @@ graalvmNative {
         main {
             // Main options
             imageName = 'dw'
-            mainClass = 'org.mule.weave.dwnative.cli.DataWeaveCLI'
+            mainClass = 'org.mule.weave.cli.DWCLI'
             sharedLibrary = false
 
             // Advanced options
@@ -166,6 +167,19 @@ graalvmNative {
         }
     }
 }
+
+
+
+compileJava {
+    // minimum 1.6
+//    sourceCompatibility = ${java-version}
+//    targetCompatibility = ${java-version}
+    options.compilerArgs += ["-Aproject=${project.group}/${project.name}"]
+}
+
+// to compile Java after Scala
+tasks.compileScala.classpath = sourceSets.main.compileClasspath
+tasks.compileJava.classpath += files(sourceSets.main.scala.classesDirectory)
 
 nativeCompile.dependsOn("shadowJar")
 

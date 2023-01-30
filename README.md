@@ -2,7 +2,7 @@
 
 **DataWeave CLI** is a command-line interface that allows `querying`, `filtering`, and `mapping` structured data from different data sources like `JSON`, `XML`, `CSV`, `YML` to other data formats. It also allows to easily create data in such formats, all through the DataWeave language. For example:
 
-`dw 'output json --- { message: ["Hello", "world"] joinBy " "}'`
+`dw run 'output json --- { message: ["Hello", "world"] joinBy " "}'`
 
 The DataWeave language is in the process of being open-sourced. You can read our announcement [here](https://blogs.mulesoft.com/news/dataweave/). Our journey has just begun and it will take some time for the code to be available. In the meantime, we want to start engaging with our community to understand how DataWeave could be used and integrated. 
 
@@ -81,75 +81,29 @@ If it is not, go to the `bin` directory referenced in the installation instructi
 The following example shows the DataWeave CLI documentation
 
 ```bash
-dw --help
+dw help
 ```
 
 ```bash
-usage: dw [--eval] [-f <file-path>] [--help] [-i <input-name input-path>]
-       [--migrate <dw1-file-path>] [-o <output-path>] [-p <param-name
-       param-value>] [--privileges <privileges>] [--silent]
-       [--untrusted-code] [-v] [--version] [--add-wizard <wizard-name>]
-       [--list-spells] [--local-spell <spell-folder>] [--new-spell
-       <spell-name>] [-s <spell-name>] [--update-grimoires]
+ ____   __  ____  __   _  _  ____   __   _  _  ____
+(    \ / _\(_  _)/ _\ / )( \(  __) / _\ / )( \(  __)
+ ) D (/    \ )( /    \\ /\ / ) _) /    \\ \/ / ) _)
+(____/\_/\_/(__)\_/\_/(_/\_)(____)\_/\_/ \__/ (____)
+Usage: <main class> [-hV] [COMMAND]
+  -h, --help      Show this help message and exit.
+  -V, --version   Print version information and exit.
+Commands:
+  run            Runs provided DW script.
+  add-wizard     Adds a new Wizard to your network of trusted wizards.
+  new-spell      Creates a new spell with the given name.
+  list-spell     List all available spells.
+  from-dw1       Translates a DW1 script into a DW2 script.
+  spell          Runs the specified Spell.
+  update-spells  Update all spells to the latest one.
+  help           Display help information about the specified command.
+Example:
 
-
-.........................................................................
-.%%%%%....%%%%...%%%%%%...%%%%...%%...%%..%%%%%%...%%%%...%%..%%..%%%%%%.
-.%%..%%..%%..%%....%%....%%..%%..%%...%%..%%......%%..%%..%%..%%..%%.....
-.%%..%%..%%%%%%....%%....%%%%%%..%%.%.%%..%%%%....%%%%%%..%%..%%..%%%%...
-.%%..%%..%%..%%....%%....%%..%%..%%%%%%%..%%......%%..%%...%%%%...%%.....
-.%%%%%...%%..%%....%%....%%..%%...%%.%%...%%%%%%..%%..%%....%%....%%%%%%.
-.........................................................................
-
-    --eval                                 Executes the script but it
-                                           doesn't use the writer. This is
-                                           useful when launching a
-                                           webserver.
- -f,--file <file-path>                     Specifies the DataWeave file
-                                           path to execute.
-    --help                                 Shows the help.
- -i,--input <input-name input-path>        Declares a new input.
-    --migrate <dw1-file-path>              Migrates a DW1 file to DW2 and
-                                           outputs the result.
- -o,--output <output-path>                 Specifies output file for the
-                                           transformation if not standard
-                                           output will be used.
- -p,--parameter <param-name param-value>   Parameter to be passed. All
-                                           input parameters are accessible
-                                           through the variable `params`
-                                           of type object.
-    --privileges <privileges>              A comma separated set of the
-                                           privileges for the script
-                                           execution.
-    --silent                               Executes the script in silent
-                                           mode, where all info messages
-                                           is not going to be shown.
-    --untrusted-code                       Run the script as untrusted,
-                                           which means that the script has
-                                           no privileges.
- -v,--verbose                              Enable verbose mode.
-    --version                              The version of the CLI and
-                                           Runtime.
-    --add-wizard <wizard-name>             [Experimental] Downloads wizard
-                                           grimoire so that its spell are
-                                           accessible.
-    --list-spells                          [Experimental] List all the
-                                           available spells.
-    --local-spell <spell-folder>           [Experimental] Executes a local
-                                           folder spell.
-    --new-spell <spell-name>               [Experimental] Create a new
-                                           spell.
- -s,--spell <spell-name>                   [Experimental] Runs a spell.
-                                           Use the <spellName> or
-                                           <wizard>/<spellName> for spells
-                                           from a given wizard.
-    --update-grimoires                     [Experimental] Update all
-                                           wizard grimoires.
-
-
- Example:
-
- dw -i payload <fullPathToUser.json> "output application/json --- payload
+ dw  run -i payload <fullPathToUser.json> "output application/json --- payload
 filter (item) -> item.age > 17"
 
  Documentation reference:
@@ -223,7 +177,7 @@ Giving the following input file `users.json`
 Let's query users old enough to drink alcohol:
 
 ```bash
-dw -i payload <fullpathToUsers.json> "output application/json --- payload filter (item) -> item.age > 17"
+dw run -i payload=<fullpathToUsers.json> "output application/json --- payload filter (item) -> item.age > 17"
 ```
 
 #### Output
@@ -244,7 +198,7 @@ dw -i payload <fullpathToUsers.json> "output application/json --- payload filter
 ### Query Content From Standard Input
 
 ```bash
-cat <fullpathToUser.json> | dw "output application/json --- payload filter (item) -> item.age > 17"
+cat <fullpathToUser.json> | dw run "output application/json --- payload filter (item) -> item.age > 17"
 ```
 
 ### Redirecting the Output to a File
@@ -301,7 +255,7 @@ curl https://jsonplaceholder.typicode.com/posts/1 | dw "output application/json 
 ### Using parameters
 Using the internal map `params`, we can access injected parameters in the command line with the `-p` option
 ```
-dw -p myName Julian "output json --- { name : params.myName }"
+dw run -p myName=Julian "output json --- { name : params.myName }"
 ```
 #### Output
 ```
