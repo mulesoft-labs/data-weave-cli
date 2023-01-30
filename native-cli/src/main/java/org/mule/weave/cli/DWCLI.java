@@ -1,6 +1,7 @@
 package org.mule.weave.cli;
 
 
+import org.mule.weave.cli.pico.AbstractPicoExecCommand;
 import org.mule.weave.cli.pico.PicoAddWizard;
 import org.mule.weave.cli.pico.PicoCreateSpell;
 import org.mule.weave.cli.pico.PicoListSpells;
@@ -11,14 +12,21 @@ import org.mule.weave.cli.pico.PicoUpdateSpells;
 import org.mule.weave.cli.pico.PicoVersionProvider;
 import org.mule.weave.dwnative.cli.Console;
 import org.mule.weave.dwnative.cli.DefaultConsole$;
+import org.mule.weave.dwnative.cli.commands.ReplCommand;
+import org.mule.weave.dwnative.cli.commands.ReplConfiguration;
 import picocli.CommandLine;
+import scala.Option;
+import scala.collection.JavaConverters;
+import scala.collection.immutable.Map$;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.SortedSet;
@@ -30,7 +38,7 @@ public class DWCLI {
     }
 
     public void run(String[] args, Console console) {
-        int exitCode = new CommandLine(new DataWeaveCLIRunner(), new DWFactory(console))
+        int exitCode = new CommandLine(new DataWeaveCLIRunner(console), new DWFactory(console))
                 .execute(args);
         System.exit(exitCode);
     }
@@ -60,14 +68,24 @@ public class DWCLI {
                     "\n" +
                     " https://docs.mulesoft.com/dataweave/latest/",
             versionProvider = PicoVersionProvider.class)
-    public static class DataWeaveCLIRunner implements Runnable {
+    public static class DataWeaveCLIRunner extends AbstractPicoExecCommand {
 
-        @CommandLine.Spec
-        CommandLine.Model.CommandSpec spec;
+        public DataWeaveCLIRunner(Console console) {
+            super(console);
+        }
 
         @Override
-        public void run() {
-            spec.commandLine().usage(System.out);
+        protected Integer doCall() {
+            ReplConfiguration replConfiguration = new ReplConfiguration(
+                    new String[0],
+                    Option.empty(),
+                    Optional.ofNullable(params).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, String>empty()),
+                    Optional.ofNullable(inputs).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, File>empty()),
+                    Option.apply(privileges).map((s) -> JavaConverters.asScalaBuffer(s).toSeq()),
+                    calculateRuntimeVersion()
+            );
+            ReplCommand replCommand = new ReplCommand(replConfiguration, console);
+            return replCommand.exec();
         }
     }
 
