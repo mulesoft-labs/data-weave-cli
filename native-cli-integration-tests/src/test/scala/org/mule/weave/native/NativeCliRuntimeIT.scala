@@ -54,8 +54,8 @@ class NativeCliRuntimeIT extends FunSpec
   with OSSupport {
 
   private val TIMEOUT: (Int, TimeUnit) = (30, TimeUnit.SECONDS)
-  private val INPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile("in[0-9]+-config\\.propertqies")
-  private val OUTPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile("out[0-9]+-config\\.properties")
+  private val INPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile("in[0-9]+-config\\.properties")
+  private val OUTPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile("out[0-9]*-config\\.properties")
   private val INPUT_FILE_PATTERN = Pattern.compile("in[0-9]+\\.[a-zA-Z]+")
   private val OUTPUT_FILE_PATTERN = Pattern.compile("out\\.[a-zA-Z]+")
 
@@ -138,7 +138,7 @@ class NativeCliRuntimeIT extends FunSpec
     } yield {
       Scenario(scenarioName(testFolder, output), testFolder, inputFiles(testFolder), new File(testFolder, mainTestFile), output, configProperty(testFolder))
     }
-    val scenarios = filterScenarios(unsortedScenarios).sortBy(_.name)
+    val scenarios = unsortedScenarios.sortBy(_.name)
     scenarios.foreach {
       scenario =>
         it(scenario.name) {
@@ -207,6 +207,9 @@ class NativeCliRuntimeIT extends FunSpec
               throw ioe
           }
 
+          val languageLevel = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
+          args = args :+ "--language-level" :+ languageLevel
+
           args = args :+ "-f"
           args = args :+ cliTransform.getAbsolutePath
 
@@ -216,15 +219,6 @@ class NativeCliRuntimeIT extends FunSpec
           doAssert(outputPath.toFile, scenario.output, maybeEncoding)
         }
     }
-  }
-
-  private def filterScenarios(scenarios: Array[Scenario]): Array[Scenario] = {
-    val dwVersion = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
-    val skippedTests = IgnoredScenarios.skippedTests.getOrElse(dwVersion, Seq())
-    scenarios.filter(scenario => {
-      val scenarioName = scenario.name.substring(0, scenario.name.lastIndexOf('.')) //strip extension
-      !skippedTests.contains(scenarioName)
-    })
   }
 
   private def getEncodingFromOutputDirective(outputDirective: OutputDirective): Option[String] = {
@@ -361,7 +355,7 @@ class NativeCliRuntimeIT extends FunSpec
 
   override def ignoreTests(): Array[String] = {
     // Encoding issues
-    Array("csv-invalid-utf8") ++
+    val baseArray = Array("csv-invalid-utf8") ++
       // Fail in java11 because broken backwards
       Array("coerciones_toString", "date-coercion") ++
       // Use resources (dwl files) that is present in the Tests but not in Cli (e.g: org::mule::weave::v2::libs::)
@@ -402,6 +396,36 @@ class NativeCliRuntimeIT extends FunSpec
       // Take too long time
       Array("array-concat") ++
       Array("runtime_run")
+
+    if (DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString() == "2.4") {
+      baseArray ++
+        // A change to json streaming in 2.5.0 breaks this test
+        Array("default_with_extended_null_type") ++
+        // Change in validations in 2.5.0 breaks these tests
+        Array("logical-and",
+          "logical-or"
+        ) ++
+        Array("coerciones_toBinary") ++
+        // 2.5.0 dwl now prints metadata breaking these tests
+        Array("dfl-inline-default-namespace",
+          "dfl-inline-namespace",
+          "dfl-maxCollectionSize",
+          "dfl-overwrite-namespace",
+          "multipart-base64-to-multipart",
+          "xml-nill-multiple-attributes-nested",
+          "xml-nill-multiple-attributes",
+          "read_scalar_values"
+        ) ++
+        // A change of positions on dw::Core 2.5.0 breaks this test
+        Array(
+          "runtime_run_unhandled_compilation_exception"
+        ) ++
+        Array("as-operator",
+          "type-equality"
+        )
+    } else {
+      baseArray
+    }
   }
 }
 
