@@ -62,6 +62,7 @@ task genVersions() {
     outputPrinter.println("object ComponentVersion {")
     outputPrinter.println("\tval weaveVersion = \"" + weaveVersion + "\"")
     outputPrinter.println("\tval nativeVersion = \"" + nativeVersion + "\"")
+    outputPrinter.println("\tval weaveSuiteVersion = \"" + weaveTestSuiteVersion + "\"")
     outputPrinter.println("}")
     outputPrinter.close()
 }
