@@ -383,6 +383,7 @@ class NativeCliRuntimeIT extends FunSpec
         "runtime_run_coercionException",
         "runtime_run_fibo",
         "runtime_run_null_java",
+        "sql_date_mapping",
         "write-function-with-null"
       ) ++
       // Multipart Object has empty `parts` and expects at least one part
