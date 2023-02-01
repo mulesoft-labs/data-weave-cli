@@ -5,6 +5,7 @@ import org.mule.weave.cli.pico.AbstractPicoExecCommand;
 import org.mule.weave.cli.pico.PicoAddWizard;
 import org.mule.weave.cli.pico.PicoCreateSpell;
 import org.mule.weave.cli.pico.PicoListSpells;
+import org.mule.weave.cli.pico.PicoRepl;
 import org.mule.weave.cli.pico.PicoRunScript;
 import org.mule.weave.cli.pico.PicoRunSpell;
 import org.mule.weave.cli.pico.PicoToDW1;
@@ -38,7 +39,7 @@ public class DWCLI {
     }
 
     public void run(String[] args, Console console) {
-        int exitCode = new CommandLine(new DataWeaveCLIRunner(console), new DWFactory(console))
+        int exitCode = new CommandLine(new DataWeaveCLIRunner(), new DWFactory(console))
                 .execute(args);
         System.exit(exitCode);
     }
@@ -53,7 +54,8 @@ public class DWCLI {
                     PicoToDW1.class,
                     PicoRunSpell.class,
                     PicoUpdateSpells.class,
-                    CommandLine.HelpCommand.class
+                    CommandLine.HelpCommand.class,
+                    PicoRepl.class
             },
             header = " ____   __  ____  __   _  _  ____   __   _  _  ____ \n" +
                     "(    \\ / _\\(_  _)/ _\\ / )( \\(  __) / _\\ / )( \\(  __)\n" +
@@ -68,26 +70,17 @@ public class DWCLI {
                     "\n" +
                     " https://docs.mulesoft.com/dataweave/latest/",
             versionProvider = PicoVersionProvider.class)
-    public static class DataWeaveCLIRunner extends AbstractPicoExecCommand {
+    public static class DataWeaveCLIRunner implements Runnable {
 
-        public DataWeaveCLIRunner(Console console) {
-            super(console);
-        }
+        @CommandLine.Spec
+        CommandLine.Model.CommandSpec spec;
 
         @Override
-        protected Integer doCall() {
-            ReplConfiguration replConfiguration = new ReplConfiguration(
-                    new String[0],
-                    Option.empty(),
-                    Optional.ofNullable(params).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, String>empty()),
-                    Optional.ofNullable(inputs).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, File>empty()),
-                    Option.apply(privileges).map((s) -> JavaConverters.asScalaBuffer(s).toSeq()),
-                    calculateRuntimeVersion()
-            );
-            ReplCommand replCommand = new ReplCommand(replConfiguration, console);
-            return replCommand.exec();
+        public void run() {
+            spec.commandLine().usage(System.out);
         }
     }
+
 
     public static class DWFactory implements CommandLine.IFactory {
         private final Console console;
@@ -118,6 +111,8 @@ public class DWCLI {
                 return cls.cast(new PicoRunSpell(console));
             } else if (cls.isAssignableFrom(PicoUpdateSpells.class)) {
                 return cls.cast(new PicoUpdateSpells(console));
+            } else if (cls.isAssignableFrom(PicoRepl.class)) {
+                return cls.cast(new PicoRepl(console));
             } else if (Map.class.isAssignableFrom(cls)) {
                 try {
                     return cls.cast(cls.getDeclaredConstructor().newInstance());

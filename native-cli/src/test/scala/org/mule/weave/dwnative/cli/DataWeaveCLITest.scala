@@ -26,7 +26,7 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
   }
 
   private def createCommandLine(console: TestConsole) = {
-    new CommandLine(new DataWeaveCLIRunner(console), new DWFactory(console))
+    new CommandLine(new DataWeaveCLIRunner(), new DWFactory(console))
   }
 
   "should take into account the env variable for default output" in {

@@ -87,6 +87,7 @@ class ReplCommand(config: ReplConfiguration, console: Console) extends WeaveComm
       System.out.print(">>> ")
       var str = input.nextLine()
       while (str.endsWith("\\")) {
+        System.out.print("... ")
         str = str.substring(0, str.length - 1) + "\n" + input.nextLine()
       }
       if (str.equals("quit()")) {
