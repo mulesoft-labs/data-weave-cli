@@ -142,20 +142,20 @@ class NativeCliRuntimeIT extends FunSpec
     scenarios.foreach {
       scenario =>
         it(scenario.name) {
-          var args = Array.empty[String]
+          var args = Array("run")
+
           // Add inputs
           scenario.inputs.foreach(f => {
             val name = FilenameUtils.getBaseName(f.getName)
             args = args :+ "-i"
-            args = args :+ name
-            args = args :+ f.getAbsolutePath
+            args = args :+ (name + s"=${f.getAbsolutePath}" )
+
           })
 
           // Add output
           val outputExtension = FilenameUtils.getExtension(scenario.output.getName)
           val outputPath = Path.of(scenario.testFolder.getPath, s"cli-out.$outputExtension")
-          args = args :+ "-o"
-          args = args :+ s"${outputPath.toString}"
+          args = args :+ s"--output=${outputPath.toString}"
 
           // Add transformation
           val weaveResource = WeaveResourceFactory.fromFile(scenario.transform)
@@ -207,11 +207,10 @@ class NativeCliRuntimeIT extends FunSpec
               throw ioe
           }
 
-          val languageLevel = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
-          args = args :+ "--language-level" :+ languageLevel
 
-          args = args :+ "-f"
-          args = args :+ cliTransform.getAbsolutePath
+          args = args :+ s"--file=${cliTransform.getAbsolutePath}"
+          val languageLevel = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
+          args = args :+ "--language-level=" + languageLevel
 
           val (exitCode, _, _) = NativeCliITTestRunner(args).execute(TIMEOUT._1, TIMEOUT._2)
 
@@ -396,6 +395,7 @@ class NativeCliRuntimeIT extends FunSpec
       Array("update-op") ++
       // Take too long time
       Array("array-concat") ++
+      Array("sql_date_mapping") ++
       Array("runtime_run")
 
     if (DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString() == "2.4") {

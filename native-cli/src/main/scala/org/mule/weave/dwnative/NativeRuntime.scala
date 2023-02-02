@@ -14,6 +14,7 @@ import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
 import org.mule.weave.v2.model.service.{CharsetProviderService, DefaultLanguageLevelService, DefaultSecurityManagerService, LanguageLevelService, LoggingService, ProtocolUrlSourceProviderResolverService, ReadFunctionProtocolHandler, SecurityManagerService, UrlProtocolHandler, UrlSourceProviderResolverService, WeaveLanguageLevelService, WeaveRuntimePrivilege}
 import org.mule.weave.v2.model.values.BinaryValue
+import org.mule.weave.v2.module.MimeType
 import org.mule.weave.v2.module.reader.AutoPersistedOutputStream
 import org.mule.weave.v2.module.reader.SourceProvider
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
@@ -91,7 +92,7 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console, maybeLang
       val dataWeaveScript: DataWeaveScript = compileScript(script, inputs, NameIdentifier(nameIdentifier), defaultOutputMimeType)
       val serviceManager: ServiceManager = createServiceManager(maybePrivileges)
       val result: DataWeaveResult = dataWeaveScript.write(inputs, serviceManager, Option(out))
-      WeaveSuccessResult(out, result.getCharset().name())
+      WeaveSuccessResult(out, result.getCharset().name(), result.getMimeType())
     } catch {
       case cr: CompilationException =>
         WeaveFailureResult(cr.getMessage())
@@ -201,7 +202,7 @@ sealed trait WeaveExecutionResult {
 
 }
 
-case class WeaveSuccessResult(outputStream: OutputStream, charset: String) extends WeaveExecutionResult {
+case class WeaveSuccessResult(outputStream: OutputStream, charset: String, mimeType: String) extends WeaveExecutionResult {
   override def success(): Boolean = true
 
   override def result(): String = {

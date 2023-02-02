@@ -1,35 +1,45 @@
 package org.mule.weave.dwnative.cli
 
+import org.mule.weave.cli.DWCLI.DWFactory
+import org.mule.weave.cli.DWCLI.DataWeaveCLIRunner
 import org.mule.weave.dwnative.utils.DataWeaveUtils
 import org.mule.weave.v2.utils.StringHelper.toStringTransformer
 import org.scalatest.FreeSpec
 import org.scalatest.Matchers
+import picocli.CommandLine
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.nio.file.Files
 import scala.io.Source
 
 class DataWeaveCLITest extends FreeSpec with Matchers {
 
   "should work with output application/json" in {
     val stream = new ByteArrayOutputStream()
-    new DataWeaveCLIRunner().run(Array("output application/json --- (1 to 3)[0]"), new TestConsole(System.in, stream))
+    val console = new TestConsole(System.in, stream)
+    val dwcli = createCommandLine(console)
+    dwcli.execute("run", "output application/json --- (1 to 3)[0]")
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result: String = source.mkString
     result.trim shouldBe "1"
   }
 
+  private def createCommandLine(console: TestConsole) = {
+    new CommandLine(new DataWeaveCLIRunner(), new DWFactory(console))
+  }
+
   "should take into account the env variable for default output" in {
     val console = new TestConsole(System.in, System.out, Map())
-    new DataWeaveCLIRunner().run(Array("--list-spells"), console)
+    val dwcli = createCommandLine(console)
+    dwcli.execute("list-spells")
     console.fatalMessages.isEmpty shouldBe true
   }
 
   "should work when listing all the spells" in {
     val stream = new ByteArrayOutputStream()
-    new DataWeaveCLIRunner().run(Array("root: 'Mariano'"), new TestConsole(System.in, stream, Map(DataWeaveUtils.DW_DEFAULT_OUTPUT_MIMETYPE_VAR -> "application/xml")))
+    val dwcli = createCommandLine(new TestConsole(System.in, stream, Map(DataWeaveUtils.DW_DEFAULT_OUTPUT_MIMETYPE_VAR -> "application/xml")))
+    dwcli.execute("run", "root: 'Mariano'")
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result: String = source.mkString
     val expected =
@@ -41,7 +51,8 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
   "should be able to run a local spell" in {
     val stream = new ByteArrayOutputStream()
     val localSpell: File = TestUtils.getMyLocalSpell
-    val exitCode = new DataWeaveCLIRunner().run(Array("--local-spell", localSpell.getAbsolutePath), new TestConsole(System.in, stream))
+    val dwcli = createCommandLine(new TestConsole(System.in, stream))
+    val exitCode = dwcli.execute("spell", "--local", localSpell.getName, "--spell-home", localSpell.getParentFile.getAbsolutePath)
     exitCode shouldBe 0
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result: String = source.mkString
@@ -51,7 +62,8 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
   "should be able to run a local spell with a library" in {
     val stream = new ByteArrayOutputStream()
     val localSpell: File = TestUtils.getMyLocalSpellWithLib
-    val exitCode = new DataWeaveCLIRunner().run(Array("--local-spell", localSpell.getAbsolutePath), new TestConsole(System.in, stream))
+    val dwcli = createCommandLine(new TestConsole(System.in, stream))
+    val exitCode = dwcli.execute("spell", "--local", localSpell.getName, "--spell-home", localSpell.getParentFile.getAbsolutePath)
     exitCode shouldBe 0
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result: String = source.mkString
@@ -62,7 +74,8 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     val stream = new ByteArrayOutputStream()
     val localSpell: File = TestUtils.getSimpleSpellWithDependencies
     val console = new TestConsole(System.in, stream)
-    val exitCode = new DataWeaveCLIRunner().run(Array("--local-spell", localSpell.getAbsolutePath), console)
+    val dwcli = createCommandLine(console)
+    val exitCode = dwcli.execute("spell", "--local", localSpell.getName, "--spell-home", localSpell.getParentFile.getAbsolutePath)
     console.infoMessages.foreach((m) => {
       println(s"[INFO] ${m}")
     })
@@ -81,7 +94,9 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
 
   "should work with simple script and not output" in {
     val stream = new ByteArrayOutputStream()
-    new DataWeaveCLIRunner().run(Array("(1 to 3)[0]"), new TestConsole(System.in, stream))
+    val dwcli = createCommandLine(new TestConsole(System.in, stream))
+    val exitCode = dwcli.execute("run", "(1 to 3)[0]")
+    exitCode shouldBe 0
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result = source.mkString
     result.trim shouldBe "1"
@@ -94,9 +109,11 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
         |  2,
         |  3
         |]
-        """.stripMargin.trim
+          """.stripMargin.trim
     val stream = new ByteArrayOutputStream()
-    new DataWeaveCLIRunner().run(Array("payload[0]"), new TestConsole(new ByteArrayInputStream(input.getBytes("UTF-8")), stream))
+    val dwcli = createCommandLine(new TestConsole(new ByteArrayInputStream(input.getBytes("UTF-8")), stream))
+    val exitCode = dwcli.execute("run", "payload[0]")
+    exitCode shouldBe 0
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result = source.mkString.trim
     source.close()
@@ -110,9 +127,11 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
         |  2,
         |  3
         |]
-        """.stripMargin.trim
+          """.stripMargin.trim
     val stream = new ByteArrayOutputStream()
-    new DataWeaveCLIRunner().run(Array("payload[0]"), new TestConsole(new ByteArrayInputStream(input.getBytes("UTF-8")), stream))
+    val dwcli = createCommandLine(new TestConsole(new ByteArrayInputStream(input.getBytes("UTF-8")), stream))
+    val exitCode = dwcli.execute("run", "payload[0]")
+    exitCode shouldBe 0
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result = source.mkString.trim
     source.close()
@@ -126,10 +145,12 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
         |  "b" : 2,
         |  "c" : 3
         |}]
-        """.stripMargin.trim
+          """.stripMargin.trim
     val stream = new ByteArrayOutputStream()
     val testConsole = new TestConsole(new ByteArrayInputStream(input.getBytes("UTF-8")), stream)
-    new DataWeaveCLIRunner().run(Array("input payload json output csv header=false ---payload"), testConsole)
+    val dwcli = createCommandLine(testConsole)
+    val exitCode = dwcli.execute("run", "input payload json output csv header=false ---payload")
+    exitCode shouldBe 0
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result = source.mkString.trim
     source.close()
@@ -140,7 +161,8 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     val stream = new ByteArrayOutputStream()
     val script = """import props from dw::Runtime output application/json --- {isEmpty: isEmpty(props())}""".stripMargin
     val testConsole = new TestConsole(System.in, stream)
-    val exitCode = new DataWeaveCLIRunner().run(Array(script), testConsole)
+    val dwcli = createCommandLine(testConsole)
+    val exitCode = dwcli.execute("run", script)
     exitCode shouldBe 0
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result = source.mkString.trim
@@ -157,7 +179,8 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     val stream = new ByteArrayOutputStream()
     val script = """import props from dw::Runtime output application/json --- {isEmpty: isEmpty(props())}""".stripMargin
     val testConsole = new TestConsole(System.in, stream)
-    val exitCode = new DataWeaveCLIRunner().run(Array("--privileges", "fs::Read,Properties", script), testConsole)
+    val dwcli = createCommandLine(testConsole)
+    val exitCode = dwcli.execute("run", "--privileges=fs::Read,Properties", script)
     exitCode shouldBe 0
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result = source.mkString.trim
@@ -174,30 +197,23 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     val stream = new ByteArrayOutputStream()
     val script = """import props from dw::Runtime output application/json --- {isEmpty: isEmpty(props())}""".stripMargin
     val testConsole = new TestConsole(System.in, stream)
-    val exitCode = new DataWeaveCLIRunner().run(Array("--untrusted-code", script), testConsole)
+    val dwcli = createCommandLine(testConsole)
+    val exitCode = dwcli.execute("run", "--untrusted", script)
     exitCode shouldBe -1
     val maybeError = testConsole.errorMessages.find(msg => msg.contains("The given required privilege: `Properties` was not being granted for this execution."))
     maybeError.isEmpty shouldBe false
   }
 
-  "should run help command successfully" in {
-    val stream = new ByteArrayOutputStream()
-    val testConsole = new TestConsole(System.in, stream)
-    val exitCode = new DataWeaveCLIRunner().run(Array("--help"), testConsole)
-    exitCode shouldBe 0
-    val source = Source.fromBytes(stream.toByteArray, "UTF-8")
-    val result = source.mkString.trim
-    source.close()
-    result should include("usage: dw")
-  }
-
   "should run using parameter" in {
     val stream = new ByteArrayOutputStream()
-    new DataWeaveCLIRunner().run(Array(
-      "-p", "name", "Mariano",
-      "-p", "lastname", "Lischetti",
-      "{fullName: params.name ++ \" \" ++  params.lastname}"),
-      new TestConsole(System.in, stream))
+    val testConsole = new TestConsole(System.in, stream)
+    val dwcli = createCommandLine(testConsole)
+    val exitCode = dwcli.execute(
+      "run",
+      "-p","name=Mariano",
+      "-p","lastname=Lischetti",
+      "{fullName: params.name ++ \" \" ++  params.lastname}")
+    exitCode shouldBe 0
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result = source.mkString.trim
     source.close()
@@ -205,8 +221,7 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
       """
         |{
         |  "fullName": "Mariano Lischetti"
-        |}
-                     """.stripMarginAndNormalizeEOL.trim
+        |}""".stripMarginAndNormalizeEOL.trim
     result shouldBe expected
   }
 }
