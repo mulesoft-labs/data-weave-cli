@@ -21,10 +21,13 @@ import org.mule.weave.v2.parser.ast.header.directives.OutputDirective
 import org.mule.weave.v2.parser.ast.structure.StringNode
 import org.mule.weave.v2.sdk.ParsingContextFactory
 import org.mule.weave.v2.sdk.WeaveResourceFactory
+import org.mule.weave.v2.utils.DataWeaveVersion
 import org.mule.weave.v2.utils.StringHelper.toStringTransformer
+import org.mule.weave.v2.version.ComponentVersion
 import org.scalatest.Assertion
 import org.scalatest.FunSpec
 import org.scalatest.Matchers
+import sun.net.www.protocol.file.FileURLConnection
 
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -32,8 +35,6 @@ import java.io.FileFilter
 import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
-import java.net.JarURLConnection
-import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -45,8 +46,6 @@ import javax.mail.util.ByteArrayDataSource
 import scala.collection.JavaConverters._
 import scala.io.BufferedSource
 import scala.io.Source
-import scala.io.Source.fromFile
-import scala.util.Try
 
 class NativeCliRuntimeIT extends FunSpec
   with Matchers
@@ -56,20 +55,19 @@ class NativeCliRuntimeIT extends FunSpec
 
   private val TIMEOUT: (Int, TimeUnit) = (30, TimeUnit.SECONDS)
   private val INPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile("in[0-9]+-config\\.properties")
-  private val OUTPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile("out[0-9]+-config\\.properties")
+  private val OUTPUT_FILE_CONFIG_PROPERTY_PATTERN = Pattern.compile("out[0-9]*-config\\.properties")
   private val INPUT_FILE_PATTERN = Pattern.compile("in[0-9]+\\.[a-zA-Z]+")
   private val OUTPUT_FILE_PATTERN = Pattern.compile("out\\.[a-zA-Z]+")
 
-  val testSuites =
-    Seq(
-      TestSuite("master", loadTestZipFile("access_raw_value")),
-      TestSuite("yaml", loadTestZipFile("comments"))
+  val testSuites = Seq(
+      TestSuite("master", loadTestZipFile(s"weave-suites/runtime-${ComponentVersion.weaveSuiteVersion}-test.zip")),
+      TestSuite("yaml", loadTestZipFile(s"weave-suites/yaml-module-${ComponentVersion.weaveSuiteVersion}-test.zip"))
     )
 
   private def loadTestZipFile(testSuiteExample: String): File = {
     val url = getResource(testSuiteExample)
-    val connection = url.openConnection.asInstanceOf[JarURLConnection]
-    val zipFile = new File(connection.getJarFileURL.toURI)
+    val connection = url.openConnection.asInstanceOf[FileURLConnection]
+    val zipFile = new File(connection.getURL.toURI)
     zipFile
   }
 
@@ -209,8 +207,10 @@ class NativeCliRuntimeIT extends FunSpec
               throw ioe
           }
 
-          args = args :+ s"--file=${cliTransform.getAbsolutePath}"
 
+          args = args :+ s"--file=${cliTransform.getAbsolutePath}"
+          val languageLevel = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
+          args = args :+ "--language-level=" + languageLevel
 
           val (exitCode, _, _) = NativeCliITTestRunner(args).execute(TIMEOUT._1, TIMEOUT._2)
 
@@ -354,7 +354,7 @@ class NativeCliRuntimeIT extends FunSpec
 
   override def ignoreTests(): Array[String] = {
     // Encoding issues
-    Array("csv-invalid-utf8") ++
+    val baseArray = Array("csv-invalid-utf8") ++
       // Fail in java11 because broken backwards
       Array("coerciones_toString", "date-coercion") ++
       // Use resources (dwl files) that is present in the Tests but not in Cli (e.g: org::mule::weave::v2::libs::)
@@ -382,6 +382,7 @@ class NativeCliRuntimeIT extends FunSpec
         "runtime_run_coercionException",
         "runtime_run_fibo",
         "runtime_run_null_java",
+        "sql_date_mapping",
         "write-function-with-null"
       ) ++
       // Multipart Object has empty `parts` and expects at least one part
@@ -396,6 +397,36 @@ class NativeCliRuntimeIT extends FunSpec
       Array("array-concat") ++
       Array("sql_date_mapping") ++
       Array("runtime_run")
+
+    if (DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString() == "2.4") {
+      baseArray ++
+        // A change to json streaming in 2.5.0 breaks this test
+        Array("default_with_extended_null_type") ++
+        // Change in validations in 2.5.0 breaks these tests
+        Array("logical-and",
+          "logical-or"
+        ) ++
+        Array("coerciones_toBinary") ++
+        // 2.5.0 dwl now prints metadata breaking these tests
+        Array("dfl-inline-default-namespace",
+          "dfl-inline-namespace",
+          "dfl-maxCollectionSize",
+          "dfl-overwrite-namespace",
+          "multipart-base64-to-multipart",
+          "xml-nill-multiple-attributes-nested",
+          "xml-nill-multiple-attributes",
+          "read_scalar_values"
+        ) ++
+        // A change of positions on dw::Core 2.5.0 breaks this test
+        Array(
+          "runtime_run_unhandled_compilation_exception"
+        ) ++
+        Array("as-operator",
+          "type-equality"
+        )
+    } else {
+      baseArray
+    }
   }
 }
 
