@@ -49,11 +49,8 @@ public class DWCLI {
             subcommands = {
                     PicoRunScript.class,
                     PicoAddWizard.class,
-                    PicoCreateSpell.class,
-                    PicoListSpells.class,
                     PicoToDW1.class,
                     PicoRunSpell.class,
-                    PicoUpdateSpells.class,
                     CommandLine.HelpCommand.class,
                     PicoRepl.class
             },

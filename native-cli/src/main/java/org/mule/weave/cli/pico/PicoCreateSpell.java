@@ -8,7 +8,7 @@ import picocli.CommandLine;
 import java.util.concurrent.Callable;
 
 @CommandLine.Command(
-        name = "new-spell",
+        name = "create",
         description =
                 "Creates a new spell with the given name."
 

@@ -8,7 +8,7 @@ import picocli.CommandLine;
 import java.util.concurrent.Callable;
 
 @CommandLine.Command(
-        name = "update-spells",
+        name = "update",
         description = "Update all spells to the latest one."
 
 )

@@ -8,7 +8,7 @@ import picocli.CommandLine;
 import java.util.concurrent.Callable;
 
 @CommandLine.Command(
-        name = "list-spell",
+        name = "list",
         description =
                 "List all available spells."
 

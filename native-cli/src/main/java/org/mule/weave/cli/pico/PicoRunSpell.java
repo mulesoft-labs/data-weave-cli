@@ -26,7 +26,12 @@ import java.util.Optional;
 
 @CommandLine.Command(
         name = "spell",
-        description = "Runs the specified Spell."
+        description = "Runs the specified Spell.",
+        subcommands = {
+                PicoCreateSpell.class,
+                PicoListSpells.class,
+                PicoUpdateSpells.class
+        }
 )
 public class PicoRunSpell extends AbstractPicoRunCommand {
 
