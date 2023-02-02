@@ -25,13 +25,17 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
+import static picocli.CommandLine.Model.UsageMessageSpec.SECTION_KEY_COMMAND_LIST;
+
 public class DWCLI {
     public static void main(String[] args) {
         new DWCLI().run(args, DefaultConsole$.MODULE$);
     }
 
     public void run(String[] args, Console console) {
-        int exitCode = new CommandLine(new DataWeaveCLIRunner(), new DWFactory(console))
+        CommandLine commandLine = new CommandLine(new DataWeaveCLIRunner(), new DWFactory(console));
+        commandLine.getHelpSectionMap().put(SECTION_KEY_COMMAND_LIST, new CommandHelpRenderer());
+        int exitCode = commandLine
                 .execute(args);
         System.exit(exitCode);
     }
@@ -111,6 +115,47 @@ public class DWCLI {
             } else {
                 return cls.newInstance();
             }
+        }
+    }
+
+
+    public static class CommandHelpRenderer implements CommandLine.IHelpSectionRenderer {
+        @Override
+        public String render(CommandLine.Help help) {
+            CommandLine.Model.CommandSpec spec = help.commandSpec();
+            if (spec.subcommands().isEmpty()) {
+                return "";
+            }
+            CommandLine.Help.TextTable textTable =
+                CommandLine.Help.TextTable.forColumns(
+                    help.ansi(),
+                    new CommandLine.Help.Column(15, 2, CommandLine.Help.Column.Overflow.SPAN),
+                    new CommandLine.Help.Column(spec.usageMessage().width() - 15, 2, CommandLine.Help.Column.Overflow.WRAP));
+
+            for (CommandLine subcommand : spec.subcommands().values()) {
+                addHierarchy(subcommand, textTable, "");
+            }
+            return textTable.toString();
+        }
+
+        private void addHierarchy(CommandLine cmd, CommandLine.Help.TextTable textTable, String indent) {
+            String names = cmd.getCommandSpec().names().toString();
+            names = names.substring(1, names.length() - 1);
+            String description = description(cmd.getCommandSpec().usageMessage());
+            textTable.addRowValues(indent + names, indent + description);
+            for (CommandLine sub : cmd.getSubcommands().values()) {
+                addHierarchy(sub, textTable, indent + "  ");
+            }
+        }
+
+        private String description(CommandLine.Model.UsageMessageSpec usageMessage) {
+            if (usageMessage.header().length > 0) {
+                return usageMessage.header()[0];
+            }
+            if (usageMessage.description().length > 0) {
+                return usageMessage.description()[0];
+            }
+            return "";
         }
     }
 }
