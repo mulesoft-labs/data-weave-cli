@@ -1,33 +1,25 @@
 package org.mule.weave.cli;
 
 
-import org.mule.weave.cli.pico.AbstractPicoExecCommand;
 import org.mule.weave.cli.pico.PicoAddWizard;
 import org.mule.weave.cli.pico.PicoCreateSpell;
 import org.mule.weave.cli.pico.PicoListSpells;
 import org.mule.weave.cli.pico.PicoRepl;
 import org.mule.weave.cli.pico.PicoRunScript;
 import org.mule.weave.cli.pico.PicoRunSpell;
-import org.mule.weave.cli.pico.PicoToDW1;
+import org.mule.weave.cli.pico.PicoMigrate;
 import org.mule.weave.cli.pico.PicoUpdateSpells;
 import org.mule.weave.cli.pico.PicoVersionProvider;
 import org.mule.weave.dwnative.cli.Console;
 import org.mule.weave.dwnative.cli.DefaultConsole$;
-import org.mule.weave.dwnative.cli.commands.ReplCommand;
-import org.mule.weave.dwnative.cli.commands.ReplConfiguration;
 import picocli.CommandLine;
-import scala.Option;
-import scala.collection.JavaConverters;
-import scala.collection.immutable.Map$;
 
-import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.SortedSet;
@@ -49,7 +41,7 @@ public class DWCLI {
             subcommands = {
                     PicoRunScript.class,
                     PicoAddWizard.class,
-                    PicoToDW1.class,
+                    PicoMigrate.class,
                     PicoRunSpell.class,
                     CommandLine.HelpCommand.class,
                     PicoRepl.class

@@ -11,10 +11,10 @@ import java.util.concurrent.Callable;
 
 //PicCli wrapper
 @CommandLine.Command(
-        name = "from-dw1",
+        name = "migrate",
         description = "Translates a DW1 script into a DW2 script."
 )
-public class PicoToDW1 implements Callable<Integer> {
+public class PicoMigrate implements Callable<Integer> {
 
     Console console;
 
@@ -25,11 +25,11 @@ public class PicoToDW1 implements Callable<Integer> {
     )
     private File dw1File = null;
 
-    public PicoToDW1() {
+    public PicoMigrate() {
         this(DefaultConsole$.MODULE$);
     }
 
-    public PicoToDW1(Console console) {
+    public PicoMigrate(Console console) {
         this.console = console;
     }
 

@@ -27,7 +27,7 @@ class NativeCliTest extends FreeSpec
   "it should execute simple migration correctly" in {
     val stream: URL = getClass.getClassLoader.getResource("dw1/SimpleFile.dw1")
     val file = new File(stream.toURI)
-    val (_, output, _) = NativeCliITTestRunner(Array("from-dw1", file.getAbsolutePath)).execute()
+    val (_, output, _) = NativeCliITTestRunner(Array("migrate", file.getAbsolutePath)).execute()
     output.trim shouldBe
       """
         |%dw 2.0
