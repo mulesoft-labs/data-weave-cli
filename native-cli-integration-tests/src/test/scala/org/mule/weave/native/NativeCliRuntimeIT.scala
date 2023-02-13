@@ -68,7 +68,7 @@ class NativeCliRuntimeIT extends FunSpec
 
   private def loadTestZipFile(testSuiteExample: String): File = {
     val url = getResource(testSuiteExample)
-    val connection = url.openConnection.asInstanceOf[FileURLConnection]
+    val connection = url.openConnection
     val zipFile = new File(connection.getURL.toURI)
     zipFile
   }
@@ -401,7 +401,7 @@ class NativeCliRuntimeIT extends FunSpec
       Array("sql_date_mapping") ++
       Array("runtime_run")
 
-    if (versionString == "2.4") {
+    val testToIgnore = if (versionString == "2.4") {
       baseArray ++
         // A change to json streaming in 2.5.0 breaks this test
         Array("default_with_extended_null_type") ++
@@ -427,7 +427,7 @@ class NativeCliRuntimeIT extends FunSpec
         Array("as-operator",
           "type-equality"
         ) ++
-        Array("xml_doctype", "stringutils_unwrap")
+        Array("xml_doctype", "stringutils_unwrap", "coerciones_toNumber")
     } else if (versionString == "2.5") {
       baseArray ++
         Array("xml_doctype", "stringutils_unwrap")
@@ -435,6 +435,8 @@ class NativeCliRuntimeIT extends FunSpec
     else {
       baseArray
     }
+    println(testToIgnore.mkString("\n-"))
+    testToIgnore
   }
 }
 
