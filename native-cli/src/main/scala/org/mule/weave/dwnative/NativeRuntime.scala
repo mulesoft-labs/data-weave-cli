@@ -25,6 +25,7 @@ import org.mule.weave.v2.parser.phase.CompositeModuleParsingPhasesManager
 import org.mule.weave.v2.parser.phase.ModuleLoader
 import org.mule.weave.v2.parser.phase.ModuleLoaderManager
 import org.mule.weave.v2.parser.phase.ModuleParsingPhasesManager
+import org.mule.weave.v2.runtime.CompilationConfig
 import org.mule.weave.v2.runtime.DataWeaveResult
 import org.mule.weave.v2.runtime.DataWeaveScript
 import org.mule.weave.v2.runtime.DataWeaveScriptingEngine
@@ -64,7 +65,7 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console, maybeLang
 
   private val weaveScriptingEngine: DataWeaveScriptingEngine = {
     setupEnv()
-    new DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration(), new Properties(), languageLevelService = languageLevelService)
+    new DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration(), new Properties())
   }
 
   if (console.isDebugEnabled()) {
@@ -108,7 +109,12 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console, maybeLang
   }
 
   private def compileScript(script: String, inputs: ScriptingBindings, nameIdentifier: NameIdentifier, defaultOutputMimeType: String) = {
-    weaveScriptingEngine.compile(script, nameIdentifier, inputs.entries().map(wi => new InputType(wi, None)).toArray, defaultOutputMimeType)
+    val config = weaveScriptingEngine.newConfig()
+      .withScript(script)
+      .withInputs(inputs.entries().map(wi => new InputType(wi, None)).toArray)
+      .withNameIdentifier(nameIdentifier)
+      .withDefaultOutputType(defaultOutputMimeType)
+    weaveScriptingEngine.compileWith(config)
   }
 
   private def createServiceManager(maybePrivileges: Option[Seq[String]] = None): ServiceManager = {
