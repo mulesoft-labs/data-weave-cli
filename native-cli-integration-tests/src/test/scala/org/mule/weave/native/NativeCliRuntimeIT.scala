@@ -430,7 +430,7 @@ class NativeCliRuntimeIT extends FunSpec
         )
     } else if (versionString == "2.4" || versionString == "2.5") {
       baseArray ++
-        Array("xml_doctype")
+        Array("xml_doctype", "stringutils_unwrap")
     }
     else {
       baseArray
