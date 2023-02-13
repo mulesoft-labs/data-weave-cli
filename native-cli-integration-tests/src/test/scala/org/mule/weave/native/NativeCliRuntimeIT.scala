@@ -435,7 +435,6 @@ class NativeCliRuntimeIT extends FunSpec
     else {
       baseArray
     }
-    println(testToIgnore.mkString("\n-"))
     testToIgnore
   }
 }
