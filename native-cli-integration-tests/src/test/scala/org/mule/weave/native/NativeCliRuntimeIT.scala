@@ -131,6 +131,8 @@ class NativeCliRuntimeIT extends FunSpec
     }
   }
 
+  private val versionString: String = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
+
   def runTestCase(testFolders: Array[File]): Unit = {
     val unsortedScenarios = for {
       testFolder <- testFolders
@@ -209,7 +211,7 @@ class NativeCliRuntimeIT extends FunSpec
 
 
           args = args :+ s"--file=${cliTransform.getAbsolutePath}"
-          val languageLevel = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
+          val languageLevel = versionString
           args = args :+ "--language-level=" + languageLevel
 
           val (exitCode, _, _) = NativeCliITTestRunner(args).execute(TIMEOUT._1, TIMEOUT._2)
@@ -398,7 +400,7 @@ class NativeCliRuntimeIT extends FunSpec
       Array("sql_date_mapping") ++
       Array("runtime_run")
 
-    if (DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString() == "2.4") {
+    if (versionString == "2.4") {
       baseArray ++
         // A change to json streaming in 2.5.0 breaks this test
         Array("default_with_extended_null_type") ++
@@ -424,7 +426,11 @@ class NativeCliRuntimeIT extends FunSpec
         Array("as-operator",
           "type-equality"
         )
-    } else {
+    } else if (versionString == "2.4" || versionString == "2.5") {
+      baseArray ++
+        Array("xml_doctype")
+    }
+    else {
       baseArray
     }
   }
