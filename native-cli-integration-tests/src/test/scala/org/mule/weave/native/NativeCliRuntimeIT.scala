@@ -59,6 +59,8 @@ class NativeCliRuntimeIT extends FunSpec
   private val INPUT_FILE_PATTERN = Pattern.compile("in[0-9]+\\.[a-zA-Z]+")
   private val OUTPUT_FILE_PATTERN = Pattern.compile("out\\.[a-zA-Z]+")
 
+  private val versionString: String = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
+
   val testSuites = Seq(
       TestSuite("master", loadTestZipFile(s"weave-suites/runtime-${ComponentVersion.weaveSuiteVersion}-test.zip")),
       TestSuite("yaml", loadTestZipFile(s"weave-suites/yaml-module-${ComponentVersion.weaveSuiteVersion}-test.zip"))
@@ -131,7 +133,7 @@ class NativeCliRuntimeIT extends FunSpec
     }
   }
 
-  private val versionString: String = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
+
 
   def runTestCase(testFolders: Array[File]): Unit = {
     val unsortedScenarios = for {
