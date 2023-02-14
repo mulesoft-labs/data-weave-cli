@@ -427,7 +427,7 @@ class NativeCliRuntimeIT extends FunSpec
         Array("as-operator",
           "type-equality"
         ) ++
-        Array("xml_doctype", "stringutils_unwrap", "coerciones_toNumber")
+        Array("xml_doctype", "stringutils_unwrap")
     } else if (versionString == "2.5") {
       baseArray ++
         Array("xml_doctype", "stringutils_unwrap")

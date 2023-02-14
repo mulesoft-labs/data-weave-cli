@@ -56,13 +56,6 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console, maybeLang
 
   private val pathBasedResourceResolver: PathBasedResourceResolver = PathBasedResourceResolver(path ++ Option(libDir.listFiles()).getOrElse(new Array[File](0)))
 
-  private val languageLevelService: LanguageLevelService = {
-    maybeLanguageLevel match {
-      case Some(version) => WeaveLanguageLevelService(version)
-      case None => DefaultLanguageLevelService
-    }
-  }
-
   private val weaveScriptingEngine: DataWeaveScriptingEngine = {
     setupEnv()
     new DataWeaveScriptingEngine(new NativeModuleComponentFactory(() => pathBasedResourceResolver, systemFirst = true), ParserConfiguration(), new Properties())
@@ -109,11 +102,15 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console, maybeLang
   }
 
   private def compileScript(script: String, inputs: ScriptingBindings, nameIdentifier: NameIdentifier, defaultOutputMimeType: String) = {
-    val config = weaveScriptingEngine.newConfig()
+    var config = weaveScriptingEngine.newConfig()
       .withScript(script)
       .withInputs(inputs.entries().map(wi => new InputType(wi, None)).toArray)
       .withNameIdentifier(nameIdentifier)
       .withDefaultOutputType(defaultOutputMimeType)
+
+    if (maybeLanguageLevel.isDefined) {
+      config = config.withLanguageVersion(maybeLanguageLevel.get)
+    }
     weaveScriptingEngine.compileWith(config)
   }
 
