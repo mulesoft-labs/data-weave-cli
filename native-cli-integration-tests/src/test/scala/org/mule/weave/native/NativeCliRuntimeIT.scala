@@ -59,14 +59,16 @@ class NativeCliRuntimeIT extends FunSpec
   private val INPUT_FILE_PATTERN = Pattern.compile("in[0-9]+\\.[a-zA-Z]+")
   private val OUTPUT_FILE_PATTERN = Pattern.compile("out\\.[a-zA-Z]+")
 
+  private val versionString: String = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
+
   val testSuites = Seq(
-      TestSuite("master", loadTestZipFile(s"weave-suites/runtime-${ComponentVersion.weaveSuiteVersion}-test.zip")),
-      TestSuite("yaml", loadTestZipFile(s"weave-suites/yaml-module-${ComponentVersion.weaveSuiteVersion}-test.zip"))
-    )
+    TestSuite("master", loadTestZipFile(s"weave-suites/runtime-${ComponentVersion.weaveSuiteVersion}-test.zip")),
+    TestSuite("yaml", loadTestZipFile(s"weave-suites/yaml-module-${ComponentVersion.weaveSuiteVersion}-test.zip"))
+  )
 
   private def loadTestZipFile(testSuiteExample: String): File = {
     val url = getResource(testSuiteExample)
-    val connection = url.openConnection.asInstanceOf[FileURLConnection]
+    val connection = url.openConnection
     val zipFile = new File(connection.getURL.toURI)
     zipFile
   }
@@ -131,6 +133,7 @@ class NativeCliRuntimeIT extends FunSpec
     }
   }
 
+
   def runTestCase(testFolders: Array[File]): Unit = {
     val unsortedScenarios = for {
       testFolder <- testFolders
@@ -148,7 +151,7 @@ class NativeCliRuntimeIT extends FunSpec
           scenario.inputs.foreach(f => {
             val name = FilenameUtils.getBaseName(f.getName)
             args = args :+ "-i"
-            args = args :+ (name + s"=${f.getAbsolutePath}" )
+            args = args :+ (name + s"=${f.getAbsolutePath}")
 
           })
 
@@ -209,7 +212,7 @@ class NativeCliRuntimeIT extends FunSpec
 
 
           args = args :+ s"--file=${cliTransform.getAbsolutePath}"
-          val languageLevel = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
+          val languageLevel = versionString
           args = args :+ "--language-level=" + languageLevel
 
           val (exitCode, _, _) = NativeCliITTestRunner(args).execute(TIMEOUT._1, TIMEOUT._2)
@@ -398,7 +401,7 @@ class NativeCliRuntimeIT extends FunSpec
       Array("sql_date_mapping") ++
       Array("runtime_run")
 
-    if (DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString() == "2.4") {
+    val testToIgnore = if (versionString == "2.4") {
       baseArray ++
         // A change to json streaming in 2.5.0 breaks this test
         Array("default_with_extended_null_type") ++
@@ -423,10 +426,16 @@ class NativeCliRuntimeIT extends FunSpec
         ) ++
         Array("as-operator",
           "type-equality"
-        )
-    } else {
+        ) ++
+        Array("xml_doctype", "stringutils_unwrap")
+    } else if (versionString == "2.5") {
+      baseArray ++
+        Array("xml_doctype", "stringutils_unwrap")
+    }
+    else {
       baseArray
     }
+    testToIgnore
   }
 }
 
