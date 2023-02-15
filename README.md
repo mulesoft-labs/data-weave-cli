@@ -95,12 +95,13 @@ Usage: <main class> [-hV] [COMMAND]
 Commands:
   run            Runs provided DW script.
   add-wizard     Adds a new Wizard to your network of trusted wizards.
-  new-spell      Creates a new spell with the given name.
-  list-spell     List all available spells.
-  from-dw1       Translates a DW1 script into a DW2 script.
+  migrate        Translates a DW1 script into a DW2 script.
   spell          Runs the specified Spell.
-  update-spells  Update all spells to the latest one.
+    create         Creates a new spell with the given name.
+    list           List all available spells.
+    update         Update all spells to the latest one.
   help           Display help information about the specified command.
+  repl           Starts the DW repl.
 Example:
 
  dw  run -i payload <fullPathToUser.json> "output application/json --- payload
@@ -109,7 +110,6 @@ filter (item) -> item.age > 17"
  Documentation reference:
 
  https://docs.mulesoft.com/dataweave/latest/
-
 ```
 
 ### DataWeave CLI Environment Variables
