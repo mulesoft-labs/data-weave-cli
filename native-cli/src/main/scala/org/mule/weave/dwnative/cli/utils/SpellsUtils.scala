@@ -14,7 +14,7 @@ object SpellsUtils {
 class SpellsUtils(console: Console) {
 
   def grimoireName(user: String): String = {
-    if (user == null) {
+    if (isDataWeaveWizard(user)) {
       DATA_WEAVE_GRIMOIRE_FOLDER
     } else {
       s"${user}-$DATA_WEAVE_GRIMOIRE_FOLDER"
@@ -55,10 +55,14 @@ class SpellsUtils(console: Console) {
   }
 
   def buildRepoUrl(user: String): String = {
-    val domain = if (user == null) "mulesoft-labs" else user
+    val domain = if (isDataWeaveWizard(user)) "mulesoft-labs" else user
     val repo = grimoireName(user)
     val url = s"https://github.com/${domain}/${repo}.git"
     url
+  }
+
+  def isDataWeaveWizard(user: String): Boolean = {
+    user == null || user.isBlank
   }
 
   def updateLastUpdateTimeStamp(): Boolean = {

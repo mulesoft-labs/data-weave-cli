@@ -12,7 +12,7 @@ class AddWizardCommand(config: CloneWizardConfig, console: Console) extends Weav
   override def exec(): Int = {
     val wizard = config.wizardName
     console.info(s"Downloading Grimoire From The Wise: `$wizard`.")
-    val wizardName = if (wizard == null) "DW" else wizard
+    val wizardName = if (utils.isDataWeaveWizard(wizard)) "DW" else wizard
     val wizardFolder = utils.grimoireFolder(wizard)
     if (wizardFolder.exists()) {
       console.error(s"Wizard `$wizard` was already added.")

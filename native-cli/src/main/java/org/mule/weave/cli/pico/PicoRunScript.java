@@ -71,6 +71,7 @@ public class PicoRunScript extends AbstractPicoRunCommand {
                 None$.empty(),
                 Optional.ofNullable(params).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, String>empty()),
                 Optional.ofNullable(inputs).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, File>empty()),
+                Optional.ofNullable(literalInput).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, String>empty()),
                 Option.apply(output).map((s) -> s.getAbsolutePath()),
                 Option.apply(privileges).map((s) -> JavaConverters.asScalaBuffer(s).toSeq()),
                 dataWeaveVersionOption

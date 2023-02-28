@@ -25,6 +25,20 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     result.trim shouldBe "1"
   }
 
+  "should support literal inputs" in {
+    val stream = new ByteArrayOutputStream()
+    val console = new TestConsole(System.in, stream)
+    val dwcli = createCommandLine(console)
+    dwcli.execute("run", "--literal-input", "test=[1,2,3]",
+      "input test json\n" +
+        " output json \n" +
+        "---\n" +
+        "test[1]")
+    val source = Source.fromBytes(stream.toByteArray, "UTF-8")
+    val result: String = source.mkString
+    result.trim shouldBe "2"
+  }
+
   private def createCommandLine(console: TestConsole) = {
     new CommandLine(new DataWeaveCLIRunner(), new DWFactory(console))
   }
@@ -210,8 +224,8 @@ class DataWeaveCLITest extends FreeSpec with Matchers {
     val dwcli = createCommandLine(testConsole)
     val exitCode = dwcli.execute(
       "run",
-      "-p","name=Mariano",
-      "-p","lastname=Lischetti",
+      "-p", "name=Mariano",
+      "-p", "lastname=Lischetti",
       "{fullName: params.name ++ \" \" ++  params.lastname}")
     exitCode shouldBe 0
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")

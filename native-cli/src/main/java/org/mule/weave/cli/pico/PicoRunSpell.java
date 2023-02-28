@@ -138,6 +138,7 @@ public class PicoRunSpell extends AbstractPicoRunCommand {
                 Option.apply(resolver),
                 Optional.ofNullable(params).map(AbstractPicoRunCommand::toScalaMap).orElse(Map$.MODULE$.<String, String>empty()),
                 Optional.ofNullable(inputs).map(AbstractPicoRunCommand::toScalaMap).orElse(Map$.MODULE$.<String, File>empty()),
+                Optional.ofNullable(literalInput).map(AbstractPicoRunCommand::toScalaMap).orElse(Map$.MODULE$.<String, String>empty()),
                 Option.apply(output).map(File::getAbsolutePath),
                 Option.apply(privileges).map((s) -> JavaConverters.asScalaBuffer(s).toSeq()),
                 dataWeaveVersionOption
