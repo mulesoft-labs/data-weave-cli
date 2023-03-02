@@ -84,11 +84,15 @@ class RunWeaveCommand(val config: WeaveRunnerConfig, console: Console) extends W
 
     val defaultInputType: String = console.envVar(DW_DEFAULT_INPUT_MIMETYPE_VAR).getOrElse(DEFAULT_MIME_TYPE)
     val scriptingBindings: ScriptingBindings = new ScriptingBindings
-    if (config.inputs.isEmpty) {
+    if (config.inputs.isEmpty && config.literalInput.isEmpty) {
       scriptingBindings.addBinding("payload", console.in, defaultInputType)
     } else {
       config.inputs.foreach((input) => {
         scriptingBindings.addBinding(input._1, input._2, getMimeTypeByFileExtension(input._2))
+      })
+
+      config.literalInput.foreach((input) => {
+        scriptingBindings.addBinding(input._1, input._2, None)
       })
     }
 
@@ -169,6 +173,7 @@ case class WeaveRunnerConfig(path: Array[String],
                              dependencyResolver: Option[(NativeRuntime) => Array[DependencyResolutionResult]],
                              params: Map[String, String],
                              inputs: Map[String, File],
+                             literalInput: Map[String, String],
                              outputPath: Option[String],
                              maybePrivileges: Option[Seq[String]],
                              maybeLanguageLevel: Option[DataWeaveVersion])

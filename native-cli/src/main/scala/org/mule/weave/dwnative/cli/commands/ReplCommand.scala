@@ -72,6 +72,11 @@ class ReplCommand(config: ReplConfiguration, console: Console) extends WeaveComm
     config.inputs.foreach((input) => {
       scriptingBindings.addBinding(input._1, input._2, getMimeTypeByFileExtension(input._2))
     })
+
+    config.literalInputs.foreach((input) => {
+      scriptingBindings.addBinding(input._1, input._2, None)
+    })
+
     val value: Array[KeyValuePair] = config.params.toSeq.map(prop =>
       KeyValuePair(KeyValue(prop._1), StringValue(prop._2))
     ).toArray
@@ -85,22 +90,30 @@ class ReplCommand(config: ReplConfiguration, console: Console) extends WeaveComm
     var continue = true
     while (continue) {
       System.out.print(">>> ")
-      var str = input.nextLine()
-      while (str.endsWith("\\")) {
-        System.out.print("... ")
-        str = str.substring(0, str.length - 1) + "\n" + input.nextLine()
-      }
-      if (str.equals("quit()")) {
-        continue = false
-      } else {
-        val defaultOutputType: String = console.envVar(DW_DEFAULT_OUTPUT_MIMETYPE_VAR).getOrElse("application/dw")
-        val result: WeaveExecutionResult = nativeRuntime.run(str, NameIdentifier.ANONYMOUS_NAME.name, scriptingBindings, console.out, defaultOutputType, config.maybePrivileges)
-        //load inputs from
-        if (!result.success()) {
-          System.out.println(result.result())
-        } else {
-          System.out.println("")
+      try {
+        var str = input.nextLine()
+        while (str.endsWith("\\")) {
+          System.out.print("... ")
+          str = str.substring(0, str.length - 1) + "\n" + input.nextLine()
         }
+        if (str.equals("quit()")) {
+          continue = false
+        } else {
+          val defaultOutputType: String = console.envVar(DW_DEFAULT_OUTPUT_MIMETYPE_VAR).getOrElse("application/dw")
+          val result: WeaveExecutionResult = nativeRuntime.run(str, NameIdentifier.ANONYMOUS_NAME.name, scriptingBindings, console.out, defaultOutputType, config.maybePrivileges)
+          //load inputs from
+          if (!result.success()) {
+            System.out.println(result.result())
+          } else {
+            System.out.println("")
+          }
+        }
+      } catch {
+        case e: Exception => {
+          console.fatal("Fatal error while reading the input: " + e.getMessage)
+          return ExitCodes.FAILURE
+        }
+
       }
     }
     ExitCodes.SUCCESS
@@ -111,5 +124,6 @@ case class ReplConfiguration(path: Array[String],
                              dependencyResolver: Option[(NativeRuntime) => Array[DependencyResolutionResult]],
                              params: Map[String, String],
                              inputs: Map[String, File],
+                             literalInputs: Map[String, String],
                              maybePrivileges: Option[Seq[String]],
                              maybeLanguageLevel: Option[DataWeaveVersion])

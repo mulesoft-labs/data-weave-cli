@@ -21,6 +21,9 @@ public abstract class AbstractPicoExecCommand implements Callable<Integer> {
     protected java.util.Map<String, String> params = null;
     @CommandLine.Option(names = {"--input", "-i"}, description = {"Declares a new input."}, paramLabel = "<Name=File>")
     protected java.util.Map<String, File> inputs = null;
+
+    @CommandLine.Option(names = {"--literal-input", "-li"}, description = {"Declares a new literal input."}, paramLabel = "<Name=InputContent>")
+    protected java.util.Map<String, String> literalInput = null;
     @CommandLine.Option(names = {"--verbose", "-v"}, description = {"Run the script as untrusted, which means that the script has no privileges."}, defaultValue = "false")
     protected boolean verbose = false;
     @CommandLine.Option(names = {"--untrusted"}, description = {"Run the script as untrusted, which means that the script has no privileges."}, defaultValue = "false")
