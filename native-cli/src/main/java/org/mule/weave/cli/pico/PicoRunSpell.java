@@ -127,7 +127,7 @@ public class PicoRunSpell extends AbstractPicoRunCommand {
         final SpellDependencyManager manager = new SpellDependencyManager(spellFolder, console);
         final Function1<NativeRuntime, DependencyResolutionResult[]> resolver = (nr) -> manager.resolveDependencies(nr);
 
-        Option<DataWeaveVersion> dataWeaveVersionOption = calculateRuntimeVersion();
+        Option<DataWeaveVersion> dataWeaveVersionOption = calculateRuntimeVersion(languageLevel, spec);
 
         final WeaveRunnerConfig config = WeaveRunnerConfig.apply(
                 new String[]{srcFolder.getAbsolutePath()},

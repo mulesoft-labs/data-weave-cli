@@ -8,8 +8,10 @@ import picocli.CommandLine;
 
 import java.util.concurrent.Callable;
 
+
+
 @CommandLine.Command(
-        name = "add-wizard",
+        name = "add",
         description =
                 "Adds a new Wizard to your network of trusted wizards."
 
