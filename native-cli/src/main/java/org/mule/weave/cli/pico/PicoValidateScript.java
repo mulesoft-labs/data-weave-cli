@@ -2,26 +2,31 @@ package org.mule.weave.cli.pico;
 
 import org.mule.weave.dwnative.cli.Console;
 import org.mule.weave.dwnative.cli.DefaultConsole$;
-import org.mule.weave.dwnative.cli.commands.RunWeaveCommand;
+import org.mule.weave.dwnative.cli.commands.VerifyWeaveCommand;
 import org.mule.weave.dwnative.cli.commands.WeaveModule;
-import org.mule.weave.dwnative.cli.commands.WeaveRunnerConfig;
+import org.mule.weave.dwnative.cli.commands.WeaveVerifyConfig;
 import org.mule.weave.v2.io.FileHelper;
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier;
 import org.mule.weave.v2.utils.DataWeaveVersion;
 import picocli.CommandLine;
-import scala.None$;
 import scala.Option;
-import scala.collection.JavaConverters;
-import scala.collection.immutable.Map$;
 
 import java.io.File;
-import java.util.Optional;
+import java.util.concurrent.Callable;
+
+import static org.mule.weave.cli.pico.AbstractPicoExecCommand.calculateRuntimeVersion;
+import static org.mule.weave.cli.pico.AbstractPicoExecCommand.fileToString;
 
 @CommandLine.Command(
-        name = "run",
-        description = "Runs provided DW script."
+        name = "validate",
+        description = "Validate if a script is valid or not."
 )
-public class PicoRunScript extends AbstractPicoRunCommand {
+public class PicoValidateScript implements Callable<Integer> {
+
+    Console console;
+
+    @CommandLine.Option(names = {"--language-level"}, description = {"The version of DW to be supported."})
+    protected String languageLevel = null;
 
     @CommandLine.Parameters(
             index = "0",
@@ -34,29 +39,31 @@ public class PicoRunScript extends AbstractPicoRunCommand {
     @CommandLine.Option(names = {"--file", "-f"}, description = "The Path to the dw file to run.")
     File dwFile = null;
 
+    @CommandLine.Option(names = {"--input", "-i"}, description = "The name of an in implicit input.")
+    String[] inputs = new String[0];
+
     @CommandLine.Spec
     CommandLine.Model.CommandSpec spec = null;
 
 
-    public PicoRunScript() {
-        super(DefaultConsole$.MODULE$);
+    public PicoValidateScript() {
+        this.console = DefaultConsole$.MODULE$;
     }
 
-    public PicoRunScript(Console console) {
-        super(console);
+    public PicoValidateScript(Console console) {
+        this.console = console;
     }
 
     @Override
-    protected Integer doCall() {
+    public Integer call() {
         if ((script == null && dwFile == null) || (script != null && dwFile != null)) {
             String msg = "The script and file parameters are mutually exclusive, but one is required.";
             throw new CommandLine.ParameterException(spec.commandLine(), msg);
         }
-
         Option<DataWeaveVersion> dataWeaveVersionOption = calculateRuntimeVersion(languageLevel, spec);
-        final WeaveRunnerConfig config = new WeaveRunnerConfig(
-                new String[0],
-                eval,
+
+        WeaveVerifyConfig config = new WeaveVerifyConfig(
+
                 ((nr) -> {
                     if (script != null) {
                         return new WeaveModule(script, NameIdentifier.ANONYMOUS_NAME().name());
@@ -66,15 +73,13 @@ public class PicoRunScript extends AbstractPicoRunCommand {
                         throw new RuntimeException("Missing dw script or main file");
                     }
                 }),
-                None$.empty(),
-                Optional.ofNullable(params).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, String>empty()),
-                Optional.ofNullable(inputs).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, File>empty()),
-                Optional.ofNullable(literalInput).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, String>empty()),
-                Option.apply(output).map((s) -> s.getAbsolutePath()),
-                Option.apply(privileges).map((s) -> JavaConverters.asScalaBuffer(s).toSeq()),
-                dataWeaveVersionOption
+                dataWeaveVersionOption,
+                inputs
+
         );
-        final RunWeaveCommand command = new RunWeaveCommand(config, console);
+        final VerifyWeaveCommand command = new VerifyWeaveCommand(config, console);
         return command.exec();
     }
+
+
 }

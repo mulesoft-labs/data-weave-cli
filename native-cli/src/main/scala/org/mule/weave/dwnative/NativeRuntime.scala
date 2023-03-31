@@ -101,7 +101,7 @@ class NativeRuntime(libDir: File, path: Array[File], console: Console, maybeLang
     }
   }
 
-  private def compileScript(script: String, inputs: ScriptingBindings, nameIdentifier: NameIdentifier, defaultOutputMimeType: String) = {
+  def compileScript(script: String, inputs: ScriptingBindings, nameIdentifier: NameIdentifier, defaultOutputMimeType: String): DataWeaveScript = {
     var config = weaveScriptingEngine.newConfig()
       .withScript(script)
       .withInputs(inputs.entries().map(wi => new InputType(wi, None)).toArray)

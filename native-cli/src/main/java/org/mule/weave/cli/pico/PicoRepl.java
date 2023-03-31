@@ -31,7 +31,7 @@ public class PicoRepl extends AbstractPicoExecCommand {
                 Optional.ofNullable(inputs).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, File>empty()),
                 Optional.ofNullable(literalInput).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, String>empty()),
                 Option.apply(privileges).map((s) -> JavaConverters.asScalaBuffer(s).toSeq()),
-                calculateRuntimeVersion()
+                calculateRuntimeVersion(languageLevel, spec)
         );
         ReplCommand replCommand = new ReplCommand(replConfiguration, console);
         return replCommand.exec();

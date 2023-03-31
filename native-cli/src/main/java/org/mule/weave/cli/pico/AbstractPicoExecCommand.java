@@ -51,7 +51,7 @@ public abstract class AbstractPicoExecCommand implements Callable<Integer> {
         );
     }
 
-    public String fileToString(File f) {
+    public static String fileToString(File f) {
         try {
             return Files.readString(f.toPath(), StandardCharsets.UTF_8);
         } catch (IOException e) {
@@ -73,19 +73,19 @@ public abstract class AbstractPicoExecCommand implements Callable<Integer> {
         return doCall();
     }
 
-    protected Option<DataWeaveVersion> calculateRuntimeVersion() {
+    public static Option<DataWeaveVersion> calculateRuntimeVersion(String languageLevel1, CommandLine.Model.CommandSpec spec1) {
         Option<DataWeaveVersion> dataWeaveVersionOption;
         try {
-            dataWeaveVersionOption = Option.apply(languageLevel).map((s) -> DataWeaveVersion.apply(s));
+            dataWeaveVersionOption = Option.apply(languageLevel1).map((s) -> DataWeaveVersion.apply(s));
             if (dataWeaveVersionOption.isDefined()) {
                 DataWeaveVersion dataWeaveVersion = dataWeaveVersionOption.get();
                 DataWeaveVersion currentVersion = DataWeaveVersion.apply();
                 if (dataWeaveVersion.$greater(currentVersion)) {
-                    throw new CommandLine.ParameterException(spec.commandLine(), "Invalid language level, cannot be higher than " + currentVersion.toString());
+                    throw new CommandLine.ParameterException(spec1.commandLine(), "Invalid language level, cannot be higher than " + currentVersion.toString());
                 }
             }
         } catch (NumberFormatException e) {
-            throw new CommandLine.ParameterException(spec.commandLine(), "Invalid language-level option value : `" + languageLevel + "`.");
+            throw new CommandLine.ParameterException(spec1.commandLine(), "Invalid language-level option value : `" + languageLevel1 + "`.");
         }
         return dataWeaveVersionOption;
     }
