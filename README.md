@@ -85,7 +85,7 @@ dw help
 ```
 
 ```bash
- ____   __  ____  __   _  _  ____   __   _  _  ____
+  ____   __  ____  __   _  _  ____   __   _  _  ____
 (    \ / _\(_  _)/ _\ / )( \(  __) / _\ / )( \(  __)
  ) D (/    \ )( /    \\ /\ / ) _) /    \\ \/ / ) _)
 (____/\_/\_/(__)\_/\_/(_/\_)(____)\_/\_/ \__/ (____)
@@ -94,7 +94,9 @@ Usage: <main class> [-hV] [COMMAND]
   -V, --version   Print version information and exit.
 Commands:
   run            Runs provided DW script.
-  add-wizard     Adds a new Wizard to your network of trusted wizards.
+  wizard         Wizard actions.
+    add            Adds a new Wizard to your network of trusted wizards.
+  validate       Validate if a script is valid or not.
   migrate        Translates a DW1 script into a DW2 script.
   spell          Runs the specified Spell.
     create         Creates a new spell with the given name.
