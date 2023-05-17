@@ -30,6 +30,13 @@ public abstract class AbstractPicoExecCommand implements Callable<Integer> {
     protected boolean untrusted = false;
     @CommandLine.Option(names = {"--language-level"}, description = {"The version of DW to be supported."})
     protected String languageLevel = null;
+
+    @CommandLine.Option(
+            names = {"--path"},
+            description = {"The path where DW runtime will look for resolving modules."},
+            split = ":"
+    )
+    protected java.util.List<String> path = null;
     @CommandLine.Option(
             names = {"--privileges"},
             description = {"A list of all allowed runtime privileges for this execution to have."},

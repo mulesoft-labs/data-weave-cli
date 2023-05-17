@@ -25,7 +25,7 @@ public class PicoRepl extends AbstractPicoExecCommand {
     @Override
     protected Integer doCall() {
         ReplConfiguration replConfiguration = new ReplConfiguration(
-                new String[0],
+                path.toArray(new String[0]),
                 Option.empty(),
                 Optional.ofNullable(params).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, String>empty()),
                 Optional.ofNullable(inputs).map((s) -> toScalaMap(s)).orElse(Map$.MODULE$.<String, File>empty()),
