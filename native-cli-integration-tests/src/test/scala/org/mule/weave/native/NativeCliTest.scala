@@ -2,13 +2,13 @@ package org.mule.weave.native
 
 import org.mule.weave.v2.utils.DataWeaveVersion
 import org.scalatest.BeforeAndAfterAll
-import org.scalatest.FreeSpec
-import org.scalatest.Matchers
+import org.scalatest.freespec.AnyFreeSpec
+import org.scalatest.matchers.should.Matchers
 
 import java.io.File
 import java.net.URL
 
-class NativeCliTest extends FreeSpec
+class NativeCliTest extends AnyFreeSpec
   with Matchers
   with BeforeAndAfterAll
   with ResourceResolver {

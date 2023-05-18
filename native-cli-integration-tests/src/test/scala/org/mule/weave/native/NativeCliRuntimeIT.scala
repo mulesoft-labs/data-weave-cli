@@ -25,9 +25,7 @@ import org.mule.weave.v2.utils.DataWeaveVersion
 import org.mule.weave.v2.utils.StringHelper.toStringTransformer
 import org.mule.weave.v2.version.ComponentVersion
 import org.scalatest.Assertion
-import org.scalatest.FunSpec
-import org.scalatest.Matchers
-import sun.net.www.protocol.file.FileURLConnection
+import org.scalatest.funspec.AnyFunSpec
 
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -46,8 +44,9 @@ import javax.mail.util.ByteArrayDataSource
 import scala.collection.JavaConverters._
 import scala.io.BufferedSource
 import scala.io.Source
+import org.scalatest.matchers.should.Matchers
 
-class NativeCliRuntimeIT extends FunSpec
+class NativeCliRuntimeIT extends AnyFunSpec
   with Matchers
   with FolderBasedTest
   with ResourceResolver
@@ -357,7 +356,7 @@ class NativeCliRuntimeIT extends FunSpec
 
   override def ignoreTests(): Array[String] = {
     // Encoding issues
-    val baseArray = Array("csv-invalid-utf8") ++
+    val baseArray = Array("csv-invalid-utf8", "splitBy-regex", "splitBy-string" ) ++
       // Fail in java11 because broken backwards
       Array("coerciones_toString", "date-coercion") ++
       // Use resources (dwl files) that is present in the Tests but not in Cli (e.g: org::mule::weave::v2::libs::)

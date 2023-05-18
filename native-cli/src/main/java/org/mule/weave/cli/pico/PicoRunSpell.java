@@ -22,6 +22,7 @@ import scala.collection.JavaConverters;
 import scala.collection.immutable.Map$;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Optional;
 
 @CommandLine.Command(
@@ -129,8 +130,11 @@ public class PicoRunSpell extends AbstractPicoRunCommand {
 
         Option<DataWeaveVersion> dataWeaveVersionOption = calculateRuntimeVersion(languageLevel, spec);
 
+        ArrayList<String> newPath = new ArrayList<>(path);
+        newPath.add(srcFolder.getAbsolutePath());
+
         final WeaveRunnerConfig config = WeaveRunnerConfig.apply(
-                new String[]{srcFolder.getAbsolutePath()},
+                newPath.toArray(new String[0]),
                 eval,
                 (st) -> {
                     return new WeaveModule(fileToString(mainFile), nameIdentifier.toString());

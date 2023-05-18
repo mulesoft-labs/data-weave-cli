@@ -55,7 +55,7 @@ public class PicoRunScript extends AbstractPicoRunCommand {
 
         Option<DataWeaveVersion> dataWeaveVersionOption = calculateRuntimeVersion(languageLevel, spec);
         final WeaveRunnerConfig config = new WeaveRunnerConfig(
-                new String[0],
+                path.toArray(new String[0]),
                 eval,
                 ((nr) -> {
                     if (script != null) {

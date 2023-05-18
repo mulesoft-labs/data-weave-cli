@@ -17,15 +17,13 @@ sourceSets {
 dependencies {
     api(project(":native-cli"))
 
-    testImplementation group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
     testImplementation group: 'org.mule.weave', name: 'parser', version: weaveVersion
     testImplementation group: 'org.mule.weave', name: 'test-helpers', version: weaveVersion
 
     weaveSuite "org.mule.weave:runtime:${weaveTestSuiteVersion}:test@zip"
     weaveSuite "org.mule.weave:yaml-module:${weaveTestSuiteVersion}:test@zip"
-
+    testRuntimeOnly 'com.vladsch.flexmark:flexmark-all:0.62.2'
     testImplementation 'commons-io:commons-io:2.11.0'
-    testRuntimeOnly 'org.pegdown:pegdown:1.6.0'
     testImplementation group: 'com.sun.mail', name: 'jakarta.mail', version: '1.6.4'
     testImplementation group: 'xerces', name: 'xercesImpl', version: '2.12.1'
     testImplementation group: 'xalan', name: 'xalan', version: '2.7.2'
