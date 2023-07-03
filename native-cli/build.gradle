@@ -35,7 +35,7 @@ dependencies {
     }
     implementation group: 'org.mule.weave', name: 'ndjson-module', version: weaveVersion
     testImplementation group: 'org.scalatest', name: 'scalatest_2.12', version: scalaTestVersion
-    testRuntimeOnly 'org.pegdown:pegdown:1.6.0'
+    testRuntimeOnly 'com.vladsch.flexmark:flexmark-all:0.62.2'
 }
 
 ext {

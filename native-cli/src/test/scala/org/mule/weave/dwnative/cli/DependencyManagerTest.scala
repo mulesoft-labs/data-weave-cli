@@ -1,17 +1,15 @@
 package org.mule.weave.dwnative.cli
 
 import org.mule.weave.dwnative.NativeRuntime
-import org.mule.weave.dwnative.dependencies.ResolutionErrorHandler
 import org.mule.weave.dwnative.dependencies.DependencyModel
-import org.mule.weave.dwnative.dependencies.DependencyResolutionResult
 import org.mule.weave.dwnative.dependencies.MavenDependencyModel
 import org.mule.weave.dwnative.dependencies.SpellDependencyManager
-import org.scalatest.FreeSpec
-import org.scalatest.Matchers
+import org.scalatest.freespec.AnyFreeSpec
+import org.scalatest.matchers.should.Matchers
 
 import java.io.File
 
-class DependencyManagerTest extends FreeSpec with Matchers {
+class DependencyManagerTest extends AnyFreeSpec with Matchers {
 
   "it should parse the build definition correctly" in {
     val simpleSpellWithDependencies = new File(TestUtils.getSpellsFolder(), "SimpleSpellWithDependencies")

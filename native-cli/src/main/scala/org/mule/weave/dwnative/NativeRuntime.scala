@@ -12,9 +12,8 @@ import org.mule.weave.v2.io.service.CustomWorkingDirectoryService
 import org.mule.weave.v2.io.service.WorkingDirectoryService
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
-import org.mule.weave.v2.model.service.{CharsetProviderService, DefaultLanguageLevelService, DefaultSecurityManagerService, LanguageLevelService, LoggingService, ProtocolUrlSourceProviderResolverService, ReadFunctionProtocolHandler, SecurityManagerService, UrlProtocolHandler, UrlSourceProviderResolverService, WeaveLanguageLevelService, WeaveRuntimePrivilege}
+import org.mule.weave.v2.model.service.{CharsetProviderService, DefaultSecurityManagerService, LoggingService, ProtocolUrlSourceProviderResolverService, ReadFunctionProtocolHandler, SecurityManagerService, UrlProtocolHandler, UrlSourceProviderResolverService, WeaveRuntimePrivilege}
 import org.mule.weave.v2.model.values.BinaryValue
-import org.mule.weave.v2.module.MimeType
 import org.mule.weave.v2.module.reader.AutoPersistedOutputStream
 import org.mule.weave.v2.module.reader.SourceProvider
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier
@@ -25,7 +24,6 @@ import org.mule.weave.v2.parser.phase.CompositeModuleParsingPhasesManager
 import org.mule.weave.v2.parser.phase.ModuleLoader
 import org.mule.weave.v2.parser.phase.ModuleLoaderManager
 import org.mule.weave.v2.parser.phase.ModuleParsingPhasesManager
-import org.mule.weave.v2.runtime.CompilationConfig
 import org.mule.weave.v2.runtime.DataWeaveResult
 import org.mule.weave.v2.runtime.DataWeaveScript
 import org.mule.weave.v2.runtime.DataWeaveScriptingEngine
@@ -36,7 +34,6 @@ import org.mule.weave.v2.runtime.ModuleComponentsFactory
 import org.mule.weave.v2.runtime.ParserConfiguration
 import org.mule.weave.v2.runtime.ScriptingBindings
 import org.mule.weave.v2.runtime.ScriptingEngineSetupException
-import org.mule.weave.v2.sdk.NameIdentifierHelper
 import org.mule.weave.v2.sdk.SPIBasedModuleLoaderProvider
 import org.mule.weave.v2.sdk.TwoLevelWeaveResourceResolver
 import org.mule.weave.v2.sdk.WeaveResourceResolver
