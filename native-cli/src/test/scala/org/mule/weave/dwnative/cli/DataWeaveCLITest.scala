@@ -4,8 +4,8 @@ import org.mule.weave.cli.DWCLI.DWFactory
 import org.mule.weave.cli.DWCLI.DataWeaveCLIRunner
 import org.mule.weave.dwnative.utils.DataWeaveUtils
 import org.mule.weave.v2.utils.StringHelper.toStringTransformer
-import org.scalatest.FreeSpec
-import org.scalatest.Matchers
+import org.scalatest.freespec.AnyFreeSpec
+import org.scalatest.matchers.should.Matchers
 import picocli.CommandLine
 
 import java.io.ByteArrayInputStream
@@ -13,7 +13,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import scala.io.Source
 
-class DataWeaveCLITest extends FreeSpec with Matchers {
+class DataWeaveCLITest extends AnyFreeSpec with Matchers {
 
   "should work with output application/json" in {
     val stream = new ByteArrayOutputStream()
