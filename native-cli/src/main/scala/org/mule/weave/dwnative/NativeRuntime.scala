@@ -4,12 +4,12 @@ import io.netty.util.internal.PlatformDependent
 import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.dwnative.initializer.NativeSystemModuleComponents
 import org.mule.weave.dwnative.utils.DataWeaveUtils
-import org.mule.weave.v2.exception.InvalidLocationException
+import org.mule.weave.v2.core.exception.InvalidLocationException
+import org.mule.weave.v2.core.io.service.CustomWorkingDirectoryService
+import org.mule.weave.v2.core.io.service.WorkingDirectoryService
 import org.mule.weave.v2.interpreted.CustomRuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.RuntimeModuleNodeCompiler
 import org.mule.weave.v2.interpreted.module.WeaveDataFormat
-import org.mule.weave.v2.io.service.CustomWorkingDirectoryService
-import org.mule.weave.v2.io.service.WorkingDirectoryService
 import org.mule.weave.v2.model.EvaluationContext
 import org.mule.weave.v2.model.ServiceManager
 import org.mule.weave.v2.model.service.{CharsetProviderService, DefaultSecurityManagerService, LoggingService, ProtocolUrlSourceProviderResolverService, ReadFunctionProtocolHandler, SecurityManagerService, UrlProtocolHandler, UrlSourceProviderResolverService, WeaveRuntimePrivilege}
