@@ -5,7 +5,7 @@ import org.mule.weave.dwnative.cli.DefaultConsole$;
 import org.mule.weave.dwnative.cli.commands.RunWeaveCommand;
 import org.mule.weave.dwnative.cli.commands.WeaveModule;
 import org.mule.weave.dwnative.cli.commands.WeaveRunnerConfig;
-import org.mule.weave.v2.io.FileHelper;
+import org.mule.weave.v2.core.io.FileHelper;
 import org.mule.weave.v2.parser.ast.variables.NameIdentifier;
 import org.mule.weave.v2.utils.DataWeaveVersion;
 import picocli.CommandLine;
