@@ -87,7 +87,7 @@ public class PicoRunSpell extends AbstractPicoRunCommand {
 
         int lastUpdate = utils.daysSinceLastUpdate();
         if (lastUpdate > 30) {
-            console.info("Your spells are getting old. " + lastUpdate + " days since last update. Please run \n dw update-spells");
+            console.info("Your spells are getting old. " + lastUpdate + " days since last update. Please run \n dw spell update");
         }
 
         File spellFolder;
