@@ -59,7 +59,7 @@ jobs:
       #Run regression tests
       - name: Run regression test 2.5.x
         run: |
-          ./gradlew --stacktrace -PweaveTestSuiteVersion=2.5.2-SNAPSHOT native-cli-integration-tests:test
+          ./gradlew --stacktrace -PweaveTestSuiteVersion=2.5.0 native-cli-integration-tests:test
         shell: bash
       - name: Run regression test 2.4
         run: |
