@@ -27,9 +27,10 @@ dependencies {
     implementation group: 'org.mule.weave', name: 'core-modules', version: weaveVersion
     implementation group: 'org.mule.weave', name: 'yaml-module', version: weaveVersion
     implementation group: 'org.mule.weave', name: 'jsonschema-module', version: weaveVersion
+    implementation group: 'org.mule.weave', name: 'xmlschema-module', version: weaveVersion
     implementation group: 'org.mule.weave', name: 'http-module', version: ioVersion
     implementation group: 'org.mule.weave', name: 'process-module', version: ioVersion
-    implementation group: 'org.mule.weave', name: 'migrant', version: '2.5.0-SNAPSHOT'
+    implementation group: 'org.mule.weave', name: 'migrant', version: weaveVersion
     implementation(group: 'org.mule.weave', name: 'http-netty-module', version: ioVersion) {
         exclude group: 'org.slf4j'
     }
