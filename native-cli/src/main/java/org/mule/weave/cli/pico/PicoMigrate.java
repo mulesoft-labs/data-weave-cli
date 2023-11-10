@@ -20,7 +20,7 @@ public class PicoMigrate implements Callable<Integer> {
 
     @CommandLine.Parameters(
             index = "0",
-            arity = "0..1",
+            arity = "1",
             description = "The path to the dw1 file."
     )
     private File dw1File = null;

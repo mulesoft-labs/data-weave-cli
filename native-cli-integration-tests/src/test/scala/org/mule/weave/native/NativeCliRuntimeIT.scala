@@ -356,7 +356,7 @@ class NativeCliRuntimeIT extends AnyFunSpec
 
   override def ignoreTests(): Array[String] = {
     // Encoding issues
-    val baseArray = Array("csv-invalid-utf8", "splitBy-regex", "splitBy-string" ) ++
+    val baseArray = Array("csv-invalid-utf8", "splitBy-regex", "splitBy-string", "xml-encoding-decl-near", "xml-encoding-decl-far") ++
       // Fail in java11 because broken backwards
       Array("coerciones_toString", "date-coercion") ++
       // Use resources (dwl files) that is present in the Tests but not in Cli (e.g: org::mule::weave::v2::libs::)

@@ -17,7 +17,7 @@ jobs:
   OSX_LINUX_WINDOWS:
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [ macos-latest, ubuntu-latest, windows-latest ]
         include:
           - os: windows-latest
             script_name: windows
@@ -30,7 +30,7 @@ jobs:
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v2
-          
+
       # Read graalvm version
       - name: Read Graalvm version
         run: |
@@ -51,13 +51,16 @@ jobs:
         run: |
           ./gradlew --stacktrace build
         shell: bash
-
       #Run regression tests
-      - name: Run regression test 2.5
+      - name: Run regression test 2.6
         run: |
-          ./gradlew --stacktrace -PweaveTestSuiteVersion=2.5.0-SNAPSHOT native-cli-integration-tests:test
+          ./gradlew --stacktrace -PweaveTestSuiteVersion=2.6.0-SNAPSHOT native-cli-integration-tests:test
         shell: bash
-
+      #Run regression tests
+      - name: Run regression test 2.5.x
+        run: |
+          ./gradlew --stacktrace -PweaveTestSuiteVersion=2.5.0 native-cli-integration-tests:test
+        shell: bash
       - name: Run regression test 2.4
         run: |
           ./gradlew --stacktrace -PweaveTestSuiteVersion=2.4.0-HF-SNAPSHOT native-cli-integration-tests:test
