@@ -17,11 +17,11 @@ jobs:
   OSX_LINUX_WINDOWS:
     strategy:
       matrix:
-        os: [ macos-latest, ubuntu-latest, windows-latest ]
+        os: [ macos-latest, mulesoft-ubuntu, mulesoft-windows ]
         include:
-          - os: windows-latest
+          - os: mulesoft-windows
             script_name: windows
-          - os: ubuntu-latest
+          - os: mulesoft-ubuntu
             script_name: linux
           - os: macos-latest
             script_name: osx
@@ -54,7 +54,7 @@ jobs:
       #Run regression tests
       - name: Run regression test 2.6
         run: |
-          ./gradlew --stacktrace -PweaveTestSuiteVersion=2.6.0-SNAPSHOT native-cli-integration-tests:test
+          ./gradlew --stacktrace -PweaveTestSuiteVersion=2.6.1-SNAPSHOT native-cli-integration-tests:test
         shell: bash
       #Run regression tests
       - name: Run regression test 2.5.x
