@@ -17,14 +17,12 @@ jobs:
   OSX_LINUX_WINDOWS:
     strategy:
       matrix:
-        os: [ macos-latest, mulesoft-labs-ubuntu, mulesoft-labs-windows ]
+        os: [ mulesoft-labs-ubuntu, mulesoft-labs-windows ]
         include:
           - os: mulesoft-labs-windows
             script_name: windows
           - os: mulesoft-labs-ubuntu
             script_name: linux
-          - os: macos-latest
-            script_name: osx
     runs-on: ${{ matrix.os }}
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
