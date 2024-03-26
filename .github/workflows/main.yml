@@ -19,7 +19,7 @@ jobs:
       matrix:
         os: [ macos-latest, mulesoft-labs-ubuntu, mulesoft-labs-windows ]
         include:
-          - os: mulesoft-labs-ubuntu
+          - os: mulesoft-labs-windows
             script_name: windows
           - os: mulesoft-labs-ubuntu
             script_name: linux
