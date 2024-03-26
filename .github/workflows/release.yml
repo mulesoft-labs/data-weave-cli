@@ -12,11 +12,11 @@ jobs:
   RELEASE_EXTENSION:
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, mulesoft-ubuntu, mulesoft-windows]
         include:
-          - os: windows-latest
+          - os: mulesoft-windows
             script_name: windows
-          - os: ubuntu-latest
+          - os: mulesoft-ubuntu
             script_name: linux
           - os: macos-latest
             script_name: osx
