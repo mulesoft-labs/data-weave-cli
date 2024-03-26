@@ -17,7 +17,7 @@ jobs:
   OSX_LINUX_WINDOWS:
     strategy:
       matrix:
-        os: [ macos-latest, mulesoft-ubuntu, mulesoft-windows ]
+        os: [ macos-latest, mulesoft-labs-ubuntu, mulesoft-labs-windows ]
         include:
           - os: mulesoft-labs-ubuntu
             script_name: windows
