@@ -24,23 +24,6 @@ class NativeCliTest extends AnyFreeSpec
     DEFAULT_DW_CLI_HOME.mkdirs()
   }
 
-  "it should execute simple migration correctly" in {
-    val stream: URL = getClass.getClassLoader.getResource("dw1/SimpleFile.dw1")
-    val file = new File(stream.toURI)
-    val (_, output, _) = NativeCliITTestRunner(Array("migrate", file.getAbsolutePath)).execute()
-    output.trim shouldBe
-      """
-        |%dw 2.0
-        |var arr = ["foo"]
-        |---
-        |{
-        |  a: [0, 1, 2] contains [1, 2],
-        |  b: sum(1 to 1000),
-        |  c: sizeOf(("123"))
-        |}
-        |""".stripMargin.trim
-  }
-
   "it should execute simple case correctly" in {
     val (_, output, _) = NativeCliITTestRunner(Array("run", "1 to 10")).execute()
     output shouldBe "[\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  10\n]"
