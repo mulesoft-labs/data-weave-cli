@@ -54,16 +54,16 @@ jobs:
       #Run regression tests
       - name: Run regression test 2.7
         run: |
-          ./gradlew --stacktrace -PweaveTestSuiteVersion=2.7.0-SNAPSHOT native-cli-integration-tests:test
+          ./gradlew --stacktrace -PweaveTestSuiteVersion=2.7.0-SNAPSHOT -DweaveSuiteVersion=2.7.0-SNAPSHOT native-cli-integration-tests:test
         shell: bash
       #Run regression tests
       - name: Run regression test 2.6
         run: |
-          ./gradlew --stacktrace -PweaveTestSuiteVersion=2.6.1 native-cli-integration-tests:test
+          ./gradlew --stacktrace -PweaveTestSuiteVersion=2.6.1 -DweaveSuiteVersion=2.6.1 native-cli-integration-tests:test
         shell: bash
       - name: Run regression test 2.4
         run: |
-          ./gradlew --stacktrace -PweaveTestSuiteVersion=2.4.0-HF-SNAPSHOT native-cli-integration-tests:test
+          ./gradlew --stacktrace -PweaveTestSuiteVersion=2.4.0-HF-SNAPSHOT -DweaveSuiteVersion=2.4.0-HF-SNAPSHOT native-cli-integration-tests:test
         shell: bash
       
       # Generate distro
