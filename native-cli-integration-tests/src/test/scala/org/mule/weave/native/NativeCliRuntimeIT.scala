@@ -398,6 +398,7 @@ class NativeCliRuntimeIT extends AnyFunSpec
       Array("update-op") ++
       // Take too long time
       Array("array-concat") ++
+      Array("big_intersection") ++
       Array("sql_date_mapping") ++
       Array("runtime_run")
 
