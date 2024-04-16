@@ -366,6 +366,7 @@ class NativeCliRuntimeIT extends AnyFunSpec
         "import-lib-with-alias",
         "import-named-lib",
         "import-star",
+        "lazy_metadata_definition",
         "module-singleton",
         "multipart-write-binary",
         "read-binary-files",
