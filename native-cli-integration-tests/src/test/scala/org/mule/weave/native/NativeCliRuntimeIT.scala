@@ -58,15 +58,12 @@ class NativeCliRuntimeIT extends AnyFunSpec
   private val INPUT_FILE_PATTERN = Pattern.compile("in[0-9]+\\.[a-zA-Z]+")
   private val OUTPUT_FILE_PATTERN = Pattern.compile("out\\.[a-zA-Z]+")
 
-  private val weaveSuiteVersion = System.getProperty("weaveSuiteVersion", ComponentVersion.weaveVersion)
-
-  private val versionString: String = DataWeaveVersion(weaveSuiteVersion).toString()
-
-  println(s"********************** Running suite with DW suite version: $versionString **********************")
+  private val weaveVersion = System.getProperty("weaveSuiteVersion", ComponentVersion.weaveVersion)
+  private val versionString: String = DataWeaveVersion(weaveVersion).toString()
 
   val testSuites = Seq(
-    TestSuite("master", loadTestZipFile(s"weave-suites/runtime-$versionString-test.zip")),
-    TestSuite("yaml", loadTestZipFile(s"weave-suites/yaml-module-$versionString-test.zip"))
+    TestSuite("master", loadTestZipFile(s"weave-suites/runtime-$weaveVersion-test.zip")),
+    TestSuite("yaml", loadTestZipFile(s"weave-suites/yaml-module-$weaveVersion-test.zip"))
   )
 
   private def loadTestZipFile(testSuiteExample: String): File = {
@@ -75,8 +72,6 @@ class NativeCliRuntimeIT extends AnyFunSpec
     val zipFile = new File(connection.getURL.toURI)
     zipFile
   }
-
-
 
   testSuites.foreach {
     testSuite => {
