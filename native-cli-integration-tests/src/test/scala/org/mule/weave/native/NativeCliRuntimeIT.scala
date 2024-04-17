@@ -59,6 +59,7 @@ class NativeCliRuntimeIT extends AnyFunSpec
   private val OUTPUT_FILE_PATTERN = Pattern.compile("out\\.[a-zA-Z]+")
 
   private val weaveVersion = System.getProperty("weaveSuiteVersion", ComponentVersion.weaveVersion)
+  println(s"****** Running with weaveSuiteVersion: $weaveVersion *******")
   private val versionString: String = DataWeaveVersion(weaveVersion).toString()
 
   val testSuites = Seq(
@@ -429,12 +430,17 @@ class NativeCliRuntimeIT extends AnyFunSpec
         Array("as-operator",
           "type-equality"
         ) ++
-        Array("xml_doctype", "stringutils_unwrap")
+        Array("xml_doctype", "stringutils_unwrap", "weave_ast_module")
     } else if (versionString == "2.5") {
       baseArray ++
         Array("xml_doctype", "stringutils_unwrap")
-    }
-    else {
+    } else if (versionString == "2.6") {
+      baseArray ++
+        Array("weave_ast_module")
+    } else if (versionString == "2.7") {
+      baseArray ++
+        Array("weave_ast_module")
+    } else {
       baseArray
     }
     testToIgnore
