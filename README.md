@@ -97,7 +97,6 @@ Commands:
   wizard         Wizard actions.
     add            Adds a new Wizard to your network of trusted wizards.
   validate       Validate if a script is valid or not.
-  migrate        Translates a DW1 script into a DW2 script.
   spell          Runs the specified Spell.
     create         Creates a new spell with the given name.
     list           List all available spells.

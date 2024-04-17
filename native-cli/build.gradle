@@ -30,7 +30,6 @@ dependencies {
     implementation group: 'org.mule.weave', name: 'xmlschema-module', version: weaveVersion
     implementation group: 'org.mule.weave', name: 'http-module', version: ioVersion
     implementation group: 'org.mule.weave', name: 'process-module', version: ioVersion
-    implementation group: 'org.mule.weave', name: 'migrant', version: '2.6.0-SNAPSHOT'
     implementation(group: 'org.mule.weave', name: 'http-netty-module', version: ioVersion) {
         exclude group: 'org.slf4j'
     }
@@ -64,7 +63,6 @@ task genVersions() {
     outputPrinter.println("object ComponentVersion {")
     outputPrinter.println("\tval weaveVersion = \"" + weaveVersion + "\"")
     outputPrinter.println("\tval nativeVersion = \"" + nativeVersion + "\"")
-    outputPrinter.println("\tval weaveSuiteVersion = \"" + weaveTestSuiteVersion + "\"")
     outputPrinter.println("}")
     outputPrinter.close()
 }

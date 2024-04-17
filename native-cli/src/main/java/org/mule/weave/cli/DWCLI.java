@@ -7,7 +7,6 @@ import org.mule.weave.cli.pico.PicoListSpells;
 import org.mule.weave.cli.pico.PicoRepl;
 import org.mule.weave.cli.pico.PicoRunScript;
 import org.mule.weave.cli.pico.PicoRunSpell;
-import org.mule.weave.cli.pico.PicoMigrate;
 import org.mule.weave.cli.pico.PicoUpdateSpells;
 import org.mule.weave.cli.pico.PicoValidateScript;
 import org.mule.weave.cli.pico.PicoVersionProvider;
@@ -48,7 +47,6 @@ public class DWCLI {
                     PicoRunScript.class,
                     PicoWizard.class,
                     PicoValidateScript.class,
-                    PicoMigrate.class,
                     PicoRunSpell.class,
                     CommandLine.HelpCommand.class,
                     PicoRepl.class

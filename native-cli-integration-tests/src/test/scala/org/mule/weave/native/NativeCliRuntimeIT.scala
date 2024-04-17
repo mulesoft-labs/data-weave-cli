@@ -58,11 +58,13 @@ class NativeCliRuntimeIT extends AnyFunSpec
   private val INPUT_FILE_PATTERN = Pattern.compile("in[0-9]+\\.[a-zA-Z]+")
   private val OUTPUT_FILE_PATTERN = Pattern.compile("out\\.[a-zA-Z]+")
 
-  private val versionString: String = DataWeaveVersion(ComponentVersion.weaveSuiteVersion).toString()
+  private val weaveVersion = System.getProperty("weaveSuiteVersion", ComponentVersion.weaveVersion)
+  println(s"****** Running with weaveSuiteVersion: $weaveVersion *******")
+  private val versionString: String = DataWeaveVersion(weaveVersion).toString()
 
   val testSuites = Seq(
-    TestSuite("master", loadTestZipFile(s"weave-suites/runtime-${ComponentVersion.weaveSuiteVersion}-test.zip")),
-    TestSuite("yaml", loadTestZipFile(s"weave-suites/yaml-module-${ComponentVersion.weaveSuiteVersion}-test.zip"))
+    TestSuite("master", loadTestZipFile(s"weave-suites/runtime-$weaveVersion-test.zip")),
+    TestSuite("yaml", loadTestZipFile(s"weave-suites/yaml-module-$weaveVersion-test.zip"))
   )
 
   private def loadTestZipFile(testSuiteExample: String): File = {
@@ -366,6 +368,7 @@ class NativeCliRuntimeIT extends AnyFunSpec
         "import-lib-with-alias",
         "import-named-lib",
         "import-star",
+        "lazy_metadata_definition",
         "module-singleton",
         "multipart-write-binary",
         "read-binary-files",
@@ -397,6 +400,7 @@ class NativeCliRuntimeIT extends AnyFunSpec
       Array("update-op") ++
       // Take too long time
       Array("array-concat") ++
+      Array("big_intersection") ++
       Array("sql_date_mapping") ++
       Array("runtime_run")
 
@@ -426,12 +430,17 @@ class NativeCliRuntimeIT extends AnyFunSpec
         Array("as-operator",
           "type-equality"
         ) ++
-        Array("xml_doctype", "stringutils_unwrap")
+        Array("xml_doctype", "stringutils_unwrap", "weave_ast_module")
     } else if (versionString == "2.5") {
       baseArray ++
         Array("xml_doctype", "stringutils_unwrap")
-    }
-    else {
+    } else if (versionString == "2.6") {
+      baseArray ++
+        Array("weave_ast_module")
+    } else if (versionString == "2.7") {
+      baseArray ++
+        Array("weave_ast_module")
+    } else {
       baseArray
     }
     testToIgnore

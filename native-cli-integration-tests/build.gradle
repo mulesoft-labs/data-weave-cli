@@ -42,3 +42,9 @@ task downloadTestSuites(type: Copy) {
 downloadTestSuites.dependsOn(cleanTestSuites)
 test.dependsOn(downloadTestSuites)
 test.dependsOn(":native-cli:nativeCompile")
+
+test {
+    if (System.getProperty("weaveSuiteVersion") != null) {
+        systemProperty "weaveSuiteVersion", System.getProperty("weaveSuiteVersion")
+    }
+}
