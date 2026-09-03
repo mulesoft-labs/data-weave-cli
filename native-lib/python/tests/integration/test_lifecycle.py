@@ -147,7 +147,7 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
         import ctypes
         import json
         import os
-        from threading import Event, Thread
+        from threading import Event, Lock, Thread
 
         from dataweave.models import RESOLVE_MODULE_CALLBACK
         from dataweave.native import (
@@ -167,7 +167,13 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
 
         resolver_entered = Event()
         release_resolver = Event()
+        destroy_ready = Event()
+        enter_destroy_call = Event()
+        destroy_call_started = Event()
+        run_returned = Event()
         destroy_returned = Event()
+        completion_order = []
+        completion_lock = Lock()
         errors = []
         run_result = None
         context_matched = False
@@ -218,6 +224,9 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
                     b"lib::answer()",
                     None,
                 )
+                with completion_lock:
+                    completion_order.append("run_script_engine")
+                run_returned.set()
                 assert result_pointer
                 try:
                     run_result = json.loads(
@@ -239,7 +248,12 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
                     isolate, ctypes.byref(thread)
                 ) == 0
                 attached = True
+                destroy_ready.set()
+                assert enter_destroy_call.wait(5)
+                destroy_call_started.set()
                 lib.destroy_engine(thread, handle)
+                with completion_lock:
+                    completion_order.append("destroy_engine")
                 destroy_returned.set()
             except BaseException as error:
                 errors.append("destroy: " + repr(error))
@@ -253,6 +267,9 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
         try:
             assert resolver_entered.wait(5)
             destroy_thread.start()
+            assert destroy_ready.wait(5)
+            enter_destroy_call.set()
+            assert destroy_call_started.wait(5)
             destroy_blocked_before_release = not destroy_returned.wait(0.1)
         finally:
             release_resolver.set()
@@ -261,6 +278,7 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
         destroy_thread.join(5)
         assert not run_thread.is_alive()
         assert not destroy_thread.is_alive()
+        assert run_returned.is_set()
         assert destroy_returned.is_set()
 
         teardown_thread = GraalIsolateThreadPointer()
@@ -270,7 +288,9 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
         assert lib.graal_tear_down_isolate(teardown_thread) == 0
         print(json.dumps({
             "destroy_blocked_before_release": destroy_blocked_before_release,
+            "destroy_call_started": destroy_call_started.is_set(),
             "destroy_returned": destroy_returned.is_set(),
+            "completion_order": completion_order,
             "context_matched": context_matched,
             "run_result": run_result,
             "errors": errors,
@@ -279,6 +299,11 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
     )
 
     response = _raw_abi_response(completed)
+    assert response["destroy_call_started"] is True
+    assert response["completion_order"] == [
+        "run_script_engine",
+        "destroy_engine",
+    ], response
     assert response["destroy_blocked_before_release"] is True
     assert response["destroy_returned"] is True
     assert response["context_matched"] is True
