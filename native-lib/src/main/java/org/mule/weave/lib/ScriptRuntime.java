@@ -53,12 +53,6 @@ public class ScriptRuntime {
         return handle;
     }
 
-    /** Returns the runtime for a handle, or {@code null} if unknown/destroyed. */
-    public static ScriptRuntime get(long handle) {
-        EngineRecord record = REGISTRY.get(handle);
-        return record == null ? null : record.runtime;
-    }
-
     /** Acquires a lease for a live runtime, or returns {@code null} if admission is closed. */
     public static EngineLease acquire(long handle) {
         EngineRecord record = REGISTRY.get(handle);
