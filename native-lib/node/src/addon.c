@@ -2266,11 +2266,10 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
     long long handle = fn_create_engine(thread);
     int detach_rc = fn_detach_thread(thread);
     if (detach_rc != 0) poison_isolate_detach_failure(detach_rc);
-    // A GraalVM @CEntryPoint that throws on the Java side returns the return
-    // type's default value instead of propagating the exception — 0 for a
-    // long long. The real handle registry only ever hands out handles >= 1, so
-    // any handle <= 0 means construction failed; never hand that back to JS as
-    // if it were usable.
+    // The Java @CEntryPoint exception handler explicitly returns 0 as its ABI
+    // exception sentinel when engine construction throws. The real handle
+    // registry only ever hands out handles >= 1, so any handle <= 0 means
+    // construction failed; never hand that back to JS as if it were usable.
     if (handle <= 0) {
         uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
         napi_throw_error(env, NULL, "create_engine returned an invalid handle"); return NULL;
@@ -2406,9 +2405,9 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
     int detach_rc = fn_detach_thread(thread);
     if (detach_rc != 0) poison_isolate_detach_failure(detach_rc);
 
-    // Same invalid-handle guard as napi_create_engine: a Java-side construction
-    // failure surfaces here as handle == 0 (GraalVM @CEntryPoint default-value
-    // semantics), and any handle <= 0 is never valid. Reject before this bridge
+    // Same invalid-handle guard as napi_create_engine: the Java @CEntryPoint
+    // exception handler explicitly returns handle == 0 as its ABI sentinel,
+    // and any handle <= 0 is never valid. Reject before this bridge
     // is linked into g_bridges or a cleanup hook is registered for it — at this
     // point neither has happened, so there's nothing to unlink/unhook. Still use
     // bridge_finalize (not a manual napi_delete_reference+free) because the failed
