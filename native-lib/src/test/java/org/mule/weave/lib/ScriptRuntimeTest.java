@@ -635,34 +635,48 @@ class ScriptRuntimeTest {
 
         long hA = ScriptRuntime.register(engineA);
         long hB = ScriptRuntime.register(engineB);
-        assertNotNull(ScriptRuntime.get(hA));
-        assertNotNull(ScriptRuntime.get(hB));
+        try {
+            try (ScriptRuntime.EngineLease leaseA = ScriptRuntime.acquire(hA);
+                 ScriptRuntime.EngineLease leaseB = ScriptRuntime.acquire(hB)) {
+                assertNotNull(leaseA);
+                assertNotNull(leaseB);
 
-        // Each engine resolves its own module...
-        assertEquals("\"A:X\"", Result.parse(ScriptRuntime.get(hA).run(IMPORT_A)).result);
-        assertEquals("\"B:X\"", Result.parse(ScriptRuntime.get(hB).run(IMPORT_B)).result);
+                // Each engine resolves its own module...
+                assertEquals("\"A:X\"", Result.parse(leaseA.runtime().run(IMPORT_A)).result);
+                assertEquals("\"B:X\"", Result.parse(leaseB.runtime().run(IMPORT_B)).result);
 
-        // ...and NOT the other's (no cross-talk).
-        assertNotNull(Result.parse(ScriptRuntime.get(hA).run(IMPORT_B)).error);
-        assertNotNull(Result.parse(ScriptRuntime.get(hB).run(IMPORT_A)).error);
+                // ...and NOT the other's (no cross-talk).
+                assertNotNull(Result.parse(leaseA.runtime().run(IMPORT_B)).error);
+                assertNotNull(Result.parse(leaseB.runtime().run(IMPORT_A)).error);
+            }
 
-        // destroy removes it; a fresh handle is distinct.
-        assertTrue(ScriptRuntime.destroy(hA));
-        assertNull(ScriptRuntime.get(hA));
-        assertFalse(ScriptRuntime.destroy(hA)); // already gone
-        assertNotNull(ScriptRuntime.get(hB));
-
-        ScriptRuntime.destroy(hB);
+            // destroy removes it; a fresh handle is distinct.
+            assertTrue(ScriptRuntime.destroy(hA));
+            assertCannotAcquire(hA);
+            assertFalse(ScriptRuntime.destroy(hA)); // already gone
+            try (ScriptRuntime.EngineLease leaseB = ScriptRuntime.acquire(hB)) {
+                assertNotNull(leaseB);
+            }
+        } finally {
+            ScriptRuntime.destroy(hA);
+            ScriptRuntime.destroy(hB);
+        }
     }
 
     @Test
     void engineWithoutResolverStillRunsBuiltins() {
         ScriptRuntime engine = new ScriptRuntime(); // ClassLoader-only
         long h = ScriptRuntime.register(engine);
-        String r = ScriptRuntime.get(h).run(
-                "%dw 2.0\nimport dw::core::Strings\noutput application/json\n---\nStrings::capitalize(\"hello\")");
-        assertEquals("\"Hello\"", Result.parse(r).result);
-        ScriptRuntime.destroy(h);
+        try {
+            try (ScriptRuntime.EngineLease lease = ScriptRuntime.acquire(h)) {
+                assertNotNull(lease);
+                String r = lease.runtime().run(
+                        "%dw 2.0\nimport dw::core::Strings\noutput application/json\n---\nStrings::capitalize(\"hello\")");
+                assertEquals("\"Hello\"", Result.parse(r).result);
+            }
+        } finally {
+            ScriptRuntime.destroy(h);
+        }
     }
 
     /**
@@ -671,23 +685,24 @@ class ScriptRuntimeTest {
      * {@code run_script_input_output_callback_engine} in {@link NativeLib}): running a
      * script against an unknown or already-destroyed engine handle must return exactly
      * {@code {"success":false,"error":"Unknown engine handle"}} rather than throwing.
-     *
-     * <p>The {@code @CEntryPoint} methods themselves cannot be invoked from a plain JVM
-     * unit test — they take GraalVM word types ({@code IsolateThread}, {@code CCharPointer})
-     * whose boxing infrastructure is only initialized inside a compiled native image (calling
-     * e.g. {@code WordFactory.nullPointer()} from a hosted JVM test throws
-     * {@code NullPointerException} from {@code WordBoxFactory}). All three entrypoints funnel
-     * the unknown-handle case through the same {@code UNKNOWN_ENGINE_HANDLE_JSON} constant, so
-     * asserting on that constant — combined with {@link #twoEnginesResolveOnlyTheirOwnModule}
-     * proving {@link ScriptRuntime#get} returns {@code null} for an unregistered/destroyed
-     * handle — verifies the full contract without needing the native runtime.</p>
      */
     @Test
     void unknownEngineHandleProducesExactErrorJson() {
         long unregisteredHandle = Long.MAX_VALUE;
-        assertNull(ScriptRuntime.get(unregisteredHandle));
+        assertCannotAcquire(unregisteredHandle);
         assertEquals("{\"success\":false,\"error\":\"Unknown engine handle\"}",
                 NativeLib.UNKNOWN_ENGINE_HANDLE_JSON);
+    }
+
+    private static void assertCannotAcquire(long handle) {
+        ScriptRuntime.EngineLease lease = ScriptRuntime.acquire(handle);
+        try {
+            assertNull(lease);
+        } finally {
+            if (lease != null) {
+                lease.close();
+            }
+        }
     }
 
     // ── Fail-closed input parsing (review #11 #5) ──────────────────────────

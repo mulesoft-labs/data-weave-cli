@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.Charset;
 import java.util.Base64;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -38,24 +39,119 @@ import java.util.concurrent.atomic.AtomicLong;
 public class ScriptRuntime {
 
     // ── Handle registry ──────────────────────────────────────────────────
-    private static final ConcurrentHashMap<Long, ScriptRuntime> REGISTRY = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<Long, EngineRecord> REGISTRY = new ConcurrentHashMap<>();
     private static final AtomicLong NEXT_HANDLE = new AtomicLong(1);
 
     /** Registers a runtime and returns its non-zero handle. */
     public static long register(ScriptRuntime runtime) {
+        Objects.requireNonNull(runtime, "runtime");
         long handle = NEXT_HANDLE.getAndIncrement();
-        REGISTRY.put(handle, runtime);
+        if (handle <= 0) {
+            throw new IllegalStateException("Engine handle space exhausted");
+        }
+        REGISTRY.put(handle, new EngineRecord(runtime));
         return handle;
     }
 
     /** Returns the runtime for a handle, or {@code null} if unknown/destroyed. */
     public static ScriptRuntime get(long handle) {
-        return REGISTRY.get(handle);
+        EngineRecord record = REGISTRY.get(handle);
+        return record == null ? null : record.runtime;
     }
 
-    /** Removes a runtime; returns {@code true} if one was present. */
+    /** Acquires a lease for a live runtime, or returns {@code null} if admission is closed. */
+    public static EngineLease acquire(long handle) {
+        EngineRecord record = REGISTRY.get(handle);
+        return record == null ? null : record.tryAcquire();
+    }
+
+    /** Closes admission, drains active leases, and removes the runtime. */
     public static boolean destroy(long handle) {
-        return REGISTRY.remove(handle) != null;
+        EngineRecord record = REGISTRY.get(handle);
+        if (record == null) {
+            return false;
+        }
+        record.closeAndAwait();
+        REGISTRY.remove(handle, record);
+        return true;
+    }
+
+    public static final class EngineLease implements AutoCloseable {
+        private final EngineRecord record;
+        private final ScriptRuntime runtime;
+        private boolean closed;
+
+        private EngineLease(EngineRecord record, ScriptRuntime runtime) {
+            this.record = record;
+            this.runtime = runtime;
+        }
+
+        public ScriptRuntime runtime() {
+            return runtime;
+        }
+
+        @Override
+        public void close() {
+            synchronized (this) {
+                if (closed) {
+                    return;
+                }
+                closed = true;
+            }
+            record.release();
+        }
+    }
+
+    private static final class EngineRecord {
+        private enum State {
+            LIVE,
+            CLOSING,
+            DESTROYED
+        }
+
+        private final ScriptRuntime runtime;
+        private State state = State.LIVE;
+        private int activeLeases;
+
+        private EngineRecord(ScriptRuntime runtime) {
+            this.runtime = runtime;
+        }
+
+        private synchronized EngineLease tryAcquire() {
+            if (state != State.LIVE) {
+                return null;
+            }
+            activeLeases++;
+            return new EngineLease(this, runtime);
+        }
+
+        private void closeAndAwait() {
+            boolean interrupted = false;
+            synchronized (this) {
+                if (state == State.LIVE) {
+                    state = State.CLOSING;
+                }
+                while (state != State.DESTROYED && activeLeases > 0) {
+                    try {
+                        wait();
+                    } catch (InterruptedException e) {
+                        interrupted = true;
+                    }
+                }
+                state = State.DESTROYED;
+                notifyAll();
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        private synchronized void release() {
+            activeLeases--;
+            if (activeLeases == 0) {
+                notifyAll();
+            }
+        }
     }
 
     // ── Per-instance engine ───────────────────────────────────────────────
