@@ -147,7 +147,8 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
         import ctypes
         import json
         import os
-        from threading import Event, Lock, Thread
+        from threading import Event, Thread
+        import time
 
         from dataweave.models import RESOLVE_MODULE_CALLBACK
         from dataweave.native import (
@@ -168,14 +169,12 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
         resolver_entered = Event()
         release_resolver = Event()
         destroy_ready = Event()
-        enter_destroy_call = Event()
-        destroy_call_started = Event()
+        admission_closed = Event()
         run_returned = Event()
         destroy_returned = Event()
-        completion_order = []
-        completion_lock = Lock()
         errors = []
         run_result = None
+        probe_result = None
         context_matched = False
         module_source = ctypes.create_string_buffer(
             b"%dw 2.0\\nfun answer() = 42"
@@ -224,8 +223,6 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
                     b"lib::answer()",
                     None,
                 )
-                with completion_lock:
-                    completion_order.append("run_script_engine")
                 run_returned.set()
                 assert result_pointer
                 try:
@@ -249,11 +246,7 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
                 ) == 0
                 attached = True
                 destroy_ready.set()
-                assert enter_destroy_call.wait(5)
-                destroy_call_started.set()
                 lib.destroy_engine(thread, handle)
-                with completion_lock:
-                    completion_order.append("destroy_engine")
                 destroy_returned.set()
             except BaseException as error:
                 errors.append("destroy: " + repr(error))
@@ -261,23 +254,67 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
                 if attached and lib.graal_detach_thread(thread) != 0:
                     errors.append("destroy: failed to detach")
 
+        def probe_admission():
+            global probe_result
+            thread = GraalIsolateThreadPointer()
+            attached = False
+            try:
+                assert lib.graal_attach_thread(
+                    isolate, ctypes.byref(thread)
+                ) == 0
+                attached = True
+                assert destroy_ready.wait(5)
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    result_pointer = lib.run_script_engine(
+                        thread, handle, b"1", None
+                    )
+                    assert result_pointer
+                    try:
+                        result = json.loads(
+                            ctypes.string_at(result_pointer).decode("utf-8")
+                        )
+                    finally:
+                        lib.free_cstring(thread, result_pointer)
+                    if result == {
+                        "success": False,
+                        "error": "Unknown engine handle",
+                    }:
+                        probe_result = result
+                        admission_closed.set()
+                        return
+                    time.sleep(0.01)
+                errors.append("probe: admission did not close")
+            except BaseException as error:
+                errors.append("probe: " + repr(error))
+            finally:
+                if attached and lib.graal_detach_thread(thread) != 0:
+                    errors.append("probe: failed to detach")
+
         run_thread = Thread(target=run_script, daemon=True)
         destroy_thread = Thread(target=destroy_engine, daemon=True)
+        probe_thread = Thread(target=probe_admission, daemon=True)
         run_thread.start()
         try:
             assert resolver_entered.wait(5)
             destroy_thread.start()
-            assert destroy_ready.wait(5)
-            enter_destroy_call.set()
-            assert destroy_call_started.wait(5)
-            destroy_blocked_before_release = not destroy_returned.wait(0.1)
+            probe_thread.start()
+            admission_closed_while_resolver_blocked = (
+                admission_closed.wait(5) and not release_resolver.is_set()
+            )
+            destroy_blocked_with_admission_closed = (
+                admission_closed_while_resolver_blocked
+                and not destroy_returned.wait(0.1)
+            )
         finally:
             release_resolver.set()
 
         run_thread.join(5)
         destroy_thread.join(5)
+        probe_thread.join(5)
         assert not run_thread.is_alive()
         assert not destroy_thread.is_alive()
+        assert not probe_thread.is_alive()
         assert run_returned.is_set()
         assert destroy_returned.is_set()
 
@@ -287,11 +324,15 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
         ) == 0
         assert lib.graal_tear_down_isolate(teardown_thread) == 0
         print(json.dumps({
-            "destroy_blocked_before_release": destroy_blocked_before_release,
-            "destroy_call_started": destroy_call_started.is_set(),
+            "admission_closed_while_resolver_blocked": (
+                admission_closed_while_resolver_blocked
+            ),
+            "destroy_blocked_with_admission_closed": (
+                destroy_blocked_with_admission_closed
+            ),
             "destroy_returned": destroy_returned.is_set(),
-            "completion_order": completion_order,
             "context_matched": context_matched,
+            "probe_result": probe_result,
             "run_result": run_result,
             "errors": errors,
         }))
@@ -299,13 +340,13 @@ def test_raw_abi_destroy_waits_for_resolver_context_to_drain():
     )
 
     response = _raw_abi_response(completed)
-    assert response["destroy_call_started"] is True
-    assert response["completion_order"] == [
-        "run_script_engine",
-        "destroy_engine",
-    ], response
-    assert response["destroy_blocked_before_release"] is True
+    assert response["admission_closed_while_resolver_blocked"] is True
+    assert response["destroy_blocked_with_admission_closed"] is True
     assert response["destroy_returned"] is True
     assert response["context_matched"] is True
+    assert response["probe_result"] == {
+        "success": False,
+        "error": "Unknown engine handle",
+    }
     assert response["run_result"]["success"] is True
     assert response["errors"] == []
