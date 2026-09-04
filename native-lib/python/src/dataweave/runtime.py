@@ -129,7 +129,7 @@ class DataWeave:
             try:
                 data = ctypes.string_at(buffer, length)
                 with _native_callback_scope():
-                    return int(write_callback(data))
+                    return ctypes.c_int(write_callback(data)).value
             except BaseException:
                 return -1
         try:
@@ -287,7 +287,7 @@ class DataWeave:
             try:
                 data = ctypes.string_at(buffer, length)
                 with _native_callback_scope():
-                    return int(write_callback(data))
+                    return ctypes.c_int(write_callback(data)).value
             except BaseException:
                 return -1
         try:

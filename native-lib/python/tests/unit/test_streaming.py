@@ -88,12 +88,22 @@ class UnraisableRecorder:
 class ReentrantWriteStatus:
     def __init__(self, runtime):
         self.runtime = runtime
-        self.int_calls = 0
+        self.index_calls = 0
 
-    def __int__(self):
-        self.int_calls += 1
+    def __index__(self):
+        self.index_calls += 1
         self.runtime.run("nested")
         return 0
+
+
+class IndexOnlyWriteStatus:
+    def __init__(self, value):
+        self.value = value
+        self.index_calls = 0
+
+    def __index__(self):
+        self.index_calls += 1
+        return self.value
 
 
 def configured_runtime(native):
@@ -207,6 +217,71 @@ def test_public_write_callback_preserves_integer_status(invoke):
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
+    "status, expected",
+    [
+        ((1 << 200) + 23, 23),
+        (-((1 << 200) + 23), -23),
+        (IndexOnlyWriteStatus((1 << 80) + 23), 23),
+    ],
+    ids=["large-positive", "large-negative", "index-only"],
+)
+@pytest.mark.parametrize(
+    "invoke",
+    [
+        lambda runtime, write_callback: runtime.run_callback("script", write_callback),
+        lambda runtime, write_callback: runtime.run_input_output_callback(
+            "script", "payload", "application/json", lambda _size: b"", write_callback,
+        ),
+    ],
+)
+def test_public_write_callback_uses_c_int_status_semantics_without_unraisable(monkeypatch, invoke, status, expected):
+    native = FakeNative('{"success": false, "error": "write aborted"}', emit=b"chunk")
+    runtime = configured_runtime(native)
+    recorder = UnraisableRecorder()
+    monkeypatch.setattr(sys, "unraisablehook", recorder)
+
+    result = invoke(runtime, lambda _data: status)
+
+    assert native.write_status == expected
+    assert recorder.unraisable == []
+    assert result == dataweave.StreamingResult(False, "write aborted", None, None, False)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "status, expected",
+    [
+        ((1 << 200) + 23, 23),
+        (-((1 << 200) + 23), -23),
+        (IndexOnlyWriteStatus((1 << 80) + 23), 23),
+    ],
+    ids=["large-positive", "large-negative", "index-only"],
+)
+@pytest.mark.parametrize(
+    "invoke",
+    [
+        lambda runtime, write_callback: runtime.run_callback("script", write_callback),
+        lambda runtime, write_callback: runtime.run_input_output_callback(
+            "script", "payload", "application/json", lambda _size: b"", write_callback,
+        ),
+    ],
+)
+def test_public_write_callback_normalizes_status_before_ctypes_return(monkeypatch, invoke, status, expected):
+    native = FakeNative('{"success": false, "error": "write aborted"}', emit=b"chunk")
+    runtime = configured_runtime(native)
+    recorder = UnraisableRecorder()
+    monkeypatch.setattr(sys, "unraisablehook", recorder)
+    monkeypatch.setattr(runtime_module, "WRITE_CALLBACK", lambda callback: callback)
+
+    result = invoke(runtime, lambda _data: status)
+
+    assert native.write_status == expected
+    assert recorder.unraisable == []
+    assert result == dataweave.StreamingResult(False, "write aborted", None, None, False)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
     "invoke",
     [
         lambda runtime, write_callback: runtime.run_callback("script", write_callback),
@@ -225,7 +300,7 @@ def test_public_write_callback_converts_custom_status_inside_native_callback_sco
     result = invoke(runtime, lambda _data: status)
 
     assert native.write_status == -1
-    assert status.int_calls == 1
+    assert status.index_calls == 1
     assert native.attach_count == 1  # Only the outer callback invocation attached.
     assert recorder.unraisable == []
     assert result == dataweave.StreamingResult(False, "write aborted", None, None, False)
