@@ -89,7 +89,7 @@ def configured_runtime(native):
     native_runtime._resolver_buffers = []
     native_runtime._resolver_active = False
     native_runtime._resolver_active_ident = None
-    native_runtime._resolver_lock = Lock()
+    native_runtime._operation_lock = Lock()
     native_runtime._execution_owner = None
     runtime._native = native_runtime
     return runtime
@@ -121,57 +121,57 @@ def test_run_input_output_callback_converts_read_exception_to_abort_result():
 
 @pytest.mark.unit
 def test_write_callback_reentry_is_translated_to_abort_without_deadlocking():
-    completed = Event()
-    outcomes = []
-    native = FakeNative('{"success": false, "error": "write aborted"}', emit=b"chunk")
-    runtime = configured_runtime(native)
+    outer_native = FakeNative('{"success": false, "error": "write aborted"}', emit=b"chunk")
+    inner_native = FakeNative('{"success": true}')
+    outer = configured_runtime(outer_native)
+    inner = configured_runtime(inner_native)
 
-    worker = Thread(
-        target=lambda: (
-            outcomes.append(
-                runtime.run_callback(
-                    "outer",
-                    lambda _chunk: runtime.run_callback("nested", lambda _data: 0),
-                )
-            ),
-            completed.set(),
-        ),
-        daemon=True,
+    result = outer.run_callback(
+        "outer",
+        lambda _chunk: inner.run_callback("nested", lambda _data: 0),
     )
-    worker.start()
 
-    assert completed.wait(1), "write callback re-entry deadlocked"
-    assert native.write_status == -1
-    assert outcomes == [dataweave.StreamingResult(False, "write aborted", None, None, False)]
+    assert outer_native.write_status == -1
+    assert inner_native.attach_count == 0
+    assert result == dataweave.StreamingResult(False, "write aborted", None, None, False)
 
 
 @pytest.mark.unit
 def test_read_callback_reentry_is_translated_to_abort_without_deadlocking():
-    completed = Event()
-    outcomes = []
-    native = FakeNative('{"success": false, "error": "read aborted"}', consume_input=True)
-    runtime = configured_runtime(native)
+    outer_native = FakeNative('{"success": false, "error": "read aborted"}', consume_input=True)
+    inner_native = FakeNative('{"success": true}')
+    outer = configured_runtime(outer_native)
+    inner = configured_runtime(inner_native)
 
-    worker = Thread(
-        target=lambda: (
-            outcomes.append(
-                runtime.run_input_output_callback(
-                    "outer",
-                    "payload",
-                    "application/json",
-                    lambda _size: runtime.run("nested").get_bytes(),
-                    lambda _data: 0,
-                )
-            ),
-            completed.set(),
-        ),
-        daemon=True,
+    result = outer.run_input_output_callback(
+        "outer",
+        "payload",
+        "application/json",
+        lambda _size: inner.run("nested").get_bytes(),
+        lambda _data: 0,
     )
-    worker.start()
 
-    assert completed.wait(1), "read callback re-entry deadlocked"
-    assert native.read_status == -1
-    assert outcomes == [dataweave.StreamingResult(False, "read aborted", None, None, False)]
+    assert outer_native.read_status == -1
+    assert inner_native.attach_count == 0
+    assert result == dataweave.StreamingResult(False, "read aborted", None, None, False)
+
+
+@pytest.mark.unit
+def test_transform_input_iterator_reentry_is_translated_to_abort_without_native_attach():
+    outer_native = FakeNative('{"success": false, "error": "read aborted"}', consume_input=True)
+    inner_native = FakeNative('{"success": true}')
+    outer = configured_runtime(outer_native)
+    inner = configured_runtime(inner_native)
+
+    def input_stream():
+        yield inner.run("nested").get_bytes()
+
+    stream = outer.run_transform("outer", input_stream())
+
+    assert list(stream) == []
+    assert outer_native.read_status == -1
+    assert inner_native.attach_count == 0
+    assert stream.metadata == dataweave.StreamingResult(False, "read aborted", None, None, False)
 
 
 @pytest.mark.unit

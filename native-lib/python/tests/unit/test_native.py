@@ -1,7 +1,7 @@
 from pathlib import Path
 import ctypes
 import threading
-from threading import Barrier, BrokenBarrierError, current_thread, get_ident, Thread
+from threading import Barrier, BrokenBarrierError, current_thread, get_ident, Lock, Thread
 
 import pytest
 
@@ -379,6 +379,126 @@ def _capture_error(errors, invoke):
         invoke()
     except Exception as error:
         errors.append(error)
+
+
+@pytest.mark.unit
+def test_native_callback_scope_rejects_lifecycle_and_execution_on_any_same_thread_instance(monkeypatch):
+    guarded = native.NativeRuntime.__new__(native.NativeRuntime)
+    guarded.initialized = True
+    guarded._operation_lock = Lock()
+    guarded._execution_owner = None
+    other = native.NativeRuntime.__new__(native.NativeRuntime)
+    other._init_lock = Lock()
+    other._operation_lock = Lock()
+    other._execution_owner = None
+    monkeypatch.setattr(
+        native,
+        "_acquire_isolate",
+        lambda _path: (_ for _ in ()).throw(AssertionError("native isolate acquired")),
+    )
+    monkeypatch.setattr(
+        native,
+        "_release_isolate",
+        lambda: (_ for _ in ()).throw(AssertionError("native isolate released")),
+    )
+
+    with native._native_callback_scope():
+        assert native._isolate_lock.acquire(blocking=False)
+        native._isolate_lock.release()
+        assert native._resolver_lock_global.acquire(blocking=False)
+        native._resolver_lock_global.release()
+        assert guarded._operation_lock.acquire(blocking=False)
+        guarded._operation_lock.release()
+        assert other._init_lock.acquire(blocking=False)
+        other._init_lock.release()
+        for invoke in (
+            guarded.capture_operation,
+            other.initialize,
+            guarded.cleanup,
+        ):
+            with pytest.raises(
+                dataweave.DataWeaveError,
+                match="DataWeave lifecycle and execution are not allowed from a native callback on the same thread\\.",
+            ):
+                invoke()
+
+
+@pytest.mark.unit
+def test_native_callback_scope_is_thread_local():
+    errors = []
+    outcomes = []
+    runtime = native.NativeRuntime.__new__(native.NativeRuntime)
+    runtime.initialized = True
+
+    with native._native_callback_scope():
+        worker = Thread(
+            target=lambda: _capture_error(
+                errors, lambda: outcomes.append(runtime.capture_operation())
+            )
+        )
+        worker.start()
+        worker.join(1)
+
+        assert not worker.is_alive()
+        assert errors == []
+        assert outcomes == [None]
+        with pytest.raises(dataweave.DataWeaveError, match="native callback"):
+            native._raise_if_native_callback_active()
+
+
+@pytest.mark.unit
+def test_native_callback_reentry_preserves_the_exact_public_error():
+    runtime = dataweave.DataWeave.__new__(dataweave.DataWeave)
+    runtime._native = native.NativeRuntime.__new__(native.NativeRuntime)
+    runtime._native.initialized = True
+
+    with native._native_callback_scope(), pytest.raises(dataweave.DataWeaveError) as error:
+        runtime.run("1 + 1")
+
+    assert str(error.value) == (
+        "DataWeave lifecycle and execution are not allowed from a native callback on the same thread."
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("failure_depth", [1, 2])
+def test_native_callback_scope_restores_depth_after_success_error_and_nesting(failure_depth):
+    assert not hasattr(native._native_callback_state, "depth")
+
+    with pytest.raises(RuntimeError, match="callback failed"):
+        with native._native_callback_scope():
+            assert native._native_callback_state.depth == 1
+            if failure_depth == 1:
+                raise RuntimeError("callback failed")
+            with native._native_callback_scope():
+                assert native._native_callback_state.depth == 2
+                raise RuntimeError("callback failed")
+
+    assert not hasattr(native._native_callback_state, "depth")
+    native._raise_if_native_callback_active()
+
+    with native._native_callback_scope():
+        assert native._native_callback_state.depth == 1
+    assert not hasattr(native._native_callback_state, "depth")
+
+
+@pytest.mark.unit
+def test_resolver_callback_exception_restores_native_callback_depth(monkeypatch):
+    library = FakeLibrary()
+    monkeypatch.setattr(native.ctypes, "CDLL", lambda _path: library)
+    runtime = native.NativeRuntime("/tmp/dwlib")
+    runtime.install_resolver(
+        lambda _path: (_ for _ in ()).throw(RuntimeError("resolver failed"))
+    )
+    runtime.initialize()
+    _handle, callback, context = library.created_engines[0]
+
+    with runtime._resolver_scope():
+        assert callback(None, context, b"org/test/lib.dwl") is None
+
+    assert not hasattr(native._native_callback_state, "depth")
+    native._raise_if_native_callback_active()
+    runtime.cleanup()
 
 
 @pytest.mark.unit

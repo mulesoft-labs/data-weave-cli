@@ -3,7 +3,7 @@ from contextlib import contextmanager
 import os
 from pathlib import Path
 import sys
-from threading import get_ident, Lock
+from threading import get_ident, local, Lock
 import traceback
 from typing import Optional
 
@@ -12,6 +12,27 @@ from .resolver import ModuleResolver
 
 
 _ENV_NATIVE_LIB = "DATAWEAVE_NATIVE_LIB"
+_native_callback_state = local()
+
+
+def _raise_if_native_callback_active() -> None:
+    if getattr(_native_callback_state, "depth", 0) > 0:
+        raise DataWeaveError(
+            "DataWeave lifecycle and execution are not allowed from a native callback on the same thread."
+        )
+
+
+@contextmanager
+def _native_callback_scope():
+    previous = getattr(_native_callback_state, "depth", 0)
+    _native_callback_state.depth = previous + 1
+    try:
+        yield
+    finally:
+        if previous == 0:
+            del _native_callback_state.depth
+        else:
+            _native_callback_state.depth = previous
 
 
 class graal_isolate_t(ctypes.Structure):
@@ -361,7 +382,7 @@ class NativeRuntime:
         self._resolver_buffers = []
         self._resolver_active = False
         self._resolver_active_ident = None
-        self._resolver_lock = Lock()
+        self._operation_lock = Lock()
         self._execution_owner = None
         # Guards this instance's initialize()/cleanup() lifecycle transitions
         # (the initialized-check -> acquire -> create-engine -> publish
@@ -373,6 +394,7 @@ class NativeRuntime:
         self._init_lock = Lock()
 
     def initialize(self) -> None:
+        _raise_if_native_callback_active()
         if self.initialized:
             return
         with self._init_lock:
@@ -493,6 +515,7 @@ class NativeRuntime:
 
     def install_resolver(self, resolver: ModuleResolver) -> None:
         """Binds a module resolver to this engine. Must be called before initialize()."""
+        _raise_if_native_callback_active()
         if self.initialized:
             raise DataWeaveError("Cannot install a resolver after initialize().")
         self._resolver = resolver
@@ -517,7 +540,8 @@ class NativeRuntime:
                 path = module_path.decode("utf-8")
                 if path.startswith("/"):
                     path = path[1:]
-                source = entry._resolver(path)
+                with _native_callback_scope():
+                    source = entry._resolver(path)
                 if not isinstance(source, str):
                     return None
                 buffer = ctypes.create_string_buffer(source.encode("utf-8"))
@@ -550,10 +574,11 @@ class NativeRuntime:
             self._resolver_buffers = []
 
     def cleanup(self) -> None:
+        _raise_if_native_callback_active()
         with self._serialized_native_operation():
-            # _init_lock is nested INSIDE _resolver_lock here (never the
+            # _init_lock is nested INSIDE _operation_lock here (never the
             # reverse -- initialize() only ever takes _init_lock alone, and
-            # never takes _resolver_lock), so there is no lock-ordering
+            # never takes _operation_lock), so there is no lock-ordering
             # inversion between the two. Only the initialized-clearing flag
             # flip needs the lock; the actual destroy/release below stays
             # outside it, guarded by _serialized_native_operation as before.
@@ -587,17 +612,24 @@ class NativeRuntime:
 
     @contextmanager
     def _serialized_native_operation(self):
+        _raise_if_native_callback_active()
         owner = get_ident()
         if getattr(self, "_execution_owner", None) == owner:
             raise DataWeaveError("Reentrant DataWeave execution is not supported.")
-        if not hasattr(self, "_resolver_lock"):
-            self._resolver_lock = Lock()
-        with self._resolver_lock:
+        if not hasattr(self, "_operation_lock"):
+            self._operation_lock = Lock()
+        with self._operation_lock:
             self._execution_owner = owner
             try:
                 yield
             finally:
                 self._execution_owner = None
+
+    def capture_operation(self) -> None:
+        _raise_if_native_callback_active()
+        if not self.initialized:
+            raise DataWeaveError("DataWeave runtime not initialized. Call initialize() first.")
+        return None
 
     @contextmanager
     def _current_thread_attachment(self, thread):
@@ -621,4 +653,3 @@ class NativeRuntime:
             except Exception:
                 if primary_error is None:
                     raise
-
