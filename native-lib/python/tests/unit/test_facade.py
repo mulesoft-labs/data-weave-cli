@@ -160,6 +160,45 @@ def test_global_facade_initializes_once_and_cleanup_allows_recreation(monkeypatc
 
 
 @pytest.mark.unit
+def test_module_cleanup_from_native_callback_preserves_published_instance(monkeypatch):
+    instance = configured_runtime()
+    cleanup_calls = []
+    instance.cleanup = lambda: cleanup_calls.append(True)
+    monkeypatch.setattr(dataweave, "_global_instance", instance)
+
+    with native._native_callback_scope(), pytest.raises(dataweave.DataWeaveError, match="native callback"):
+        dataweave.cleanup()
+
+    assert dataweave._global_instance is instance
+    assert cleanup_calls == []
+    assert dataweave.run("payload").get_string() == "Hello"
+
+
+@pytest.mark.unit
+def test_module_execution_from_native_callback_rejects_before_global_lock_or_native_run(monkeypatch):
+    instance = configured_runtime()
+    monkeypatch.setattr(dataweave, "_global_instance", instance)
+    lock_calls = []
+
+    class UnexpectedLock:
+        def __enter__(self):
+            lock_calls.append("enter")
+            raise AssertionError("global lock acquired")
+
+        def __exit__(self, _exc_type, _exc_value, _traceback):
+            pass
+
+    monkeypatch.setattr(dataweave, "_global_lock", UnexpectedLock())
+
+    with native._native_callback_scope():
+        with pytest.raises(dataweave.DataWeaveError, match="native callback"):
+            dataweave.run("payload")
+
+    assert lock_calls == []
+    assert instance._native.calls == []
+
+
+@pytest.mark.unit
 def test_cleanup_is_noop_without_global_runtime():
     dataweave.cleanup()
 

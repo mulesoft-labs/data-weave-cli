@@ -24,6 +24,7 @@ from .models import (
 )
 from .native import candidate_library_paths as _candidate_library_paths
 from .native import find_library as _find_library
+from .native import _raise_if_native_callback_active
 from .resolver import (
     ModuleResolver,
     compose_resolvers,
@@ -40,6 +41,7 @@ _global_lock = threading.Lock()
 
 def _get_global_instance() -> DataWeave:
     global _global_instance
+    _raise_if_native_callback_active()
     with _global_lock:
         if _global_instance is None:
             import atexit
@@ -72,6 +74,7 @@ def run_input_output_callback(script: str, input_name: str, input_mime_type: str
 
 def cleanup() -> None:
     global _global_instance
+    _raise_if_native_callback_active()
     with _global_lock:
         if _global_instance is not None:
             instance, _global_instance = _global_instance, None

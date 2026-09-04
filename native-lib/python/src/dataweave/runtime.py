@@ -129,7 +129,7 @@ class DataWeave:
             try:
                 data = ctypes.string_at(buffer, length)
                 with _native_callback_scope():
-                    return write_callback(data)
+                    return int(write_callback(data))
             except BaseException:
                 return -1
         try:
@@ -139,6 +139,7 @@ class DataWeave:
             raise DataWeaveError(f"Failed to execute callback streaming: {error}")
 
     def _stream_worker(self, invoke, cancelled: Event) -> Generator[bytes, None, StreamingResult]:
+        _raise_if_native_callback_active()
         sentinel = object()
         queue: Queue = Queue(maxsize=_OUTPUT_QUEUE_MAXSIZE)
 
@@ -161,7 +162,7 @@ class DataWeave:
                     return -1
                 queue.put(ctypes.string_at(buffer, length), timeout=_WORKER_TIMEOUT_SECONDS)
                 return 0
-            except Exception:
+            except BaseException:
                 return -1
 
         def worker_main():
@@ -286,7 +287,7 @@ class DataWeave:
             try:
                 data = ctypes.string_at(buffer, length)
                 with _native_callback_scope():
-                    return write_callback(data)
+                    return int(write_callback(data))
             except BaseException:
                 return -1
         try:

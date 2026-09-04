@@ -85,6 +85,17 @@ class UnraisableRecorder:
         self.unraisable.append(unraisable)
 
 
+class ReentrantWriteStatus:
+    def __init__(self, runtime):
+        self.runtime = runtime
+        self.int_calls = 0
+
+    def __int__(self):
+        self.int_calls += 1
+        self.runtime.run("nested")
+        return 0
+
+
 def configured_runtime(native):
     runtime = dataweave.DataWeave.__new__(dataweave.DataWeave)
     native_runtime = runtime_module.NativeRuntime.__new__(runtime_module.NativeRuntime)
@@ -147,6 +158,75 @@ def test_run_callback_contains_write_callback_base_exception(monkeypatch):
     )
 
     assert native.write_status == -1
+    assert recorder.unraisable == []
+    assert result == dataweave.StreamingResult(False, "write aborted", None, None, False)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "invoke",
+    [
+        lambda runtime, write_callback: runtime.run_callback("script", write_callback),
+        lambda runtime, write_callback: runtime.run_input_output_callback(
+            "script", "payload", "application/json", lambda _size: b"", write_callback,
+        ),
+    ],
+)
+def test_public_write_callback_normalizes_invalid_status_to_abort_without_unraisable(monkeypatch, invoke):
+    native = FakeNative('{"success": false, "error": "write aborted"}', emit=b"chunk")
+    runtime = configured_runtime(native)
+    recorder = UnraisableRecorder()
+    monkeypatch.setattr(sys, "unraisablehook", recorder)
+
+    result = invoke(runtime, lambda _data: None)
+
+    assert native.write_status == -1
+    assert recorder.unraisable == []
+    assert result == dataweave.StreamingResult(False, "write aborted", None, None, False)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "invoke",
+    [
+        lambda runtime, write_callback: runtime.run_callback("script", write_callback),
+        lambda runtime, write_callback: runtime.run_input_output_callback(
+            "script", "payload", "application/json", lambda _size: b"", write_callback,
+        ),
+    ],
+)
+def test_public_write_callback_preserves_integer_status(invoke):
+    native = FakeNative('{"success": false, "error": "write aborted"}', emit=b"chunk")
+    runtime = configured_runtime(native)
+
+    result = invoke(runtime, lambda _data: -7)
+
+    assert native.write_status == -7
+    assert result == dataweave.StreamingResult(False, "write aborted", None, None, False)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "invoke",
+    [
+        lambda runtime, write_callback: runtime.run_callback("script", write_callback),
+        lambda runtime, write_callback: runtime.run_input_output_callback(
+            "script", "payload", "application/json", lambda _size: b"", write_callback,
+        ),
+    ],
+)
+def test_public_write_callback_converts_custom_status_inside_native_callback_scope(monkeypatch, invoke):
+    native = FakeNative('{"success": false, "error": "write aborted"}', emit=b"chunk")
+    runtime = configured_runtime(native)
+    status = ReentrantWriteStatus(runtime)
+    recorder = UnraisableRecorder()
+    monkeypatch.setattr(sys, "unraisablehook", recorder)
+
+    result = invoke(runtime, lambda _data: status)
+
+    assert native.write_status == -1
+    assert status.int_calls == 1
+    assert native.attach_count == 1  # Only the outer callback invocation attached.
     assert recorder.unraisable == []
     assert result == dataweave.StreamingResult(False, "write aborted", None, None, False)
 
@@ -286,6 +366,69 @@ def test_transform_input_iterator_reentry_is_translated_to_abort_without_native_
     assert inner_native.attach_count == 0
     assert lock_available == [True]
     assert stream.metadata == dataweave.StreamingResult(False, "read aborted", None, None, False)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "create_stream",
+    [
+        lambda runtime: runtime.run_streaming("script"),
+        lambda runtime: runtime.run_transform("script", [b"null"]),
+    ],
+)
+def test_precreated_stream_rejects_callback_time_first_consumption_before_worker_admission(monkeypatch, create_stream):
+    native = FakeNative('{"success": true}')
+    runtime = configured_runtime(native)
+    stream = create_stream(runtime)
+    registrations = []
+    starts = []
+    original_register = runtime._register_stream_worker
+
+    def record_registration(worker):
+        registrations.append(worker)
+        return original_register(worker)
+
+    class UnexpectedThread:
+        def __init__(self, *_args, **_kwargs):
+            starts.append("constructed")
+
+    monkeypatch.setattr(runtime, "_register_stream_worker", record_registration)
+    monkeypatch.setattr(runtime_module, "Thread", UnexpectedThread)
+
+    with runtime_module._native_callback_scope(), pytest.raises(dataweave.DataWeaveError, match="native callback"):
+        next(stream)
+
+    assert registrations == []
+    assert starts == []
+    assert native.attach_count == 0
+
+
+@pytest.mark.unit
+def test_internal_streaming_write_trampoline_contains_base_exception(monkeypatch):
+    recorder = UnraisableRecorder()
+    monkeypatch.setattr(sys, "unraisablehook", recorder)
+
+    class RaisingCancel(Event):
+        def __init__(self):
+            super().__init__()
+            self.raise_once = True
+
+        def is_set(self):
+            if self.raise_once:
+                self.raise_once = False
+                raise CallbackBaseException("cancel check failed")
+            return super().is_set()
+
+    native = FakeNative('{"success": false, "error": "write aborted"}', emit=b"chunk")
+    runtime = configured_runtime(native)
+    monkeypatch.setattr(runtime_module, "Event", RaisingCancel)
+    stream = runtime.run_streaming("script")
+
+    assert list(stream) == []
+
+    assert native.write_status == -1
+    assert recorder.unraisable == []
+    assert stream.metadata == dataweave.StreamingResult(False, "write aborted", None, None, False)
 
 
 @pytest.mark.unit
