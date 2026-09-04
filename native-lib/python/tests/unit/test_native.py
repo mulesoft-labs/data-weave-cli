@@ -1,7 +1,7 @@
 from pathlib import Path
 import ctypes
 import threading
-from threading import Barrier, BrokenBarrierError, current_thread, get_ident, Lock, Thread
+from threading import Barrier, BrokenBarrierError, Condition, current_thread, get_ident, Lock, Thread
 
 import pytest
 
@@ -385,11 +385,13 @@ def _capture_error(errors, invoke):
 def test_native_callback_scope_rejects_lifecycle_and_execution_on_any_same_thread_instance(monkeypatch):
     guarded = native.NativeRuntime.__new__(native.NativeRuntime)
     guarded.initialized = True
-    guarded._operation_lock = Lock()
+    guarded._operation_lock = Condition(Lock())
+    guarded._operation_active = False
     guarded._execution_owner = None
     other = native.NativeRuntime.__new__(native.NativeRuntime)
     other._init_lock = Lock()
-    other._operation_lock = Lock()
+    other._operation_lock = Condition(Lock())
+    other._operation_active = False
     other._execution_owner = None
     monkeypatch.setattr(
         native,
@@ -447,6 +449,29 @@ def test_native_callback_scope_is_thread_local():
 
 
 @pytest.mark.unit
+def test_native_callback_scope_rejects_direct_thread_attachment():
+    runtime = native.NativeRuntime.__new__(native.NativeRuntime)
+    runtime.lib = type(
+        "Native",
+        (),
+        {
+            "graal_attach_thread": lambda _self, _isolate, _thread: (_ for _ in ()).throw(
+                AssertionError("native attach called")
+            ),
+            "graal_detach_thread": lambda _self, _thread: (_ for _ in ()).throw(
+                AssertionError("native detach called")
+            ),
+        },
+    )()
+    runtime.isolate = object()
+
+    with native._native_callback_scope():
+        for invoke in (runtime.attach_thread, lambda: runtime.detach_thread(object())):
+            with pytest.raises(dataweave.DataWeaveError, match="native callback"):
+                invoke()
+
+
+@pytest.mark.unit
 def test_native_callback_reentry_preserves_the_exact_public_error():
     runtime = dataweave.DataWeave.__new__(dataweave.DataWeave)
     runtime._native = native.NativeRuntime.__new__(native.NativeRuntime)
@@ -498,6 +523,39 @@ def test_resolver_callback_exception_restores_native_callback_depth(monkeypatch)
 
     assert not hasattr(native._native_callback_state, "depth")
     native._raise_if_native_callback_active()
+    runtime.cleanup()
+
+
+@pytest.mark.unit
+def test_resolver_callback_runs_without_the_instance_operation_lock(monkeypatch):
+    library = FakeLibrary()
+    result_buffer = ctypes.create_string_buffer(b"result")
+    lock_available = []
+    monkeypatch.setattr(native.ctypes, "CDLL", lambda _path: library)
+    runtime = native.NativeRuntime("/tmp/dwlib")
+
+    def resolver(_path):
+        acquired = runtime._operation_lock.acquire(blocking=False)
+        lock_available.append(acquired)
+        if acquired:
+            runtime._operation_lock.release()
+        return "source"
+
+    runtime.install_resolver(resolver)
+    runtime.initialize()
+    _handle, callback, context = library.created_engines[0]
+
+    def run_script(_thread, _handle, _script, _inputs):
+        source = callback(None, context, b"org/test/lib.dwl")
+        assert ctypes.string_at(source) == b"source"
+        return ctypes.addressof(result_buffer)
+
+    library.run_script_engine = CallableFunction(run_script)
+    library.free_cstring = CallableFunction(lambda _thread, _ptr: None)
+
+    assert runtime.run_engine_and_decode(b"script", b"{}") == "result"
+    assert lock_available == [True]
+
     runtime.cleanup()
 
 

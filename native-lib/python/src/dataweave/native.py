@@ -3,7 +3,7 @@ from contextlib import contextmanager
 import os
 from pathlib import Path
 import sys
-from threading import get_ident, local, Lock
+from threading import Condition, get_ident, local, Lock
 import traceback
 from typing import Optional
 
@@ -382,7 +382,8 @@ class NativeRuntime:
         self._resolver_buffers = []
         self._resolver_active = False
         self._resolver_active_ident = None
-        self._operation_lock = Lock()
+        self._operation_lock = Condition(Lock())
+        self._operation_active = False
         self._execution_owner = None
         # Guards this instance's initialize()/cleanup() lifecycle transitions
         # (the initialized-check -> acquire -> create-engine -> publish
@@ -446,6 +447,7 @@ class NativeRuntime:
         return handle
 
     def attach_thread(self):
+        _raise_if_native_callback_active()
         worker_thread = GraalIsolateThreadPointer()
         try:
             result = self.lib.graal_attach_thread(self.isolate, ctypes.byref(worker_thread))
@@ -456,6 +458,7 @@ class NativeRuntime:
         return worker_thread
 
     def detach_thread(self, thread) -> None:
+        _raise_if_native_callback_active()
         try:
             result = self.lib.graal_detach_thread(thread)
         except Exception as error:
@@ -481,37 +484,49 @@ class NativeRuntime:
                     raise
 
     def run_engine_and_decode(self, script: bytes, inputs: bytes) -> str:
-        with self._serialized_native_operation():
+        with self._serialized_native_operation() as operation_lock:
             with self._current_thread_attachment(self.thread) as thread:
                 with self._resolver_scope():
-                    return self.decode_and_free(
-                        self.lib.run_script_engine(thread, self.handle, script, inputs),
-                        thread,
-                    )
+                    try:
+                        operation_lock.release()
+                        return self.decode_and_free(
+                            self.lib.run_script_engine(thread, self.handle, script, inputs),
+                            thread,
+                        )
+                    finally:
+                        operation_lock.acquire()
 
     def run_callback_engine_and_decode(self, thread, script: bytes, inputs: bytes, write_callback) -> str:
-        with self._serialized_native_operation():
+        with self._serialized_native_operation() as operation_lock:
             with self._current_thread_attachment(thread) as current:
-                return self.decode_and_free(
-                    self.lib.run_script_callback_engine(
-                        current, self.handle, script, inputs, write_callback, None
-                    ),
-                    current,
-                )
+                try:
+                    operation_lock.release()
+                    return self.decode_and_free(
+                        self.lib.run_script_callback_engine(
+                            current, self.handle, script, inputs, write_callback, None
+                        ),
+                        current,
+                    )
+                finally:
+                    operation_lock.acquire()
 
     def run_input_output_callback_engine_and_decode(
         self, thread, script: bytes, inputs: bytes, input_name: bytes,
         input_mime_type: bytes, input_charset: Optional[bytes], read_callback, write_callback,
     ) -> str:
-        with self._serialized_native_operation():
+        with self._serialized_native_operation() as operation_lock:
             with self._current_thread_attachment(thread) as current:
-                return self.decode_and_free(
-                    self.lib.run_script_input_output_callback_engine(
-                        current, self.handle, script, inputs, input_name,
-                        input_mime_type, input_charset, read_callback, write_callback, None,
-                    ),
-                    current,
-                )
+                try:
+                    operation_lock.release()
+                    return self.decode_and_free(
+                        self.lib.run_script_input_output_callback_engine(
+                            current, self.handle, script, inputs, input_name,
+                            input_mime_type, input_charset, read_callback, write_callback, None,
+                        ),
+                        current,
+                    )
+                finally:
+                    operation_lock.acquire()
 
     def install_resolver(self, resolver: ModuleResolver) -> None:
         """Binds a module resolver to this engine. Must be called before initialize()."""
@@ -617,13 +632,19 @@ class NativeRuntime:
         if getattr(self, "_execution_owner", None) == owner:
             raise DataWeaveError("Reentrant DataWeave execution is not supported.")
         if not hasattr(self, "_operation_lock"):
-            self._operation_lock = Lock()
+            self._operation_lock = Condition(Lock())
+            self._operation_active = False
         with self._operation_lock:
+            while getattr(self, "_operation_active", False):
+                self._operation_lock.wait()
+            self._operation_active = True
             self._execution_owner = owner
             try:
-                yield
+                yield self._operation_lock
             finally:
                 self._execution_owner = None
+                self._operation_active = False
+                self._operation_lock.notify()
 
     def capture_operation(self) -> None:
         _raise_if_native_callback_active()

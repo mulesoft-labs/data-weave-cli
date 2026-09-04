@@ -1,6 +1,6 @@
 import ctypes
 from queue import Full, Queue
-from threading import Event, Lock, Thread
+from threading import Condition, Event, Lock, Thread
 from time import sleep
 
 import pytest
@@ -89,7 +89,7 @@ def configured_runtime(native):
     native_runtime._resolver_buffers = []
     native_runtime._resolver_active = False
     native_runtime._resolver_active_ident = None
-    native_runtime._operation_lock = Lock()
+    native_runtime._operation_lock = Condition(Lock())
     native_runtime._execution_owner = None
     runtime._native = native_runtime
     return runtime
@@ -126,13 +126,20 @@ def test_write_callback_reentry_is_translated_to_abort_without_deadlocking():
     outer = configured_runtime(outer_native)
     inner = configured_runtime(inner_native)
 
-    result = outer.run_callback(
-        "outer",
-        lambda _chunk: inner.run_callback("nested", lambda _data: 0),
-    )
+    lock_available = []
+
+    def reenter(_chunk):
+        acquired = outer._native._operation_lock.acquire(blocking=False)
+        lock_available.append(acquired)
+        if acquired:
+            outer._native._operation_lock.release()
+        return inner.run_callback("nested", lambda _data: 0)
+
+    result = outer.run_callback("outer", reenter)
 
     assert outer_native.write_status == -1
     assert inner_native.attach_count == 0
+    assert lock_available == [True]
     assert result == dataweave.StreamingResult(False, "write aborted", None, None, False)
 
 
@@ -143,16 +150,26 @@ def test_read_callback_reentry_is_translated_to_abort_without_deadlocking():
     outer = configured_runtime(outer_native)
     inner = configured_runtime(inner_native)
 
+    lock_available = []
+
+    def reenter(_size):
+        acquired = outer._native._operation_lock.acquire(blocking=False)
+        lock_available.append(acquired)
+        if acquired:
+            outer._native._operation_lock.release()
+        return inner.run("nested").get_bytes()
+
     result = outer.run_input_output_callback(
         "outer",
         "payload",
         "application/json",
-        lambda _size: inner.run("nested").get_bytes(),
+        reenter,
         lambda _data: 0,
     )
 
     assert outer_native.read_status == -1
     assert inner_native.attach_count == 0
+    assert lock_available == [True]
     assert result == dataweave.StreamingResult(False, "read aborted", None, None, False)
 
 
@@ -162,8 +179,13 @@ def test_transform_input_iterator_reentry_is_translated_to_abort_without_native_
     inner_native = FakeNative('{"success": true}')
     outer = configured_runtime(outer_native)
     inner = configured_runtime(inner_native)
+    lock_available = []
 
     def input_stream():
+        acquired = outer._native._operation_lock.acquire(blocking=False)
+        lock_available.append(acquired)
+        if acquired:
+            outer._native._operation_lock.release()
         yield inner.run("nested").get_bytes()
 
     stream = outer.run_transform("outer", input_stream())
@@ -171,6 +193,7 @@ def test_transform_input_iterator_reentry_is_translated_to_abort_without_native_
     assert list(stream) == []
     assert outer_native.read_status == -1
     assert inner_native.attach_count == 0
+    assert lock_available == [True]
     assert stream.metadata == dataweave.StreamingResult(False, "read aborted", None, None, False)
 
 
