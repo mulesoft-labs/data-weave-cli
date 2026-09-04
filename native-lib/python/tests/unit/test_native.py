@@ -9,6 +9,10 @@ import dataweave
 from dataweave import native
 
 
+class CallbackBaseException(BaseException):
+    pass
+
+
 class Function:
     pass
 
@@ -494,12 +498,12 @@ def test_native_callback_scope_restores_depth_after_success_error_and_nesting(fa
 
 
 @pytest.mark.unit
-def test_resolver_callback_exception_restores_native_callback_depth(monkeypatch):
+def test_resolver_callback_contains_base_exception_and_restores_native_callback_depth(monkeypatch, capsys):
     library = FakeLibrary()
     monkeypatch.setattr(native.ctypes, "CDLL", lambda _path: library)
     runtime = native.NativeRuntime("/tmp/dwlib")
     runtime.install_resolver(
-        lambda _path: (_ for _ in ()).throw(RuntimeError("resolver failed"))
+        lambda _path: (_ for _ in ()).throw(CallbackBaseException("resolver failed"))
     )
     runtime.initialize()
     _handle, callback, context = library.created_engines[0]
@@ -509,6 +513,7 @@ def test_resolver_callback_exception_restores_native_callback_depth(monkeypatch)
 
     assert not hasattr(native._native_callback_state, "depth")
     native._raise_if_native_callback_active()
+    assert capsys.readouterr().err == "DataWeave module resolver callback failed.\n"
     runtime.cleanup()
 
 

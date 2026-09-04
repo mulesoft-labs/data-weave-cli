@@ -117,7 +117,7 @@ class DataWeave:
             )
             result = parse_native_encoded_response(raw)
         except Exception as error:
-            raise DataWeaveError(f"Failed to execute script: {error}") from error
+            raise DataWeaveError(f"Failed to execute script: {error}")
         if raise_on_error and not result.success:
             raise DataWeaveScriptError(result)
         return result
@@ -130,13 +130,13 @@ class DataWeave:
                 data = ctypes.string_at(buffer, length)
                 with _native_callback_scope():
                     return write_callback(data)
-            except Exception:
+            except BaseException:
                 return -1
         try:
             raw = self._native.run_callback_engine_and_decode(self._native.thread, script.encode("utf-8"), self._inputs_json(inputs), write_cb)
             return parse_streaming_result(json.loads(raw) if raw else {"success": False, "error": "Empty response"})
         except Exception as error:
-            raise DataWeaveError(f"Failed to execute callback streaming: {error}") from error
+            raise DataWeaveError(f"Failed to execute callback streaming: {error}")
 
     def _stream_worker(self, invoke, cancelled: Event) -> Generator[bytes, None, StreamingResult]:
         sentinel = object()
@@ -250,7 +250,7 @@ class DataWeave:
                         return 0
                     state["chunk"] = chunk
                     state["offset"] = 0
-            except Exception:
+            except BaseException:
                 return -1
         return read_cb
 
@@ -279,7 +279,7 @@ class DataWeave:
                     return -1
                 ctypes.memmove(buffer, data, len(data))
                 return len(data)
-            except Exception:
+            except BaseException:
                 return -1
         @WRITE_CALLBACK
         def write_cb(_context, buffer, length):
@@ -287,13 +287,13 @@ class DataWeave:
                 data = ctypes.string_at(buffer, length)
                 with _native_callback_scope():
                     return write_callback(data)
-            except Exception:
+            except BaseException:
                 return -1
         try:
             raw = self._native.run_input_output_callback_engine_and_decode(self._native.thread, script.encode("utf-8"), self._inputs_json(inputs), input_name.encode("utf-8"), input_mime_type.encode("utf-8"), input_charset.encode("utf-8") if input_charset else None, read_cb, write_cb)
             return parse_streaming_result(json.loads(raw) if raw else {"success": False, "error": "Empty response"})
         except Exception as error:
-            raise DataWeaveError(f"Failed to execute callback input/output streaming: {error}") from error
+            raise DataWeaveError(f"Failed to execute callback input/output streaming: {error}")
 
     def __enter__(self):
         self.initialize()

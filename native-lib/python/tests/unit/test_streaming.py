@@ -1,5 +1,6 @@
 import ctypes
 from queue import Full, Queue
+import sys
 from threading import Condition, Event, Lock, Thread
 from time import sleep
 
@@ -63,11 +64,25 @@ class FakeNative:
             self.read_input = b"".join(read)
         if self.emit:
             buffer = ctypes.create_string_buffer(self.emit)
-            assert write_callback(None, ctypes.addressof(buffer), len(self.emit)) == 0
+            self.write_status = write_callback(None, ctypes.addressof(buffer), len(self.emit))
+            if self.write_status != 0:
+                return self._response_pointer()
         return self._response_pointer()
 
     def destroy_engine(self, _thread, _handle):
         self.destroyed_handle = _handle
+
+
+class CallbackBaseException(BaseException):
+    pass
+
+
+class UnraisableRecorder:
+    def __init__(self):
+        self.unraisable = []
+
+    def __call__(self, unraisable):
+        self.unraisable.append(unraisable)
 
 
 def configured_runtime(native):
@@ -117,6 +132,82 @@ def test_run_input_output_callback_converts_read_exception_to_abort_result():
 
     assert result == dataweave.StreamingResult(False, "read aborted", None, None, False)
     assert native.read_status == -1
+
+
+@pytest.mark.unit
+def test_run_callback_contains_write_callback_base_exception(monkeypatch):
+    native = FakeNative('{"success": false, "error": "write aborted"}', emit=b"chunk")
+    runtime = configured_runtime(native)
+    recorder = UnraisableRecorder()
+    monkeypatch.setattr(sys, "unraisablehook", recorder)
+
+    result = runtime.run_callback(
+        "script",
+        lambda _chunk: (_ for _ in ()).throw(CallbackBaseException("stop")),
+    )
+
+    assert native.write_status == -1
+    assert recorder.unraisable == []
+    assert result == dataweave.StreamingResult(False, "write aborted", None, None, False)
+
+
+@pytest.mark.unit
+def test_run_input_output_callback_contains_read_callback_base_exception(monkeypatch):
+    native = FakeNative('{"success": false, "error": "read aborted"}', consume_input=True)
+    runtime = configured_runtime(native)
+    recorder = UnraisableRecorder()
+    monkeypatch.setattr(sys, "unraisablehook", recorder)
+
+    result = runtime.run_input_output_callback(
+        "script",
+        "payload",
+        "application/json",
+        lambda _size: (_ for _ in ()).throw(CallbackBaseException("stop")),
+        lambda _data: 0,
+    )
+
+    assert native.read_status == -1
+    assert recorder.unraisable == []
+    assert result == dataweave.StreamingResult(False, "read aborted", None, None, False)
+
+
+@pytest.mark.unit
+def test_run_input_output_callback_contains_write_callback_base_exception(monkeypatch):
+    native = FakeNative('{"success": false, "error": "write aborted"}', emit=b"chunk", consume_input=True)
+    runtime = configured_runtime(native)
+    recorder = UnraisableRecorder()
+    monkeypatch.setattr(sys, "unraisablehook", recorder)
+
+    result = runtime.run_input_output_callback(
+        "script",
+        "payload",
+        "application/json",
+        lambda _size: b"",
+        lambda _data: (_ for _ in ()).throw(CallbackBaseException("stop")),
+    )
+
+    assert native.write_status == -1
+    assert recorder.unraisable == []
+    assert result == dataweave.StreamingResult(False, "write aborted", None, None, False)
+
+
+@pytest.mark.unit
+def test_transform_contains_input_iterator_base_exception(monkeypatch):
+    native = FakeNative('{"success": false, "error": "read aborted"}', consume_input=True)
+    runtime = configured_runtime(native)
+    recorder = UnraisableRecorder()
+    monkeypatch.setattr(sys, "unraisablehook", recorder)
+
+    def input_stream():
+        raise CallbackBaseException("stop")
+        yield b""  # pragma: no cover
+
+    stream = runtime.run_transform("script", input_stream())
+
+    assert list(stream) == []
+    assert native.read_status == -1
+    assert recorder.unraisable == []
+    assert stream.metadata == dataweave.StreamingResult(False, "read aborted", None, None, False)
 
 
 @pytest.mark.unit
