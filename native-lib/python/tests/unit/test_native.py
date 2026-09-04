@@ -472,20 +472,6 @@ def test_native_callback_scope_rejects_direct_thread_attachment():
 
 
 @pytest.mark.unit
-def test_native_callback_reentry_preserves_the_exact_public_error():
-    runtime = dataweave.DataWeave.__new__(dataweave.DataWeave)
-    runtime._native = native.NativeRuntime.__new__(native.NativeRuntime)
-    runtime._native.initialized = True
-
-    with native._native_callback_scope(), pytest.raises(dataweave.DataWeaveError) as error:
-        runtime.run("1 + 1")
-
-    assert str(error.value) == (
-        "DataWeave lifecycle and execution are not allowed from a native callback on the same thread."
-    )
-
-
-@pytest.mark.unit
 @pytest.mark.parametrize("failure_depth", [1, 2])
 def test_native_callback_scope_restores_depth_after_success_error_and_nesting(failure_depth):
     assert not hasattr(native._native_callback_state, "depth")

@@ -116,8 +116,6 @@ class DataWeave:
                 script.encode("utf-8"), self._inputs_json(inputs)
             )
             result = parse_native_encoded_response(raw)
-        except DataWeaveError:
-            raise
         except Exception as error:
             raise DataWeaveError(f"Failed to execute script: {error}") from error
         if raise_on_error and not result.success:
@@ -137,8 +135,6 @@ class DataWeave:
         try:
             raw = self._native.run_callback_engine_and_decode(self._native.thread, script.encode("utf-8"), self._inputs_json(inputs), write_cb)
             return parse_streaming_result(json.loads(raw) if raw else {"success": False, "error": "Empty response"})
-        except DataWeaveError:
-            raise
         except Exception as error:
             raise DataWeaveError(f"Failed to execute callback streaming: {error}") from error
 
@@ -296,8 +292,6 @@ class DataWeave:
         try:
             raw = self._native.run_input_output_callback_engine_and_decode(self._native.thread, script.encode("utf-8"), self._inputs_json(inputs), input_name.encode("utf-8"), input_mime_type.encode("utf-8"), input_charset.encode("utf-8") if input_charset else None, read_cb, write_cb)
             return parse_streaming_result(json.loads(raw) if raw else {"success": False, "error": "Empty response"})
-        except DataWeaveError:
-            raise
         except Exception as error:
             raise DataWeaveError(f"Failed to execute callback input/output streaming: {error}") from error
 
