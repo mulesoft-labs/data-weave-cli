@@ -2,6 +2,13 @@ import { resolveAddonPath } from "./addon-path";
 import { DataWeaveError } from "./errors";
 import type { ModuleResolver } from "./resolver";
 
+export interface NativeStreamingOperation {
+  readonly completion: Promise<string>;
+  acknowledge(bytes: number): void;
+  cancel(): void;
+  close(): void;
+}
+
 interface NativeAddon {
   initialize(libPath: string): void;
   createEngine(): number;
@@ -13,7 +20,7 @@ interface NativeAddon {
     script: string,
     inputsJson: string,
     chunkCb: (chunk: Buffer) => void
-  ): Promise<string>;
+  ): NativeStreamingOperation;
   runScriptTransformEngine(
     handle: number,
     script: string,
@@ -23,7 +30,7 @@ interface NativeAddon {
     inputCharset: string | null,
     readCb: (bufSize: number) => Buffer | null,
     writeCb: (chunk: Buffer) => void
-  ): Promise<string>;
+  ): NativeStreamingOperation;
   cleanup(): Promise<void>;
 }
 
@@ -78,7 +85,7 @@ export function runScriptStreamingEngine(
   script: string,
   inputsJson: string,
   chunkCb: (chunk: Buffer) => void
-): Promise<string> {
+): NativeStreamingOperation {
   return callNative(() =>
     getAddon().runScriptStreamingEngine(handle, script, inputsJson, chunkCb)
   );
@@ -93,7 +100,7 @@ export function runScriptTransformEngine(
   inputCharset: string | null,
   readCb: (bufSize: number) => Buffer | null,
   writeCb: (chunk: Buffer) => void
-): Promise<string> {
+): NativeStreamingOperation {
   return callNative(() =>
     getAddon().runScriptTransformEngine(
       handle,

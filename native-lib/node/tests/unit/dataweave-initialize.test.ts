@@ -20,6 +20,30 @@ vi.mock("../../src/ffi", () => ({
 import * as ffi from "../../src/ffi";
 import { DataWeave, run, cleanup } from "../../src/dataweave";
 import { DataWeaveError } from "../../src/errors";
+import type { NativeStreamingOperation } from "../../src/ffi";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+function operation(completion: Promise<string>): NativeStreamingOperation {
+  return {
+    completion,
+    acknowledge: vi.fn(),
+    cancel: vi.fn(),
+    close: vi.fn(),
+  };
+}
+
+const okStreamingMeta = () => JSON.stringify({
+  success: true,
+  mimeType: "application/json",
+  charset: "utf-8",
+  binary: false,
+});
 
 describe("DataWeave.initialize() native ref-count safety", () => {
   beforeEach(() => {
@@ -398,6 +422,148 @@ describe("DataWeave.initialize() native ref-count safety", () => {
 
     await dw.cleanup();
     expect(ffi.destroyEngine).toHaveBeenCalledWith(11);
+  });
+
+  describe("active streaming cleanup", () => {
+    it("starts and registers native work only on first iteration", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(12);
+      const nativeOperation = operation(Promise.resolve(okStreamingMeta()));
+      vi.mocked(ffi.runScriptStreamingEngine).mockReturnValue(nativeOperation);
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const stream = dw.runStreaming("output application/json --- [1]");
+
+      expect(ffi.runScriptStreamingEngine).not.toHaveBeenCalled();
+      const result = await stream.next();
+      expect(result.done).toBe(true);
+      expect(ffi.runScriptStreamingEngine).toHaveBeenCalledTimes(1);
+      expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+
+      await dw.cleanup();
+      expect(nativeOperation.cancel).not.toHaveBeenCalled();
+    });
+
+    it("cancels active operations and awaits their settlement before destroying the engine", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(13);
+      const completion = deferred<string>();
+      const nativeOperation = operation(completion.promise);
+      vi.mocked(ffi.runScriptStreamingEngine).mockReturnValue(nativeOperation);
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const stream = dw.runStreaming("output application/json --- [1]");
+      const firstPull = stream.next();
+      await vi.waitFor(() => expect(ffi.runScriptStreamingEngine).toHaveBeenCalledTimes(1));
+
+      const cleanupPromise = dw.cleanup();
+      expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
+      expect(ffi.destroyEngine).not.toHaveBeenCalled();
+
+      completion.resolve(okStreamingMeta());
+      await Promise.all([firstPull, cleanupPromise]);
+
+      expect(ffi.destroyEngine).toHaveBeenCalledWith(13);
+      expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("acknowledges buffered chunks abandoned by cleanup", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(16);
+      const completion = deferred<string>();
+      const nativeOperation = operation(completion.promise);
+      vi.mocked(ffi.runScriptStreamingEngine).mockImplementation((_handle, _script, _inputs, cb) => {
+        cb(Buffer.from("x"));
+        cb(Buffer.from("yy"));
+        return nativeOperation;
+      });
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const stream = dw.runStreaming("output application/json --- [1]");
+      const first = await stream.next();
+      expect(first.value?.toString()).toBe("x");
+      expect(nativeOperation.acknowledge).toHaveBeenCalledWith(1);
+
+      const cleanupPromise = dw.cleanup();
+      expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 2);
+      expect(nativeOperation.acknowledge).toHaveBeenCalledTimes(2);
+      expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
+
+      completion.resolve(okStreamingMeta());
+      await cleanupPromise;
+      expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("tracks and cancels transform operations after lazy input preparation", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(17);
+      const completion = deferred<string>();
+      const nativeOperation = operation(completion.promise);
+      vi.mocked(ffi.runScriptTransformEngine).mockReturnValue(nativeOperation);
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform(
+        "output application/json --- payload",
+        [Buffer.from("[1]")]
+      );
+
+      expect(ffi.runScriptTransformEngine).not.toHaveBeenCalled();
+      const firstPull = transform.next();
+      await vi.waitFor(() => expect(ffi.runScriptTransformEngine).toHaveBeenCalledTimes(1));
+
+      const cleanupPromise = dw.cleanup();
+      expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
+      completion.resolve(okStreamingMeta());
+      await Promise.all([firstPull, cleanupPromise]);
+
+      expect(ffi.destroyEngine).toHaveBeenCalledWith(17);
+      expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not fail cleanup when a canceled operation rejects", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(14);
+      const completion = deferred<string>();
+      const nativeOperation = operation(completion.promise);
+      vi.mocked(ffi.runScriptStreamingEngine).mockReturnValue(nativeOperation);
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const firstPull = dw.runStreaming("output application/json --- [1]").next();
+      const firstPullOutcome = firstPull.catch((error) => error);
+      await vi.waitFor(() => expect(ffi.runScriptStreamingEngine).toHaveBeenCalledTimes(1));
+
+      const cleanupPromise = dw.cleanup();
+      completion.reject(new Error("operation canceled"));
+
+      await expect(cleanupPromise).resolves.toBeUndefined();
+      await expect(firstPullOutcome).resolves.toEqual(new Error("operation canceled"));
+      expect(ffi.destroyEngine).toHaveBeenCalledWith(14);
+      expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not let operation rejection mask a primary destroy error", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(15);
+      const completion = deferred<string>();
+      const nativeOperation = operation(completion.promise);
+      vi.mocked(ffi.runScriptStreamingEngine).mockReturnValue(nativeOperation);
+      vi.mocked(ffi.destroyEngine).mockImplementation(() => {
+        throw new Error("destroy boom");
+      });
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const firstPull = dw.runStreaming("output application/json --- [1]").next();
+      const firstPullOutcome = firstPull.catch((error) => error);
+      await vi.waitFor(() => expect(ffi.runScriptStreamingEngine).toHaveBeenCalledTimes(1));
+
+      const cleanupPromise = dw.cleanup();
+      completion.reject(new Error("operation canceled"));
+
+      await expect(cleanupPromise).rejects.toThrow("destroy boom");
+      await firstPullOutcome;
+      expect(ffi.cleanup).toHaveBeenCalledTimes(1);
+      expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("stale engine generation", () => {

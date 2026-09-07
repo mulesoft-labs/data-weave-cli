@@ -5,6 +5,7 @@ import { parseNativeResponse } from "./result";
 import { createChunkReader } from "./reader";
 import { streamFromNative } from "./stream";
 import { DataWeaveError, DataWeaveScriptError } from "./errors";
+import type { NativeStreamingOperation } from "./ffi";
 import type { ExecutionResult, StreamingResult, Inputs, TransformOptions } from "./types";
 import type { ModuleResolver } from "./resolver";
 
@@ -58,6 +59,7 @@ export class DataWeave {
   private state: "uninitialized" | "ready" | "cleaning-up" = "uninitialized";
   private engineHandle: number | null = null;
   private engineGeneration = 0;
+  private readonly activeStreams = new Set<NativeStreamingOperation>();
   private cleanupPromise: Promise<void> | null = null;
 
   /**
@@ -196,6 +198,22 @@ export class DataWeave {
     // during the async teardown window are rejected deterministically rather
     // than seeing a stale "ready" state with a null engineHandle (round-6 #1/#3).
     this.state = "cleaning-up";
+    const activeStreams = [...this.activeStreams];
+    for (const operation of activeStreams) {
+      try {
+        operation.cancel();
+      } catch {
+        // A controller failure must not prevent the remaining streams from
+        // being canceled or the engine reference from being released.
+      }
+    }
+    // Cancellation may reject completion as its normal terminal signal. Wait
+    // for every snapshotted operation, but do not let those rejections mask an
+    // engine destruction or native cleanup failure.
+    if (activeStreams.length > 0) {
+      await Promise.allSettled(activeStreams.map((operation) => operation.completion));
+    }
+
     let destroyError: unknown;
     try {
       if (this.engineHandle !== null) {
@@ -272,8 +290,10 @@ export class DataWeave {
     this.assertCurrentOperation(token);
     const inputsJson = buildInputsJson(inputs ?? {});
     this.assertCurrentOperation(token);
-    return yield* streamFromNative((chunkCb) =>
-      ffi.runScriptStreamingEngine(token.handle, script, inputsJson, chunkCb)
+    return yield* streamFromNative(
+      (chunkCb) => ffi.runScriptStreamingEngine(token.handle, script, inputsJson, chunkCb),
+      (operation) => { this.activeStreams.add(operation); },
+      (operation) => { this.activeStreams.delete(operation); }
     );
   }
 
@@ -320,17 +340,20 @@ export class DataWeave {
 
     this.assertCurrentOperation(token);
 
-    return yield* streamFromNative((writeCb) =>
-      ffi.runScriptTransformEngine(
-        token.handle,
-        script,
-        inputsJson,
-        inputName,
-        inputMimeType,
-        inputCharset,
-        readCb,
-        writeCb
-      )
+    return yield* streamFromNative(
+      (writeCb) =>
+        ffi.runScriptTransformEngine(
+          token.handle,
+          script,
+          inputsJson,
+          inputName,
+          inputMimeType,
+          inputCharset,
+          readCb,
+          writeCb
+        ),
+      (operation) => { this.activeStreams.add(operation); },
+      (operation) => { this.activeStreams.delete(operation); }
     );
   }
 
