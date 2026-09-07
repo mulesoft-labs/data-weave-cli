@@ -660,7 +660,7 @@ class NativeRuntime:
             finally:
                 self._execution_owner = None
                 self._operation_active = False
-                self._operation_lock.notify()
+                self._operation_lock.notify_all()
 
     def _validate_operation_locked(self, expected: _EngineOperation) -> None:
         if self._engine_operation != expected:

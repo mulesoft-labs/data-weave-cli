@@ -236,6 +236,116 @@ def test_run_admission_generation_keeps_admitted_operation_on_original_engine(mo
 
 
 @pytest.mark.unit
+def test_run_admission_generation_wakes_all_stale_waiters_after_cleanup(monkeypatch):
+    library = FakeLibrary()
+    result_buffer = ctypes.create_string_buffer(
+        b'{"success":true,"result":"","binary":false,"mimeType":"application/json","charset":"UTF-8"}'
+    )
+    active_started = Event()
+    release_active = Event()
+
+    def run_script(_thread, _handle, _script, _inputs):
+        active_started.set()
+        assert release_active.wait(1)
+        return ctypes.addressof(result_buffer)
+
+    library.run_script_engine = CallableFunction(run_script)
+    library.free_cstring = CallableFunction(lambda _thread, _ptr: None)
+    monkeypatch.setattr(native.ctypes, "CDLL", lambda _path: library)
+    runtime = native.NativeRuntime("/tmp/dwlib")
+    runtime.initialize()
+    operation = runtime.capture_operation()
+    active_errors = []
+    cleanup_errors = []
+    stale_errors = []
+    active = Thread(
+        target=lambda: _capture_error(
+            active_errors,
+            lambda: runtime.run_engine_and_decode(b"active", b"{}", operation=operation),
+        )
+    )
+    active.start()
+    assert active_started.wait(1)
+
+    original_wait = runtime._operation_lock.wait
+    cleanup_done = Event()
+    waiting = {
+        "cleanup-waiter": Event(),
+        "stale-waiter-0": Event(),
+        "stale-waiter-1": Event(),
+    }
+
+    def record_wait(timeout=None):
+        name = current_thread().name
+        waiting[name].set()
+        result = original_wait(timeout)
+        if name.startswith("stale-waiter"):
+            runtime._operation_lock.release()
+            try:
+                assert cleanup_done.wait(1)
+            finally:
+                runtime._operation_lock.acquire()
+        return result
+
+    monkeypatch.setattr(runtime._operation_lock, "wait", record_wait)
+
+    def cleanup_runtime():
+        try:
+            runtime.cleanup()
+        finally:
+            cleanup_done.set()
+
+    cleanup = Thread(
+        target=lambda: _capture_error(cleanup_errors, cleanup_runtime),
+        name="cleanup-waiter",
+    )
+    cleanup.start()
+    assert waiting["cleanup-waiter"].wait(1)
+    with runtime._operation_lock:
+        pass
+    stale_waiters = [
+        Thread(
+            target=lambda: _capture_error(
+                stale_errors,
+                lambda: runtime.run_engine_and_decode(
+                    b"stale", b"{}", operation=operation
+                ),
+            ),
+            name=f"stale-waiter-{index}",
+        )
+        for index in range(2)
+    ]
+    for waiter in stale_waiters:
+        waiter.start()
+        assert waiting[waiter.name].wait(1)
+        with runtime._operation_lock:
+            pass
+    release_active.set()
+    active.join(1)
+    cleanup.join(1)
+    for waiter in stale_waiters:
+        waiter.join(1)
+    stranded = [waiter.name for waiter in stale_waiters if waiter.is_alive()]
+    if stranded:
+        with runtime._operation_lock:
+            runtime._operation_lock.notify_all()
+        for waiter in stale_waiters:
+            waiter.join(1)
+
+    assert not active.is_alive()
+    assert not cleanup.is_alive()
+    assert stranded == []
+    assert not any(waiter.is_alive() for waiter in stale_waiters)
+    assert active_errors == []
+    assert cleanup_errors == []
+    assert len(stale_errors) == 2
+    assert all(
+        str(error) == "DataWeave operation belongs to a stale engine generation."
+        for error in stale_errors
+    )
+
+
+@pytest.mark.unit
 def test_shared_isolate_is_created_once_and_torn_down_on_last_release(monkeypatch):
     library = FakeLibrary()
     monkeypatch.setattr(native.ctypes, "CDLL", lambda _path: library)
