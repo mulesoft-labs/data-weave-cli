@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import * as ffi from "../../src/ffi";
+import { DataWeaveError } from "../../src/errors";
 import { findLibrary, buildInputsJson } from "../../src/utils";
 
 // Round-6 finding #2: napi_run_script_streaming_engine/napi_run_script_transform_engine
@@ -45,57 +46,36 @@ import { findLibrary, buildInputsJson } from "../../src/utils";
 // mirroring the round-5 teardown-deadlock test's use of a synchronous native
 // read-callback to force deterministic ordering instead of timers.
 //
-// Real addon, no mocking.
-describe("admission rejected while teardown pending (round 6 #2)", () => {
-  it("a streaming op started on the same handle during pending teardown is rejected, not admitted", async () => {
+// Task 6 supersedes this test's callback-based pending-teardown trigger. While
+// native code invokes a transform read callback, all isolate-touching methods
+// are rejected before lifecycle mutation or worker admission. Use cleanup and
+// streaming start together to cover both guards and the TypeScript mapping.
+describe("transform read callback admission guard", () => {
+  it("rejects cleanup and streaming start before native admission", async () => {
     ffi.initialize(findLibrary());
     const handle = ffi.createEngine();
 
-    let cleanupPromise: Promise<void> | undefined;
+    let cleanupErr: unknown;
     let admitErr: unknown;
     let admitted = false;
-    let secondOpSettled: Promise<void> = Promise.resolve();
 
     let firstRead = true;
     const readCb = (_bufSize: number): Buffer | null => {
       if (firstRead) {
         firstRead = false;
-
-        // Trigger Case 5 of napi_cleanup: last release of the shared library
-        // ref-count while this transform's worker is attached and
-        // g_active_ops > 0. Synchronously sets g_teardown_state =
-        // TEARDOWN_PENDING_WAIT before returning. Not awaited -- the point is
-        // to observe the state it leaves behind, not its eventual settlement.
-        cleanupPromise = ffi.cleanup();
-
-        // Attempt a second admission on the SAME still-live handle/isolate
-        // while teardown is pending. Fixed code rejects admission with a
-        // synchronous napi_throw_error (the atomic admission check sees
-        // g_teardown_state != TEARDOWN_NONE, before any promise is even
-        // created). Pre-fix code admits it: the unlocked g_initialized check
-        // passes (the isolate genuinely hasn't been torn down yet --
-        // TEARDOWN_PENDING_WAIT hasn't reached physical teardown) and
-        // g_active_ops is reserved without ever consulting g_teardown_state,
-        // so the call returns a promise that goes on to resolve successfully.
-        //
-        // On rejection, napi_throw_error fires synchronously from this very
-        // call (admission fails before any promise is created), so it must
-        // be caught here rather than only via a rejected-promise `.then` --
-        // mirroring the round-5 teardown-deadlock test's care not to let a
-        // thrown exception escape a native read-callback body (it would be
-        // reinterpreted as a read error, masking the real outcome).
         try {
-          secondOpSettled = ffi
-            .runScriptStreamingEngine(
-              handle,
-              "%dw 2.0\noutput application/json\n---\n[1,2,3]",
-              buildInputsJson({}),
-              () => {}
-            )
-            .then(
-              () => { admitted = true; },
-              (e) => { admitErr = e; }
-            );
+          ffi.cleanup();
+        } catch (e) {
+          cleanupErr = e;
+        }
+        try {
+          ffi.runScriptStreamingEngine(
+            handle,
+            "%dw 2.0\noutput application/json\n---\n[1,2,3]",
+            buildInputsJson({}),
+            () => {}
+          );
+          admitted = true;
         } catch (e) {
           admitErr = e;
         }
@@ -108,29 +88,25 @@ describe("admission rejected while teardown pending (round 6 #2)", () => {
     const chunks: Buffer[] = [];
     const writeCb = (chunk: Buffer) => { chunks.push(chunk); };
 
-    const resultRaw = await ffi.runScriptTransformEngine(
-      handle,
-      "output application/json\n---\npayload",
-      "{}",
-      "payload",
-      "application/json",
-      null,
-      readCb,
-      writeCb
-    );
-    const result = JSON.parse(resultRaw);
-    expect(result.success).toBe(true);
-
-    // Let the second op settle (whichever branch it took) before asserting,
-    // and drain the pending teardown so the shared native isolate is left in
-    // a clean, consistent state for sibling test files in this process.
-    await secondOpSettled;
-    await cleanupPromise;
-
-    // The second op admitted while teardown was pending must have been
-    // rejected, not silently admitted against an isolate a concurrent
-    // teardown could tear down out from under it.
-    expect(admitErr).toBeTruthy();
-    expect(admitted).toBe(false);
+    try {
+      const resultRaw = await ffi.runScriptTransformEngine(
+        handle,
+        "output application/json\n---\npayload",
+        "{}",
+        "payload",
+        "application/json",
+        null,
+        readCb,
+        writeCb
+      );
+      const result = JSON.parse(resultRaw);
+      expect(result.success).toBe(true);
+      expect(cleanupErr).toBeInstanceOf(DataWeaveError);
+      expect(admitErr).toBeInstanceOf(DataWeaveError);
+      expect(admitted).toBe(false);
+    } finally {
+      ffi.destroyEngine(handle);
+      await ffi.cleanup();
+    }
   }, 20000);
 });

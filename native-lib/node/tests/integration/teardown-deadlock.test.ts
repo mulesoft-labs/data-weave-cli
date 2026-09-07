@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { run, runTransform, cleanup } from "../../src/dataweave";
+import { DataWeaveError } from "../../src/errors";
 
 // Regression test for W-23692110 round 5 (Task 1 fix in native-lib/node/src/addon.c).
 //
@@ -37,20 +38,15 @@ import { run, runTransform, cleanup } from "../../src/dataweave";
 // guarantees the ordering "worker attached and mid-read" -> "cleanup()
 // fired" -> "run() fired", all on the JS thread, before the generator call
 // returns and the worker can proceed.
-describe("re-init during pending teardown (W-23692110, round 5 P1)", () => {
-  // On the UNFIXED addon.c this deadlocks for real: the JS thread never
-  // returns from run()'s napi_initialize (blocked waiting for g_active_ops to
-  // drain), so the background transform worker -- itself blocked waiting for
-  // the JS thread to service its read callback -- can never proceed either.
-  // Vitest kills the test at the timeout below, a bounded/deterministic red.
-  // On the fixed code, napi_initialize adopts the still-live isolate and
-  // run() returns promptly, letting everything drain normally.
+// Task 6 replaces the old callback-triggered pending-teardown scenario with a
+// stronger contract: public DataWeave execution is rejected while native code
+// is invoking the transform input callback. The real-addon test still proves
+// the worker and outer transform drain without a deadlock after that rejection.
+describe("public API transform callback reentrancy guard", () => {
   it(
-    "module-level cleanup() during an active transform read does not deadlock a concurrent run()",
+    "rejects a nested module-level run and lets the outer transform drain",
     async () => {
       let fired = false;
-      let cleanupPromise: Promise<void> | undefined;
-      let runResult: ReturnType<typeof run> | undefined;
       let runError: unknown;
 
       // Large enough that, at the moment of the very first read pull, the
@@ -64,20 +60,8 @@ describe("re-init during pending teardown (W-23692110, round 5 P1)", () => {
         for (let i = 0; i < totalReads; i++) {
           if (!fired) {
             fired = true;
-            // We are executing synchronously inside the native read
-            // callback (call_js_read in addon.c), on the JS thread, while
-            // the background transform worker thread is blocked inside
-            // transform_read_cb waiting for this exact call to return.
-            // Deliberately do NOT await cleanup() here, and do NOT let an
-            // assertion throw from inside this generator -- a thrown
-            // exception here would be caught by the native read-callback
-            // wrapper and reinterpreted as a read error, silently masking a
-            // real assertion failure instead of surfacing it as a test
-            // failure. Capture results and assert on them after the
-            // generator (and the transform) have fully drained.
-            cleanupPromise = cleanup();
             try {
-              runResult = run('%dw 2.0\noutput application/json\n---\n1 + 1');
+              run('%dw 2.0\noutput application/json\n---\n1 + 1');
             } catch (e) {
               runError = e;
             }
@@ -101,18 +85,9 @@ describe("re-init during pending teardown (W-23692110, round 5 P1)", () => {
       }
 
       expect(fired).toBe(true);
-      expect(runError).toBeUndefined();
-      expect(runResult?.success).toBe(true);
-      expect(JSON.parse(runResult!.getString()!)).toBe(2);
+      expect(runError).toBeInstanceOf(DataWeaveError);
       expect(result.value.success).toBe(true);
 
-      // Let both the deferred teardown/cleanup and this test settle cleanly.
-      // This is essential: the process shares one native isolate across all
-      // integration test files, so leaving an unresolved cleanup here would
-      // perturb sibling test files.
-      await cleanupPromise;
-      // Idempotent final cleanup: a no-op if the singleton is already fully
-      // released, leaving the module in a clean state for subsequent tests.
       await cleanup();
     },
     20000

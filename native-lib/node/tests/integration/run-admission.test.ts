@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import * as ffi from "../../src/ffi";
+import { DataWeaveError } from "../../src/errors";
 import { findLibrary, buildInputsJson } from "../../src/utils";
 
 // Round-7 finding #1: the synchronous napi_run_script_engine touched the
@@ -28,17 +29,17 @@ import { findLibrary, buildInputsJson } from "../../src/utils";
 // returned; the immediately-following ffi.runScriptEngine re-enters native code
 // synchronously on the same callstack and deterministically observes it.
 //
-// Real addon, no mocking.
-describe("run() admission rejected while teardown pending (round 7 #1)", () => {
-  it("a synchronous run() started during pending teardown throws, not attach to a dead isolate", async () => {
+// Task 6 supersedes this test's old callback-based pending-teardown trigger:
+// lifecycle and execution entry from a native callback are now rejected before
+// cleanup can queue teardown or run can attach to the isolate. Drive the real
+// addon through ffi so this also verifies TypeScript error normalization for a
+// transform read callback, while the successful outer transform proves callback
+// depth is restored afterward.
+describe("transform read callback reentrancy guard", () => {
+  it("rejects cleanup and run before native admission and preserves the outer transform", async () => {
     ffi.initialize(findLibrary());
     const handle = ffi.createEngine();
-
-    // Keep one op in flight so the ref release becomes Case 5 (pending
-    // teardown) rather than Case 4 (immediate teardown): use a transform whose
-    // read callback triggers cleanup() and then attempts a run() on the same
-    // handle, all on the same synchronous callstack.
-    let cleanupPromise: Promise<void> | undefined;
+    let cleanupErr: unknown;
     let runErr: unknown;
     let ran = false;
 
@@ -46,14 +47,11 @@ describe("run() admission rejected while teardown pending (round 7 #1)", () => {
     const readCb = (_bufSize: number): Buffer | null => {
       if (firstRead) {
         firstRead = false;
-        // Case 5: last ref release with g_active_ops > 0 -> TEARDOWN_PENDING_WAIT,
-        // set synchronously before this returns. Not awaited.
-        cleanupPromise = ffi.cleanup();
-        // Synchronous run() on the same still-live handle while teardown is
-        // pending. Fixed code rejects admission with a synchronous throw
-        // (g_teardown_state != TEARDOWN_NONE). Must be caught here -- it is a
-        // synchronous throw, not a rejected promise. Do not let it escape the
-        // native read-callback body.
+        try {
+          ffi.cleanup();
+        } catch (e) {
+          cleanupErr = e;
+        }
         try {
           ffi.runScriptEngine(
             handle,
@@ -71,23 +69,25 @@ describe("run() admission rejected while teardown pending (round 7 #1)", () => {
 
     const writeCb = (_chunk: Buffer) => {};
 
-    const resultRaw = await ffi.runScriptTransformEngine(
-      handle,
-      "output application/json\n---\npayload",
-      "{}",
-      "payload",
-      "application/json",
-      null,
-      readCb,
-      writeCb
-    );
-    const result = JSON.parse(resultRaw);
-    expect(result.success).toBe(true);
-
-    await cleanupPromise;
-
-    // run() started while teardown was pending must have been rejected.
-    expect(runErr).toBeTruthy();
-    expect(ran).toBe(false);
+    try {
+      const resultRaw = await ffi.runScriptTransformEngine(
+        handle,
+        "output application/json\n---\npayload",
+        "{}",
+        "payload",
+        "application/json",
+        null,
+        readCb,
+        writeCb
+      );
+      const result = JSON.parse(resultRaw);
+      expect(result.success).toBe(true);
+      expect(cleanupErr).toBeInstanceOf(DataWeaveError);
+      expect(runErr).toBeInstanceOf(DataWeaveError);
+      expect(ran).toBe(false);
+    } finally {
+      ffi.destroyEngine(handle);
+      await ffi.cleanup();
+    }
   }, 20000);
 });
