@@ -269,6 +269,7 @@ export class DataWeave {
     script: string,
     inputs?: Inputs
   ): AsyncGenerator<Buffer, StreamingResult, undefined> {
+    this.assertCurrentOperation(token);
     const inputsJson = buildInputsJson(inputs ?? {});
     this.assertCurrentOperation(token);
     return yield* streamFromNative((chunkCb) =>

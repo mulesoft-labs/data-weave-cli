@@ -447,6 +447,55 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       await dw.cleanup();
     });
 
+    it("rejects stale runStreaming work before input serialization can run", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(2);
+      let inputEnumerations = 0;
+      const inputs = new Proxy({ payload: 1 }, {
+        ownKeys() {
+          inputEnumerations++;
+          throw new Error("stale inputs must not be enumerated");
+        },
+      });
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const stream = dw.runStreaming("output application/json --- payload", inputs);
+
+      await dw.cleanup();
+      dw.initialize();
+
+      await expectStaleGenerationError(stream.next());
+      expect(inputEnumerations).toBe(0);
+      expect(ffi.runScriptStreamingEngine).not.toHaveBeenCalled();
+
+      await dw.cleanup();
+    });
+
+    it("revalidates runStreaming after input serialization before native admission", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(2);
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+
+      let inputReads = 0;
+      let invalidatingCleanup: Promise<void> | undefined;
+      const inputs = {};
+      Object.defineProperty(inputs, "payload", {
+        enumerable: true,
+        get() {
+          inputReads++;
+          invalidatingCleanup = dw.cleanup();
+          return 1;
+        },
+      });
+
+      const stream = dw.runStreaming("output application/json --- payload", inputs);
+      await expectStaleGenerationError(stream.next());
+
+      expect(inputReads).toBe(1);
+      expect(ffi.runScriptStreamingEngine).not.toHaveBeenCalled();
+      await invalidatingCleanup;
+    });
+
     it("rejects a lazy runTransform operation after replacement with a different handle before native admission", async () => {
       vi.mocked(ffi.createEngine).mockReturnValueOnce(2).mockReturnValueOnce(3);
 
