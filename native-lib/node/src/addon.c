@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdint.h>
 #ifndef _WIN32
 #include <pthread.h>
 #endif
@@ -36,6 +37,7 @@ static void* g_thread = NULL;
 static int g_initialized = 0;
 static int g_ref_count = 0;
 static uv_mutex_t g_mutex;
+static uv_key_t g_native_callback_depth;
 // Guards initialization of the process-global g_mutex. Init() runs once per
 // Worker environment that loads this addon, but g_mutex is process-global —
 // re-running uv_mutex_init() on an already-initialized mutex from a second
@@ -43,6 +45,46 @@ static uv_mutex_t g_mutex;
 // every other thread already relying on it). uv_once ensures the real init
 // body runs exactly once per process regardless of how many Workers load us.
 static uv_once_t g_mutex_once = UV_ONCE_INIT;
+
+#define CALLBACK_REENTRANCY_CODE "ERR_DATAWEAVE_CALLBACK_REENTRANCY"
+
+static unsigned native_callback_depth(void) {
+    return (unsigned)(uintptr_t)uv_key_get(&g_native_callback_depth);
+}
+
+static void native_callback_enter(void) {
+    uv_key_set(&g_native_callback_depth,
+               (void*)(uintptr_t)(native_callback_depth() + 1));
+}
+
+static void native_callback_exit(void) {
+    unsigned depth = native_callback_depth();
+    uv_key_set(&g_native_callback_depth,
+               depth > 1 ? (void*)(uintptr_t)(depth - 1) : NULL);
+}
+
+static bool native_callback_active(void) {
+    return native_callback_depth() != 0;
+}
+
+static napi_value throw_callback_reentrancy(napi_env env) {
+    napi_value message;
+    napi_value error;
+    napi_value code;
+    if (napi_create_string_utf8(
+            env,
+            "DataWeave native methods cannot be called from a native callback",
+            NAPI_AUTO_LENGTH,
+            &message) != napi_ok ||
+        napi_create_error(env, NULL, message, &error) != napi_ok ||
+        napi_create_string_utf8(env, CALLBACK_REENTRANCY_CODE, NAPI_AUTO_LENGTH, &code) != napi_ok ||
+        napi_set_named_property(env, error, "code", code) != napi_ok ||
+        napi_throw(env, error) != napi_ok) {
+        napi_throw_error(env, CALLBACK_REENTRANCY_CODE,
+                         "DataWeave native methods cannot be called from a native callback");
+    }
+    return NULL;
+}
 
 static graal_create_isolate_fn fn_create_isolate = NULL;
 static graal_attach_thread_fn fn_attach_thread = NULL;
@@ -903,6 +945,7 @@ static void cleanup_thread_fn(void* arg);
 static void retry_stranded_teardown_locked(void);
 
 static napi_value napi_initialize(napi_env env, napi_callback_info info) {
+  if (native_callback_active()) return throw_callback_reentrancy(env);
   size_t argc = 1;
   napi_value argv[1];
   // Review #10 #5 (svacas P2): check napi_get_cb_info's status too, not just
@@ -1210,7 +1253,9 @@ static void call_js_write(napi_env env, napi_value js_callback, void* context, v
 
   napi_value global;
   napi_get_global(env, &global);
+  native_callback_enter();
   napi_call_function(env, global, js_callback, 1, &buffer, NULL);
+  native_callback_exit();
 
   free(chunk->buf);
   free(chunk);
@@ -1341,6 +1386,7 @@ static void streaming_thread_fn(void* arg) {
 }
 
 static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_info info) {
+  if (native_callback_active()) return throw_callback_reentrancy(env);
   if (!g_initialized) {
     napi_throw_error(env, NULL, "Not initialized. Call initialize() first.");
     return NULL;
@@ -1592,7 +1638,9 @@ static void call_js_read(napi_env env, napi_value js_callback, void* context, vo
     napi_get_global(env, &global);
 
     napi_value result;
+    native_callback_enter();
     napi_status status = napi_call_function(env, global, js_callback, 1, &buf_size_val, &result);
+    native_callback_exit();
 
     if (status == napi_ok && result != NULL) {
       bool is_buffer;
@@ -1758,7 +1806,9 @@ static void call_js_transform_write(napi_env env, napi_value js_callback, void* 
 
   napi_value global;
   napi_get_global(env, &global);
+  native_callback_enter();
   napi_call_function(env, global, js_callback, 1, &buffer, NULL);
+  native_callback_exit();
 
   free(chunk->buf);
   free(chunk);
@@ -1866,6 +1916,7 @@ static void transform_thread_fn(void* arg) {
 }
 
 static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_info info) {
+  if (native_callback_active()) return throw_callback_reentrancy(env);
   if (!g_initialized) {
     napi_throw_error(env, NULL, "Not initialized. Call initialize() first.");
     return NULL;
@@ -2144,7 +2195,9 @@ static char* resolve_module_callback(void* thread, void* ctx, const char* module
 
     napi_value undefined, result;
     napi_get_undefined(env, &undefined);
+    native_callback_enter();
     napi_status status = napi_call_function(env, undefined, js_callback, 1, &module_path_str, &result);
+    native_callback_exit();
     if (status != napi_ok) {
         // JS resolver threw — clear the pending exception so it doesn't leak
         // into the next napi call, extract and log its message/stack for
@@ -2234,6 +2287,7 @@ static char* resolve_module_callback(void* thread, void* ctx, const char* module
 
 // createEngine() -> number
 static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
+    if (native_callback_active()) return throw_callback_reentrancy(env);
     (void)info;
     if (!fn_create_engine) { napi_throw_error(env, NULL, "create_engine not available in native library"); return NULL; }
 
@@ -2367,6 +2421,7 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
 
 // createEngineWithResolver(resolver) -> number
 static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_info info) {
+    if (native_callback_active()) return throw_callback_reentrancy(env);
     if (!fn_create_engine_with_resolver) { napi_throw_error(env, NULL, "create_engine_with_resolver not available in native library"); return NULL; }
     size_t argc = 1; napi_value argv[1];
     napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
@@ -2473,6 +2528,7 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
 
 // destroyEngine(handle) -> void
 static napi_value napi_destroy_engine(napi_env env, napi_callback_info info) {
+    if (native_callback_active()) return throw_callback_reentrancy(env);
     if (!g_initialized) return NULL;
     size_t argc = 1; napi_value argv[1];
     napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
@@ -2610,6 +2666,7 @@ static napi_value napi_destroy_engine(napi_env env, napi_callback_info info) {
 
 // runScriptEngine(handle, script, inputsJson) -> string
 static napi_value napi_run_script_engine(napi_env env, napi_callback_info info) {
+    if (native_callback_active()) return throw_callback_reentrancy(env);
     if (!g_initialized) { napi_throw_error(env, NULL, "Not initialized. Call initialize() first."); return NULL; }
     if (!fn_run_script_engine) { napi_throw_error(env, NULL, "run_script_engine not available in native library"); return NULL; }
     size_t argc = 3; napi_value argv[3];
@@ -3362,6 +3419,7 @@ static napi_value release_isolate_ref_locked(napi_env env) {
 }
 
 static napi_value napi_cleanup(napi_env env, napi_callback_info info) {
+  if (native_callback_active()) return throw_callback_reentrancy(env);
   (void)info;
   uv_mutex_lock(&g_mutex);
   return release_isolate_ref_locked(env);  // unlocks g_mutex, returns the promise
@@ -3372,6 +3430,7 @@ static napi_value napi_cleanup(napi_env env, napi_callback_info info) {
 static void init_g_mutex(void) {
   uv_mutex_init(&g_mutex);
   uv_cond_init(&g_teardown_cond);
+  uv_key_create(&g_native_callback_depth);
 }
 
 // --- Test-only N-API entrypoints (review #12 #3 / #13) ---

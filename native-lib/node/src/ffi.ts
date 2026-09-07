@@ -1,4 +1,5 @@
 import { resolveAddonPath } from "./addon-path";
+import { DataWeaveError } from "./errors";
 import type { ModuleResolver } from "./resolver";
 
 interface NativeAddon {
@@ -28,6 +29,23 @@ interface NativeAddon {
 
 let addon: NativeAddon | null = null;
 
+function callNative<T>(invoke: () => T): T {
+  try {
+    return invoke();
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "ERR_DATAWEAVE_CALLBACK_REENTRANCY"
+    ) {
+      const message = "message" in error ? String(error.message) : String(error);
+      throw new DataWeaveError(message);
+    }
+    throw error;
+  }
+}
+
 function getAddon(addonPath?: string): NativeAddon {
   if (!addon) {
     addon = require(addonPath ?? resolveAddonPath()) as NativeAddon;
@@ -36,23 +54,23 @@ function getAddon(addonPath?: string): NativeAddon {
 }
 
 export function initialize(libPath: string, addonPath?: string): void {
-  getAddon(addonPath).initialize(libPath);
+  callNative(() => getAddon(addonPath).initialize(libPath));
 }
 
 export function createEngine(): number {
-  return getAddon().createEngine();
+  return callNative(() => getAddon().createEngine());
 }
 
 export function createEngineWithResolver(resolver: ModuleResolver): number {
-  return getAddon().createEngineWithResolver(resolver);
+  return callNative(() => getAddon().createEngineWithResolver(resolver));
 }
 
 export function destroyEngine(handle: number): void {
-  getAddon().destroyEngine(handle);
+  callNative(() => getAddon().destroyEngine(handle));
 }
 
 export function runScriptEngine(handle: number, script: string, inputsJson: string): string {
-  return getAddon().runScriptEngine(handle, script, inputsJson);
+  return callNative(() => getAddon().runScriptEngine(handle, script, inputsJson));
 }
 
 export function runScriptStreamingEngine(
@@ -61,7 +79,9 @@ export function runScriptStreamingEngine(
   inputsJson: string,
   chunkCb: (chunk: Buffer) => void
 ): Promise<string> {
-  return getAddon().runScriptStreamingEngine(handle, script, inputsJson, chunkCb);
+  return callNative(() =>
+    getAddon().runScriptStreamingEngine(handle, script, inputsJson, chunkCb)
+  );
 }
 
 export function runScriptTransformEngine(
@@ -74,18 +94,20 @@ export function runScriptTransformEngine(
   readCb: (bufSize: number) => Buffer | null,
   writeCb: (chunk: Buffer) => void
 ): Promise<string> {
-  return getAddon().runScriptTransformEngine(
-    handle,
-    script,
-    inputsJson,
-    inputName,
-    inputMimeType,
-    inputCharset,
-    readCb,
-    writeCb
+  return callNative(() =>
+    getAddon().runScriptTransformEngine(
+      handle,
+      script,
+      inputsJson,
+      inputName,
+      inputMimeType,
+      inputCharset,
+      readCb,
+      writeCb
+    )
   );
 }
 
 export function cleanup(): Promise<void> {
-  return getAddon().cleanup();
+  return callNative(() => getAddon().cleanup());
 }
