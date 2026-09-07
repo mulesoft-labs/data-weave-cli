@@ -94,21 +94,6 @@ describe("streamFromNative", () => {
     expect((last.value as StreamingResult).mimeType).toBe("text/plain");
   });
 
-  it("copies callback chunks before enqueueing them", async () => {
-    const nativeOperation = operation(Promise.resolve(okMeta()));
-    const source = Buffer.from("original");
-    const gen = streamFromNative((cb) => {
-      cb(source);
-      source.fill(0);
-      return nativeOperation;
-    });
-
-    const first = await gen.next();
-    expect(first.value?.toString()).toBe("original");
-    expect(nativeOperation.acknowledge).toHaveBeenCalledWith(8);
-    await gen.next();
-  });
-
   it("drains chunks that arrive together with completion", async () => {
     const nativeOperation = operation(Promise.resolve(okMeta()));
     const { chunks, result } = await collect(

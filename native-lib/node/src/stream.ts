@@ -38,17 +38,16 @@ export async function* streamFromNative(
   let settlementCloseError: unknown;
 
   const chunkCb = (chunk: Buffer) => {
-    const copy = Buffer.from(chunk);
     if ((finalized || cancellationRequested) && operation) {
       try {
-        operation.acknowledge(copy.length);
+        operation.acknowledge(chunk.length);
       } catch {
         // Late callback credit is best-effort after the consumer has abandoned
         // the stream; cleanup must still be able to cancel and close it.
       }
       return;
     }
-    chunks.push(copy);
+    chunks.push(chunk);
     // Resolve one waiting consumer if any
     const resolve = pendingResolves.shift();
     if (resolve) {
