@@ -11,19 +11,16 @@ export type StartStreaming = (chunkCb: (chunk: Buffer) => void) => NativeStreami
 /**
  * Bridges a native push-based streaming call into a pull-based async generator.
  *
- * The native side pushes output chunks through the callback while
- * {@link StartStreaming} runs; this generator buffers them and yields in order,
- * parking the consumer when no chunk is ready and waking it on the next push or
- * on completion. Consumer dequeues return native byte credits before yielding
- * each chunk. After all chunks drain, it returns the parsed
- * {@link StreamingResult}.
+ * Native async generators serialize `return()` behind an outstanding `next()`.
+ * This wrapper intercepts `return()` and `throw()` so they can request native
+ * cancellation and wake a parked pull before delegating generator finalization.
  *
  * @param start - Launches the native call and returns its operation controller.
  * @param onStart - Called once after native admission with the managed operation.
- * @param onClose - Called once when the managed operation closes.
- * @returns An async generator of output chunks whose return value is the terminal metadata.
+ * @param onClose - Called once after the native controller closes successfully.
+ * @returns An async generator of output chunks whose return value is terminal metadata.
  */
-export async function* streamFromNative(
+export function streamFromNative(
   start: StartStreaming,
   onStart?: (operation: NativeStreamingOperation) => void,
   onClose?: (operation: NativeStreamingOperation) => void
@@ -32,145 +29,210 @@ export async function* streamFromNative(
   const pendingResolves: Array<() => void> = [];
   let operation: NativeStreamingOperation | undefined;
   let nativeSettled = false;
-  let finalized = false;
-  let cancellationRequested = false;
+  let nativeSettlementHandled: Promise<void> | undefined;
+  let nativeRejected = false;
+  let nativeError: unknown;
   let metaRaw: string | null = null;
-  let settlementCloseError: unknown;
+  let cancellationRequested = false;
+  let cancelSucceeded = false;
+  let closeSucceeded = false;
+  let registered = false;
+  let finalized = false;
+  let finalizationError: unknown;
+  let nativeOperation: NativeStreamingOperation | undefined;
+  let cancelInProgress = false;
 
-  const chunkCb = (chunk: Buffer) => {
-    if ((finalized || cancellationRequested) && operation) {
-      try {
-        operation.acknowledge(chunk.length);
-      } catch {
-        // Late callback credit is best-effort after the consumer has abandoned
-        // the stream; cleanup must still be able to cancel and close it.
-      }
-      return;
-    }
-    chunks.push(chunk);
-    // Resolve one waiting consumer if any
-    const resolve = pendingResolves.shift();
-    if (resolve) {
-      resolve();
-    }
-  };
-
-  let startError: unknown;
-  let startRejected = false;
   const wakeAll = () => {
     while (pendingResolves.length > 0) {
-      const resolve = pendingResolves.shift();
-      if (resolve) resolve();
+      pendingResolves.shift()!();
     }
   };
+
   const acknowledgeBufferedChunks = () => {
     while (chunks.length > 0) {
       operation!.acknowledge(chunks.shift()!.length);
     }
   };
 
-  try {
-    const nativeOperation = start(chunkCb);
-    let cancelCalled = false;
-    let closeCalled = false;
-    let registered = false;
-    operation = {
-      completion: nativeOperation.completion,
-      acknowledge: (bytes) => nativeOperation.acknowledge(bytes),
-      cancel: () => {
-        if (cancelCalled) return;
-        cancelCalled = true;
-        cancellationRequested = true;
-        try {
-          acknowledgeBufferedChunks();
-        } finally {
-          wakeAll();
-          if (!nativeSettled) nativeOperation.cancel();
-          else operation!.close();
-        }
-      },
-      close: () => {
-        if (closeCalled) return;
-        closeCalled = true;
-        try {
-          nativeOperation.close();
-        } finally {
-          if (registered) onClose?.(operation!);
-        }
-      },
-    };
+  const close = () => {
+    if (!nativeOperation || closeSucceeded) return;
+    nativeOperation.close();
+    if (registered) onClose?.(operation!);
+    closeSucceeded = true;
+  };
 
-    let completionHandled: Promise<void>;
+  const cancel = () => {
+    cancellationRequested = true;
+    let lifecycleError: unknown;
     try {
-      // Handle both settlement branches so rejected native completion cannot
-      // become unhandled or leave a parked consumer asleep. Chunks already in
-      // the JS queue still drain before the rejection is surfaced.
-      completionHandled = operation.completion.then(
+      acknowledgeBufferedChunks();
+    } catch (error) {
+      lifecycleError = error;
+    } finally {
+      wakeAll();
+    }
+
+    if (nativeOperation && !nativeSettled && !cancelSucceeded && !cancelInProgress) {
+      cancelInProgress = true;
+      try {
+        nativeOperation.cancel();
+        cancelSucceeded = true;
+      } catch (error) {
+        lifecycleError ??= error;
+      } finally {
+        cancelInProgress = false;
+      }
+    }
+
+    if (nativeOperation && (nativeSettled || cancelSucceeded)) {
+      try {
+        close();
+      } catch (error) {
+        lifecycleError ??= error;
+      }
+    }
+
+    if (lifecycleError !== undefined) throw lifecycleError;
+  };
+
+  const chunkCb = (chunk: Buffer) => {
+    if (finalized || cancellationRequested) {
+      try {
+        operation?.acknowledge(chunk.length);
+      } catch {
+        // No consumer remains to observe a late callback failure. Ownership is
+        // retained unless close succeeds, so DataWeave cleanup can still retry.
+      }
+      return;
+    }
+    chunks.push(chunk);
+    pendingResolves.shift()?.();
+  };
+
+  const generator = (async function* (): AsyncGenerator<Buffer, StreamingResult, undefined> {
+    let primaryError = false;
+    try {
+      nativeOperation = start(chunkCb);
+      const startedOperation = nativeOperation;
+      operation = {
+        completion: startedOperation.completion,
+        acknowledge: (bytes) => startedOperation.acknowledge(bytes),
+        cancel,
+        close,
+      };
+
+      nativeSettlementHandled = operation.completion.then(
         (raw) => {
           metaRaw = raw;
           nativeSettled = true;
           wakeAll();
-          if (cancellationRequested) {
-            try {
-              operation!.close();
-            } catch (error) {
-              settlementCloseError = error;
-            }
-          }
         },
         (error) => {
-          startError = error;
-          startRejected = true;
+          nativeError = error;
+          nativeRejected = true;
           nativeSettled = true;
           wakeAll();
-          if (cancellationRequested) {
-            try {
-              operation!.close();
-            } catch (closeError) {
-              settlementCloseError = closeError;
-            }
-          }
         }
       );
 
       onStart?.(operation);
       registered = true;
-    } catch (error) {
-      operation.cancel();
-      await Promise.allSettled([operation.completion]);
-      throw error;
-    }
 
-    while (true) {
-      if (chunks.length > 0) {
-        const chunk = chunks.shift()!;
-        operation.acknowledge(chunk.length);
-        yield chunk;
-        continue;
+      while (true) {
+        if (!cancellationRequested && chunks.length > 0) {
+          const chunk = chunks.shift()!;
+          operation.acknowledge(chunk.length);
+          yield chunk;
+          continue;
+        }
+        if (nativeSettled) break;
+        if (cancellationRequested) {
+          return undefined as unknown as StreamingResult;
+        }
+        await new Promise<void>((resolve) => { pendingResolves.push(resolve); });
       }
-      if (nativeSettled) break;
-      await new Promise<void>((resolve) => { pendingResolves.push(resolve); });
-    }
 
-    await completionHandled;
-    // Track rejection by settlement state, not value: Promise.reject(undefined)
-    // is valid and must not be mistaken for a successful empty response.
-    if (startRejected) throw startError;
-    if (settlementCloseError !== undefined) throw settlementCloseError;
-    return parseStreamingResult(metaRaw ?? "");
-  } finally {
-    finalized = true;
-    if (operation) {
-      try {
-        acknowledgeBufferedChunks();
-      } finally {
+      await nativeSettlementHandled;
+      if (nativeRejected) throw nativeError;
+      if (cancellationRequested) return undefined as unknown as StreamingResult;
+      return parseStreamingResult(metaRaw ?? "");
+    } catch (error) {
+      primaryError = true;
+      if (operation && !registered) {
         try {
-          if (!nativeSettled) operation.cancel();
-        } finally {
-          operation.close();
+          cancel();
+        } catch {
+          // Preserve the registration failure as primary.
         }
       }
+      throw error;
+    } finally {
+      finalized = true;
+      let lifecycleError: unknown;
+      if (operation && registered) {
+        if (!nativeSettled && !cancelSucceeded && registered) {
+          try {
+            cancel();
+          } catch (error) {
+            lifecycleError = error;
+          }
+        }
+        if ((nativeSettled || cancelSucceeded) && !closeSucceeded) {
+          try {
+            close();
+          } catch (error) {
+            lifecycleError ??= error;
+          }
+        }
+      }
+      wakeAll();
+      if (!primaryError && lifecycleError !== undefined) {
+        finalizationError = lifecycleError;
+        throw lifecycleError;
+      }
     }
+  })();
+
+  const requestCancellation = (): unknown => {
+    cancellationRequested = true;
     wakeAll();
-  }
+    try {
+      cancel();
+      return undefined;
+    } catch (error) {
+      return error;
+    }
+  };
+
+  const iterator: AsyncGenerator<Buffer, StreamingResult, undefined> = {
+    next(...args: [] | [undefined]) {
+      return generator.next(...args);
+    },
+    return(value) {
+      const lifecycleError = requestCancellation();
+      return generator.return(value).then(
+        (result) => {
+          if (lifecycleError !== undefined) throw lifecycleError;
+          if (finalizationError !== undefined) throw finalizationError;
+          return result;
+        },
+        (error) => { throw error; }
+      );
+    },
+    throw(error?: unknown) {
+      const lifecycleError = requestCancellation();
+      return generator.throw(error).then(
+        (result) => {
+          if (lifecycleError !== undefined) throw lifecycleError;
+          if (finalizationError !== undefined) throw finalizationError;
+          return result;
+        },
+        (primary) => { throw primary; }
+      );
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+  return iterator;
 }

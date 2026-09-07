@@ -66,6 +66,22 @@ describe("streamFromNative", () => {
     expect(nativeOperation.close).toHaveBeenCalledTimes(1);
   });
 
+  it("propagates a synchronous start failure without registering an operation", async () => {
+    const start = vi.fn((): NativeStreamingOperation => {
+      throw new Error("start boom");
+    });
+    const onStart = vi.fn();
+    const gen = streamFromNative(start, onStart);
+
+    expect(start).not.toHaveBeenCalled();
+    await expect(gen.next()).rejects.toThrow("start boom");
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(onStart).not.toHaveBeenCalled();
+    await expect(gen.return(undefined)).resolves.toEqual({ done: true, value: undefined });
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
   it("parks the consumer until a chunk arrives, then wakes it", async () => {
     const meta = deferred<string>();
     const nativeOperation = operation(meta.promise);
@@ -94,6 +110,34 @@ describe("streamFromNative", () => {
     expect((last.value as StreamingResult).mimeType).toBe("text/plain");
   });
 
+  it("return cancels and settles a pending first pull", async () => {
+    const completion = deferred<string>();
+    const nativeOperation = operation(completion.promise);
+    nativeOperation.cancel = vi.fn(() => completion.resolve(okMeta()));
+    const gen = streamFromNative(() => nativeOperation);
+
+    let firstPullSettled = false;
+    const firstPull = gen.next().finally(() => { firstPullSettled = true; });
+    await vi.waitFor(() => expect(nativeOperation.cancel).not.toHaveBeenCalled());
+    expect(firstPullSettled).toBe(false);
+
+    const returned = gen.return(undefined);
+    await Promise.resolve();
+    const cancelCallsAfterReturn = vi.mocked(nativeOperation.cancel).mock.calls.length;
+    // Let the pre-fix serialized async generator settle so RED does not leave
+    // dangling promises after recording that return() could not cancel it.
+    if (cancelCallsAfterReturn === 0) completion.resolve(okMeta());
+
+    const [firstResult, returnResult] = await Promise.allSettled([firstPull, returned]);
+    expect(cancelCallsAfterReturn).toBe(1);
+    expect(firstResult.status).toBe("fulfilled");
+    expect(returnResult).toEqual({
+      status: "fulfilled",
+      value: { done: true, value: undefined },
+    });
+    expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+  });
+
   it("drains chunks that arrive together with completion", async () => {
     const nativeOperation = operation(Promise.resolve(okMeta()));
     const { chunks, result } = await collect(
@@ -109,6 +153,22 @@ describe("streamFromNative", () => {
     expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 2);
     expect(nativeOperation.acknowledge).toHaveBeenCalledTimes(2);
     expect(result.success).toBe(true);
+  });
+
+  it("acknowledges a late callback after completion and close", async () => {
+    const nativeOperation = operation(Promise.resolve(okMeta()));
+    let push!: (chunk: Buffer) => void;
+    const gen = streamFromNative((cb) => {
+      push = cb;
+      return nativeOperation;
+    });
+
+    await collect(gen);
+    expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+
+    push(Buffer.from("late"));
+    expect(nativeOperation.acknowledge).toHaveBeenCalledTimes(1);
+    expect(nativeOperation.acknowledge).toHaveBeenCalledWith(4);
   });
 
   it("propagates a failure envelope as the terminal result", async () => {
@@ -166,6 +226,45 @@ describe("streamFromNative", () => {
     await expect(gen.next()).rejects.toThrow("late boom");
     expect(nativeOperation.cancel).not.toHaveBeenCalled();
     expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves native rejection when close also throws", async () => {
+    const nativeOperation = operation(Promise.reject(new Error("native boom")));
+    nativeOperation.close = vi.fn(() => { throw new Error("close boom"); });
+    const gen = streamFromNative(() => nativeOperation);
+
+    await expect(gen.next()).rejects.toThrow("native boom");
+    expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces close failure when completion has no primary error", async () => {
+    const nativeOperation = operation(Promise.resolve(okMeta()));
+    nativeOperation.close = vi.fn(() => { throw new Error("close boom"); });
+    const gen = streamFromNative(() => nativeOperation);
+
+    await expect(gen.next()).rejects.toThrow("close boom");
+    expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries close when close finalization tracking fails", async () => {
+    const nativeOperation = operation(Promise.resolve(okMeta()));
+    const onClose = vi.fn()
+      .mockImplementationOnce(() => { throw new Error("unregister boom"); })
+      .mockImplementationOnce(() => {});
+    let managedOperation!: NativeStreamingOperation;
+    const gen = streamFromNative(
+      () => nativeOperation,
+      (started) => { managedOperation = started; },
+      onClose
+    );
+
+    await expect(gen.next()).rejects.toThrow("unregister boom");
+    expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    managedOperation.close();
+    expect(nativeOperation.close).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenCalledTimes(2);
   });
 
   it("propagates a native start() rejection of undefined instead of returning empty metadata", async () => {
@@ -232,7 +331,7 @@ describe("streamFromNative", () => {
 
     const pending = gen.next();
     completion.resolve(okMeta());
-    await expect(pending).resolves.toEqual({ done: true, value: expect.any(Object) });
+    await expect(pending).resolves.toEqual({ done: true, value: undefined });
 
     expect(nativeOperation.acknowledge).toHaveBeenCalledWith(1);
     expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
@@ -256,7 +355,7 @@ describe("streamFromNative", () => {
     expect(nativeOperation.close).toHaveBeenCalledTimes(1);
   });
 
-  it("still closes when cancel throws during early return", async () => {
+  it("retries cancel once without closing an operation whose cancellation failed", async () => {
     const nativeOperation = operation(new Promise<string>(() => {}));
     nativeOperation.cancel = vi.fn(() => {
       throw new Error("cancel boom");
@@ -269,8 +368,24 @@ describe("streamFromNative", () => {
     await gen.next();
     await expect(gen.return(undefined)).rejects.toThrow("cancel boom");
 
+    expect(nativeOperation.cancel).toHaveBeenCalledTimes(2);
+    expect(nativeOperation.close).not.toHaveBeenCalled();
+  });
+
+  it("preserves a consumer error when close also throws", async () => {
+    const completion = deferred<string>();
+    const nativeOperation = operation(completion.promise);
+    nativeOperation.cancel = vi.fn(() => completion.resolve(okMeta()));
+    nativeOperation.close = vi.fn(() => { throw new Error("close boom"); });
+    const gen = streamFromNative((cb) => {
+      cb(Buffer.from("x"));
+      return nativeOperation;
+    });
+
+    await gen.next();
+    await expect(gen.throw(new Error("consumer boom"))).rejects.toThrow("consumer boom");
     expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
-    expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+    expect(nativeOperation.close).toHaveBeenCalledTimes(2);
   });
 
   it("still cancels and closes when abandoned-chunk acknowledgement throws", async () => {
@@ -316,7 +431,7 @@ describe("streamFromNative", () => {
     expect(() => managedOperation.cancel()).toThrow("ack boom");
 
     expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
-    await expect(firstPull).resolves.toEqual({ done: true, value: expect.any(Object) });
+    await expect(firstPull).resolves.toEqual({ done: true, value: undefined });
     expect(nativeOperation.close).toHaveBeenCalledTimes(1);
   });
 
@@ -333,5 +448,53 @@ describe("streamFromNative", () => {
 
     expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
     expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves registration failure when cancel and close also throw", async () => {
+    const nativeOperation = operation(new Promise<string>(() => {}));
+    nativeOperation.cancel = vi.fn(() => { throw new Error("cancel boom"); });
+    nativeOperation.close = vi.fn(() => { throw new Error("close boom"); });
+    const gen = streamFromNative(
+      () => nativeOperation,
+      () => { throw new Error("registration boom"); }
+    );
+
+    await expect(gen.next()).rejects.toThrow("registration boom");
+    expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
+    expect(nativeOperation.close).not.toHaveBeenCalled();
+  });
+
+  it("preserves registration failure when successful cancel is followed by close failure", async () => {
+    const completion = deferred<string>();
+    const nativeOperation = operation(completion.promise);
+    nativeOperation.cancel = vi.fn(() => completion.resolve(okMeta()));
+    nativeOperation.close = vi.fn(() => { throw new Error("close boom"); });
+    const gen = streamFromNative(
+      () => nativeOperation,
+      () => { throw new Error("registration boom"); }
+    );
+
+    await expect(gen.next()).rejects.toThrow("registration boom");
+    expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
+    expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a for-await body error when close also throws", async () => {
+    const completion = deferred<string>();
+    const nativeOperation = operation(completion.promise);
+    nativeOperation.cancel = vi.fn(() => completion.resolve(okMeta()));
+    nativeOperation.close = vi.fn(() => { throw new Error("close boom"); });
+    const gen = streamFromNative((cb) => {
+      cb(Buffer.from("x"));
+      return nativeOperation;
+    });
+
+    await expect((async () => {
+      for await (const _chunk of gen) {
+        throw new Error("body boom");
+      }
+    })()).rejects.toThrow("body boom");
+    expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
+    expect(nativeOperation.close).toHaveBeenCalledTimes(2);
   });
 });

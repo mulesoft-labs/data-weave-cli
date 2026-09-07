@@ -180,9 +180,9 @@ export class DataWeave {
     // with an in-flight doCleanup() awaits that SAME promise, so the native
     // teardown (ffi.destroyEngine/ffi.cleanup) still happens exactly once.
     if (this.cleanupPromise) return this.cleanupPromise;
-    // Not coalescing with an in-flight cleanup: nothing to do unless we're
-    // "ready" (covers both never-initialized and already-settled cleanup).
-    if (this.state !== "ready") return;
+    // A lifecycle failure leaves the instance in "cleaning-up" with no live
+    // cleanupPromise so a later call can retry without admitting new work.
+    if (this.state === "uninitialized") return;
     this.cleanupPromise = this.doCleanup();
     try {
       await this.cleanupPromise;
@@ -199,20 +199,31 @@ export class DataWeave {
     // than seeing a stale "ready" state with a null engineHandle (round-6 #1/#3).
     this.state = "cleaning-up";
     const activeStreams = [...this.activeStreams];
+    let lifecycleError: unknown;
     for (const operation of activeStreams) {
       try {
         operation.cancel();
-      } catch {
-        // A controller failure must not prevent the remaining streams from
-        // being canceled or the engine reference from being released.
+      } catch (error) {
+        lifecycleError ??= error;
       }
     }
-    // Cancellation may reject completion as its normal terminal signal. Wait
-    // for every snapshotted operation, but do not let those rejections mask an
-    // engine destruction or native cleanup failure.
+    // A failed synchronous cancellation cannot guarantee that completion will
+    // ever settle. Abort before waiting or destroying the engine and keep the
+    // instance in cleaning-up state so a later cleanup() can retry.
+    if (lifecycleError !== undefined) throw lifecycleError;
+
     if (activeStreams.length > 0) {
       await Promise.allSettled(activeStreams.map((operation) => operation.completion));
     }
+
+    for (const operation of activeStreams) {
+      try {
+        operation.close();
+      } catch (error) {
+        lifecycleError ??= error;
+      }
+    }
+    if (lifecycleError !== undefined) throw lifecycleError;
 
     let destroyError: unknown;
     try {
@@ -282,16 +293,18 @@ export class DataWeave {
     return this.runStreamingInternal(token, script, inputs);
   }
 
-  private async *runStreamingInternal(
+  private runStreamingInternal(
     token: EngineOperationToken,
     script: string,
     inputs?: Inputs
   ): AsyncGenerator<Buffer, StreamingResult, undefined> {
-    this.assertCurrentOperation(token);
-    const inputsJson = buildInputsJson(inputs ?? {});
-    this.assertCurrentOperation(token);
-    return yield* streamFromNative(
-      (chunkCb) => ffi.runScriptStreamingEngine(token.handle, script, inputsJson, chunkCb),
+    return streamFromNative(
+      (chunkCb) => {
+        this.assertCurrentOperation(token);
+        const inputsJson = buildInputsJson(inputs ?? {});
+        this.assertCurrentOperation(token);
+        return ffi.runScriptStreamingEngine(token.handle, script, inputsJson, chunkCb);
+      },
       (operation) => { this.activeStreams.add(operation); },
       (operation) => { this.activeStreams.delete(operation); }
     );
@@ -322,39 +335,58 @@ export class DataWeave {
     return this.runTransformInternal(token, script, input, opts);
   }
 
-  private async *runTransformInternal(
+  private runTransformInternal(
     token: EngineOperationToken,
     script: string,
     input: AsyncIterable<Buffer | Uint8Array> | Iterable<Buffer | Uint8Array>,
     opts?: TransformOptions
   ): AsyncGenerator<Buffer, StreamingResult, undefined> {
-    this.assertCurrentOperation(token);
+    let streamPromise: Promise<AsyncGenerator<Buffer, StreamingResult, undefined>> | null = null;
+    const getStream = () => {
+      if (!streamPromise) {
+        streamPromise = (async () => {
+          this.assertCurrentOperation(token);
 
-    const inputName = opts?.inputName ?? "payload";
-    const inputMimeType = opts?.mimeType ?? "application/json";
-    const inputCharset = opts?.charset ?? null;
-    const extraInputs = opts?.inputs ?? {};
-    const inputsJson = Object.keys(extraInputs).length > 0 ? buildInputsJson(extraInputs) : "{}";
+          const inputName = opts?.inputName ?? "payload";
+          const inputMimeType = opts?.mimeType ?? "application/json";
+          const inputCharset = opts?.charset ?? null;
+          const extraInputs = opts?.inputs ?? {};
+          const inputsJson = Object.keys(extraInputs).length > 0 ? buildInputsJson(extraInputs) : "{}";
+          const readCb = await createChunkReader(input);
 
-    const readCb = await createChunkReader(input);
+          this.assertCurrentOperation(token);
+          return streamFromNative(
+            (writeCb) =>
+              ffi.runScriptTransformEngine(
+                token.handle,
+                script,
+                inputsJson,
+                inputName,
+                inputMimeType,
+                inputCharset,
+                readCb,
+                writeCb
+              ),
+            (operation) => { this.activeStreams.add(operation); },
+            (operation) => { this.activeStreams.delete(operation); }
+          );
+        })();
+      }
+      return streamPromise;
+    };
 
-    this.assertCurrentOperation(token);
-
-    return yield* streamFromNative(
-      (writeCb) =>
-        ffi.runScriptTransformEngine(
-          token.handle,
-          script,
-          inputsJson,
-          inputName,
-          inputMimeType,
-          inputCharset,
-          readCb,
-          writeCb
-        ),
-      (operation) => { this.activeStreams.add(operation); },
-      (operation) => { this.activeStreams.delete(operation); }
-    );
+    return {
+      next: (...args: [] | [undefined]) => getStream().then((stream) => stream.next(...args)),
+      return: (value) => streamPromise
+        ? streamPromise.then((stream) => stream.return(value))
+        : Promise.resolve({ done: true, value } as IteratorReturnResult<StreamingResult>),
+      throw: (error?: unknown) => streamPromise
+        ? streamPromise.then((stream) => stream.throw(error))
+        : Promise.reject(error),
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    };
   }
 
   private captureOperationToken(): EngineOperationToken {
