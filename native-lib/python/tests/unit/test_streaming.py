@@ -7,6 +7,7 @@ from time import sleep
 import pytest
 
 import dataweave
+from dataweave import native as native_module
 from dataweave import runtime as runtime_module
 
 
@@ -21,6 +22,7 @@ class FakeNative:
         self.freed = []
         self._buffers = []
         self.detached_event = Event()
+        self.callback_handles = []
 
     def graal_attach_thread(self, _isolate, _thread):
         self.attach_count += 1
@@ -42,6 +44,7 @@ class FakeNative:
         return ctypes.addressof(buffer)
 
     def run_script_callback_engine(self, _thread, _handle, _script, _inputs, write_callback, _context):
+        self.callback_handles.append(_handle)
         if self.emit:
             buffer = ctypes.create_string_buffer(self.emit)
             self.write_status = write_callback(None, ctypes.addressof(buffer), len(self.emit))
@@ -50,6 +53,7 @@ class FakeNative:
     def run_script_input_output_callback_engine(
         self, _thread, _handle, _script, _inputs, _input_name, _mime_type, _charset, read_callback, write_callback, _context,
     ):
+        self.callback_handles.append(_handle)
         if self.consume_input:
             buffer = ctypes.create_string_buffer(3)
             read = []
@@ -119,6 +123,8 @@ def configured_runtime(native):
     # graal_attach_thread/graal_detach_thread.
     native_runtime.thread = None
     native_runtime.handle = 1
+    native_runtime._generation = 1
+    native_runtime._engine_operation = native_module._EngineOperation(1, 1)
     native_runtime._resolver = None
     native_runtime._resolver_callback = None
     native_runtime._resolver_token = 0
@@ -126,9 +132,37 @@ def configured_runtime(native):
     native_runtime._resolver_active = False
     native_runtime._resolver_active_ident = None
     native_runtime._operation_lock = Condition(Lock())
+    native_runtime._operation_active = False
     native_runtime._execution_owner = None
     runtime._native = native_runtime
     return runtime
+
+
+def initialized_runtime(monkeypatch, *, reuse_handle):
+    native = FakeNative('{"success": true}')
+    handles = []
+
+    def acquire(_path):
+        return native, object()
+
+    def create_engine(_thread):
+        handle = 1 if reuse_handle else len(handles) + 1
+        handles.append(handle)
+        return handle
+
+    native.create_engine = create_engine
+    native.create_engine_with_resolver = lambda _thread, _callback, _context: create_engine(_thread)
+    monkeypatch.setattr(native_module, "_acquire_isolate", acquire)
+    monkeypatch.setattr(native_module, "_release_isolate", lambda: None)
+    runtime = dataweave.DataWeave.__new__(dataweave.DataWeave)
+    runtime._native = runtime_module.NativeRuntime("/tmp/dwlib")
+    runtime._resolve_module = None
+    runtime._stream_workers = set()
+    runtime._stream_workers_lock = Lock()
+    runtime._cleaning_up = False
+    runtime._lifecycle_lock = Lock()
+    runtime.initialize()
+    return runtime, native
 
 
 @pytest.mark.unit
@@ -459,9 +493,9 @@ def test_precreated_stream_rejects_callback_time_first_consumption_before_worker
     starts = []
     original_register = runtime._register_stream_worker
 
-    def record_registration(worker):
+    def record_registration(worker, operation):
         registrations.append(worker)
-        return original_register(worker)
+        return original_register(worker, operation)
 
     class UnexpectedThread:
         def __init__(self, *_args, **_kwargs):
@@ -476,6 +510,53 @@ def test_precreated_stream_rejects_callback_time_first_consumption_before_worker
     assert registrations == []
     assert starts == []
     assert native.attach_count == 0
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "create_stream",
+    [
+        lambda runtime: runtime.run_streaming("script"),
+        lambda runtime: runtime.run_transform("script", [b"null"]),
+    ],
+    ids=["run-streaming", "run-transform"],
+)
+@pytest.mark.parametrize("reuse_handle", [False, True], ids=["distinct-handle", "reused-handle"])
+def test_precreated_stream_rejects_stale_generation_before_registration_attach_or_callback(
+    monkeypatch, create_stream, reuse_handle,
+):
+    runtime, native = initialized_runtime(monkeypatch, reuse_handle=reuse_handle)
+    stream = create_stream(runtime)
+    old_handle = runtime._native.handle
+    runtime.cleanup()
+    runtime.initialize()
+    replacement_handle = runtime._native.handle
+    if reuse_handle:
+        assert replacement_handle == old_handle
+    else:
+        assert replacement_handle != old_handle
+    registered = []
+    original_register = runtime._register_stream_worker
+
+    def record_registration(*args):
+        result = original_register(*args)
+        registered.append(args[0])
+        return result
+
+    monkeypatch.setattr(runtime, "_register_stream_worker", record_registration)
+    attach_count = native.attach_count
+    native.callback_handles.clear()
+    try:
+        with pytest.raises(dataweave.DataWeaveError, match="stale engine generation"):
+            next(stream)
+
+        assert registered == []
+        assert runtime._stream_workers == set()
+        assert native.attach_count == attach_count
+        assert native.callback_handles == []
+    finally:
+        stream.close()
+        runtime.cleanup()
 
 
 @pytest.mark.unit
@@ -784,8 +865,9 @@ def test_stream_worker_cannot_register_after_isolate_teardown_starts():
     cleanup.start()
     assert native.cleanup_started.wait(timeout=1)
 
+    operation = runtime._native._engine_operation
     with pytest.raises(dataweave.DataWeaveError, match="being cleaned up"):
-        runtime._register_stream_worker(Thread())
+        runtime._register_stream_worker(Thread(), operation)
 
     native.release_cleanup.set()
     cleanup.join(timeout=1)

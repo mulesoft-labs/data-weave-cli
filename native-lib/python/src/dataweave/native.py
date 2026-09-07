@@ -1,5 +1,6 @@
 import ctypes
 from contextlib import contextmanager
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import sys
@@ -362,6 +363,12 @@ def find_library() -> str:
     )
 
 
+@dataclass(frozen=True)
+class _EngineOperation:
+    handle: int
+    generation: int
+
+
 class NativeRuntime:
     """Owns the native library handle, isolate lifecycle, and ctypes ABI."""
 
@@ -372,6 +379,8 @@ class NativeRuntime:
         self.thread = None
         self.handle = 0
         self.initialized = False
+        self._generation = 0
+        self._engine_operation = None
         # Every engine supports every API now (single unified ABI).
         self.has_callback_streaming = True
         self.has_callback_input_output = True
@@ -396,35 +405,37 @@ class NativeRuntime:
 
     def initialize(self) -> None:
         _raise_if_native_callback_active()
-        if self.initialized:
-            return
-        with self._init_lock:
-            if self.initialized:
-                return
-            acquired = False
-            try:
-                self.lib, self.isolate = _acquire_isolate(self.lib_path)
-                acquired = True
-                self.handle = self._create_engine()
-            except Exception:
-                # Roll back the ref we just took (if any) so a failed init leaks
-                # nothing.
-                self.lib = self.isolate = None
-                # Finding #2: install_resolver() registered a token BEFORE this call.
-                # A failed init must unregister it, or it leaks: self.initialized stays
-                # False, so a later cleanup() returns early and never reaches the pop.
-                if self._resolver_token:
-                    with _resolver_lock_global:
-                        _resolver_registry.pop(self._resolver_token, None)
-                    self._resolver_token = 0
-                # Release the ref only if _acquire_isolate actually incremented it
-                # (a library-load / isolate-create / bootstrap-detach failure inside
-                # _acquire_isolate never increments the refcount, so releasing here
-                # unconditionally would decrement someone else's live reference).
-                if acquired:
-                    _release_isolate()
-                raise
-            self.initialized = True
+        with self._serialized_native_operation():
+            with self._init_lock:
+                if self.initialized:
+                    return
+                acquired = False
+                try:
+                    self.lib, self.isolate = _acquire_isolate(self.lib_path)
+                    acquired = True
+                    handle = self._create_engine()
+                except Exception:
+                    # Roll back the ref we just took (if any) so a failed init leaks
+                    # nothing.
+                    self.lib = self.isolate = None
+                    # Finding #2: install_resolver() registered a token BEFORE this call.
+                    # A failed init must unregister it, or it leaks: self.initialized stays
+                    # False, so a later cleanup() returns early and never reaches the pop.
+                    if self._resolver_token:
+                        with _resolver_lock_global:
+                            _resolver_registry.pop(self._resolver_token, None)
+                        self._resolver_token = 0
+                    # Release the ref only if _acquire_isolate actually incremented it
+                    # (a library-load / isolate-create / bootstrap-detach failure inside
+                    # _acquire_isolate never increments the refcount, so releasing here
+                    # unconditionally would decrement someone else's live reference).
+                    if acquired:
+                        _release_isolate()
+                    raise
+                self.handle = handle
+                self._generation += 1
+                self._engine_operation = _EngineOperation(handle, self._generation)
+                self.initialized = True
 
     def _create_engine(self) -> int:
         with self._current_thread_attachment(self.thread) as thread:
@@ -483,27 +494,29 @@ class NativeRuntime:
                 if primary_error is None:
                     raise
 
-    def run_engine_and_decode(self, script: bytes, inputs: bytes) -> str:
-        with self._serialized_native_operation() as operation_lock:
+    def run_engine_and_decode(self, script: bytes, inputs: bytes, operation: _EngineOperation) -> str:
+        with self._serialized_native_operation(operation) as operation_lock:
             with self._current_thread_attachment(self.thread) as thread:
                 with self._resolver_scope():
                     try:
                         operation_lock.release()
                         return self.decode_and_free(
-                            self.lib.run_script_engine(thread, self.handle, script, inputs),
+                            self.lib.run_script_engine(thread, operation.handle, script, inputs),
                             thread,
                         )
                     finally:
                         operation_lock.acquire()
 
-    def run_callback_engine_and_decode(self, thread, script: bytes, inputs: bytes, write_callback) -> str:
-        with self._serialized_native_operation() as operation_lock:
+    def run_callback_engine_and_decode(
+        self, thread, script: bytes, inputs: bytes, write_callback, operation: _EngineOperation,
+    ) -> str:
+        with self._serialized_native_operation(operation) as operation_lock:
             with self._current_thread_attachment(thread) as current:
                 try:
                     operation_lock.release()
                     return self.decode_and_free(
                         self.lib.run_script_callback_engine(
-                            current, self.handle, script, inputs, write_callback, None
+                            current, operation.handle, script, inputs, write_callback, None
                         ),
                         current,
                     )
@@ -512,15 +525,16 @@ class NativeRuntime:
 
     def run_input_output_callback_engine_and_decode(
         self, thread, script: bytes, inputs: bytes, input_name: bytes,
-        input_mime_type: bytes, input_charset: Optional[bytes], read_callback, write_callback,
+        input_mime_type: bytes, input_charset: Optional[bytes], read_callback,
+        write_callback, operation: _EngineOperation,
     ) -> str:
-        with self._serialized_native_operation() as operation_lock:
+        with self._serialized_native_operation(operation) as operation_lock:
             with self._current_thread_attachment(thread) as current:
                 try:
                     operation_lock.release()
                     return self.decode_and_free(
                         self.lib.run_script_input_output_callback_engine(
-                            current, self.handle, script, inputs, input_name,
+                            current, operation.handle, script, inputs, input_name,
                             input_mime_type, input_charset, read_callback, write_callback, None,
                         ),
                         current,
@@ -591,12 +605,10 @@ class NativeRuntime:
     def cleanup(self) -> None:
         _raise_if_native_callback_active()
         with self._serialized_native_operation():
-            # _init_lock is nested INSIDE _operation_lock here (never the
-            # reverse -- initialize() only ever takes _init_lock alone, and
-            # never takes _operation_lock), so there is no lock-ordering
-            # inversion between the two. Only the initialized-clearing flag
-            # flip needs the lock; the actual destroy/release below stays
-            # outside it, guarded by _serialized_native_operation as before.
+            # _init_lock is nested INSIDE _operation_lock in both initialize()
+            # and cleanup(), so lifecycle transitions use one lock order. Only
+            # the initialized/token clearing needs _init_lock; destroy/release
+            # stays guarded by _serialized_native_operation as before.
             # Mirrors _serialized_native_operation's own hasattr guard below:
             # some unit tests build a NativeRuntime via __new__ and set
             # attributes directly, bypassing __init__.
@@ -605,11 +617,13 @@ class NativeRuntime:
             with self._init_lock:
                 if not self.initialized:
                     return
+                operation = self._engine_operation
                 self.initialized = False
+                self._engine_operation = None
             try:
-                if self.handle:
+                if operation is not None:
                     with self._current_thread_attachment(self.thread) as thread:
-                        self.lib.destroy_engine(thread, self.handle)
+                        self.lib.destroy_engine(thread, operation.handle)
             finally:
                 # Release the isolate ref even if destroy_engine throws, so a
                 # throwing destroy cannot strand the isolate.
@@ -626,7 +640,7 @@ class NativeRuntime:
                 _release_isolate()
 
     @contextmanager
-    def _serialized_native_operation(self):
+    def _serialized_native_operation(self, expected: Optional[_EngineOperation] = None):
         _raise_if_native_callback_active()
         owner = get_ident()
         if getattr(self, "_execution_owner", None) == owner:
@@ -637,6 +651,8 @@ class NativeRuntime:
         with self._operation_lock:
             while getattr(self, "_operation_active", False):
                 self._operation_lock.wait()
+            if expected is not None:
+                self._validate_operation_locked(expected)
             self._operation_active = True
             self._execution_owner = owner
             try:
@@ -646,11 +662,28 @@ class NativeRuntime:
                 self._operation_active = False
                 self._operation_lock.notify()
 
-    def capture_operation(self) -> None:
+    def _validate_operation_locked(self, expected: _EngineOperation) -> None:
+        if self._engine_operation != expected:
+            raise DataWeaveError("DataWeave operation belongs to a stale engine generation.")
+
+    def validate_operation(self, expected: _EngineOperation) -> None:
         _raise_if_native_callback_active()
-        if not self.initialized:
-            raise DataWeaveError("DataWeave runtime not initialized. Call initialize() first.")
-        return None
+        if not hasattr(self, "_operation_lock"):
+            self._operation_lock = Condition(Lock())
+            self._operation_active = False
+        with self._operation_lock:
+            self._validate_operation_locked(expected)
+
+    def capture_operation(self) -> _EngineOperation:
+        _raise_if_native_callback_active()
+        if not hasattr(self, "_operation_lock"):
+            self._operation_lock = Condition(Lock())
+            self._operation_active = False
+        with self._operation_lock:
+            operation = self._engine_operation
+            if not self.initialized or operation is None:
+                raise DataWeaveError("DataWeave runtime not initialized. Call initialize() first.")
+            return operation
 
     @contextmanager
     def _current_thread_attachment(self, thread):

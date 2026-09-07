@@ -6,6 +6,52 @@ import pytest
 import dataweave
 
 
+def _staged_native_library() -> Path:
+    native_dir = Path(__file__).resolve().parents[2] / "src" / "dataweave" / "native"
+    return next(
+        path
+        for path in (
+            native_dir / "dwlib.dylib",
+            native_dir / "dwlib.so",
+            native_dir / "dwlib.dll",
+        )
+        if path.is_file()
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "create_stream",
+    [
+        lambda runtime: runtime.run_streaming("output application/json --- 1"),
+        lambda runtime: runtime.run_transform(
+            "output application/json --- payload",
+            [b"null"],
+        ),
+    ],
+    ids=["run-streaming", "run-transform"],
+)
+def test_real_native_precreated_stream_rejects_stale_generation(create_stream):
+    lib_path = str(_staged_native_library())
+    keeper = dataweave.DataWeave(lib_path)
+    runtime = dataweave.DataWeave(lib_path)
+    keeper.initialize()
+    runtime.initialize()
+    stream = create_stream(runtime)
+    old_handle = runtime._native.handle
+    try:
+        runtime.cleanup()
+        runtime.initialize()
+        assert runtime._native.handle != old_handle
+
+        with pytest.raises(dataweave.DataWeaveError, match="stale engine generation"):
+            next(stream)
+    finally:
+        stream.close()
+        runtime.cleanup()
+        keeper.cleanup()
+
+
 @pytest.mark.integration
 def test_run_streaming_returns_chunks_and_metadata(collect_stream):
     output, metadata = collect_stream(dataweave.run_streaming("output application/json --- {a: 1, b: 2}"))
