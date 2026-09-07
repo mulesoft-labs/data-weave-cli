@@ -246,10 +246,10 @@ describe("streamFromNative", () => {
     expect(nativeOperation.close).toHaveBeenCalledTimes(1);
   });
 
-  it("retries close when close finalization tracking fails", async () => {
+  it("retries only close finalization tracking after native close succeeds", async () => {
     const nativeOperation = operation(Promise.resolve(okMeta()));
     const onClose = vi.fn()
-      .mockImplementationOnce(() => { throw new Error("unregister boom"); })
+      .mockImplementationOnce(() => { throw undefined; })
       .mockImplementationOnce(() => {});
     let managedOperation!: NativeStreamingOperation;
     const gen = streamFromNative(
@@ -258,13 +258,67 @@ describe("streamFromNative", () => {
       onClose
     );
 
-    await expect(gen.next()).rejects.toThrow("unregister boom");
+    const next = await gen.next().then(
+      () => ({ status: "fulfilled" as const }),
+      (reason: unknown) => ({ status: "rejected" as const, reason })
+    );
+    expect(next).toEqual({ status: "rejected", reason: undefined });
     expect(nativeOperation.close).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
 
     managedOperation.close();
-    expect(nativeOperation.close).toHaveBeenCalledTimes(2);
+    expect(nativeOperation.close).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { label: "undefined", thrown: undefined },
+    { label: "null", thrown: null },
+  ])("treats cancel throwing $label as a retryable lifecycle failure", async ({ thrown }) => {
+    const nativeOperation = operation(new Promise<string>(() => {}));
+    nativeOperation.cancel = vi.fn(() => { throw thrown; });
+    const gen = streamFromNative((cb) => {
+      cb(Buffer.from("x"));
+      return nativeOperation;
+    });
+
+    await gen.next();
+    const returned = await gen.return(undefined).then(
+      () => ({ status: "fulfilled" as const }),
+      (reason: unknown) => ({ status: "rejected" as const, reason })
+    );
+
+    expect(returned).toEqual({ status: "rejected", reason: thrown });
+    expect(nativeOperation.cancel).toHaveBeenCalledTimes(2);
+    expect(nativeOperation.close).not.toHaveBeenCalled();
+  });
+
+  it("treats close throwing undefined as a lifecycle failure without a primary error", async () => {
+    const nativeOperation = operation(Promise.resolve(okMeta()));
+    nativeOperation.close = vi.fn(() => { throw undefined; });
+    const gen = streamFromNative(() => nativeOperation);
+
+    const next = await gen.next().then(
+      () => ({ status: "fulfilled" as const }),
+      (reason: unknown) => ({ status: "rejected" as const, reason })
+    );
+
+    expect(next).toEqual({ status: "rejected", reason: undefined });
+    expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves null native rejection when close throws undefined", async () => {
+    const nativeOperation = operation(Promise.reject(null));
+    nativeOperation.close = vi.fn(() => { throw undefined; });
+    const gen = streamFromNative(() => nativeOperation);
+
+    const next = await gen.next().then(
+      () => ({ status: "fulfilled" as const }),
+      (reason: unknown) => ({ status: "rejected" as const, reason })
+    );
+
+    expect(next).toEqual({ status: "rejected", reason: null });
+    expect(nativeOperation.close).toHaveBeenCalledTimes(1);
   });
 
   it("propagates a native start() rejection of undefined instead of returning empty metadata", async () => {
@@ -475,6 +529,26 @@ describe("streamFromNative", () => {
     );
 
     await expect(gen.next()).rejects.toThrow("registration boom");
+    expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
+    expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves undefined registration failure over a null close failure", async () => {
+    const completion = deferred<string>();
+    const nativeOperation = operation(completion.promise);
+    nativeOperation.cancel = vi.fn(() => completion.resolve(okMeta()));
+    nativeOperation.close = vi.fn(() => { throw null; });
+    const gen = streamFromNative(
+      () => nativeOperation,
+      () => { throw undefined; }
+    );
+
+    const next = await gen.next().then(
+      () => ({ status: "fulfilled" as const }),
+      (reason: unknown) => ({ status: "rejected" as const, reason })
+    );
+
+    expect(next).toEqual({ status: "rejected", reason: undefined });
     expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
     expect(nativeOperation.close).toHaveBeenCalledTimes(1);
   });

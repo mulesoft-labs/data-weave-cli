@@ -199,18 +199,20 @@ export class DataWeave {
     // than seeing a stale "ready" state with a null engineHandle (round-6 #1/#3).
     this.state = "cleaning-up";
     const activeStreams = [...this.activeStreams];
-    let lifecycleError: unknown;
+    let lifecycleError: { readonly hasError: false } | { readonly hasError: true; readonly error: unknown } = {
+      hasError: false,
+    };
     for (const operation of activeStreams) {
       try {
         operation.cancel();
       } catch (error) {
-        lifecycleError ??= error;
+        if (!lifecycleError.hasError) lifecycleError = { hasError: true, error };
       }
     }
     // A failed synchronous cancellation cannot guarantee that completion will
     // ever settle. Abort before waiting or destroying the engine and keep the
     // instance in cleaning-up state so a later cleanup() can retry.
-    if (lifecycleError !== undefined) throw lifecycleError;
+    if (lifecycleError.hasError) throw lifecycleError.error;
 
     if (activeStreams.length > 0) {
       await Promise.allSettled(activeStreams.map((operation) => operation.completion));
@@ -220,12 +222,14 @@ export class DataWeave {
       try {
         operation.close();
       } catch (error) {
-        lifecycleError ??= error;
+        if (!lifecycleError.hasError) lifecycleError = { hasError: true, error };
       }
     }
-    if (lifecycleError !== undefined) throw lifecycleError;
+    if (lifecycleError.hasError) throw lifecycleError.error;
 
-    let destroyError: unknown;
+    let destroyError: { readonly hasError: false } | { readonly hasError: true; readonly error: unknown } = {
+      hasError: false,
+    };
     try {
       if (this.engineHandle !== null) {
         try {
@@ -236,7 +240,7 @@ export class DataWeave {
           // env's native init reference and block isolate teardown. Capture the
           // primary error, clear the handle so a retry does not double-destroy,
           // and fall through to release the reference below.
-          destroyError = e;
+          destroyError = { hasError: true, error: e };
         } finally {
           this.engineHandle = null;
         }
@@ -249,7 +253,7 @@ export class DataWeave {
     // ffi.cleanup() itself rejected, its error already propagated from the await
     // (the more actionable reference-release failure wins; the destroy error is
     // then suppressed).
-    if (destroyError !== undefined) throw destroyError;
+    if (destroyError.hasError) throw destroyError.error;
   }
 
   /**
@@ -342,6 +346,7 @@ export class DataWeave {
     opts?: TransformOptions
   ): AsyncGenerator<Buffer, StreamingResult, undefined> {
     let streamPromise: Promise<AsyncGenerator<Buffer, StreamingResult, undefined>> | null = null;
+    let closed = false;
     const getStream = () => {
       if (!streamPromise) {
         streamPromise = (async () => {
@@ -376,13 +381,27 @@ export class DataWeave {
     };
 
     return {
-      next: (...args: [] | [undefined]) => getStream().then((stream) => stream.next(...args)),
-      return: (value) => streamPromise
-        ? streamPromise.then((stream) => stream.return(value))
-        : Promise.resolve({ done: true, value } as IteratorReturnResult<StreamingResult>),
-      throw: (error?: unknown) => streamPromise
-        ? streamPromise.then((stream) => stream.throw(error))
-        : Promise.reject(error),
+      next: (...args: [] | [undefined]) => closed
+        ? Promise.resolve(
+            { done: true, value: undefined } as unknown as IteratorReturnResult<StreamingResult>
+          )
+        : getStream().then((stream) => stream.next(...args)),
+      return: async (value) => {
+        if (closed) {
+          return { done: true, value: await value } as IteratorReturnResult<StreamingResult>;
+        }
+        closed = true;
+        return streamPromise
+          ? streamPromise.then((stream) => stream.return(value))
+          : { done: true, value: await value } as IteratorReturnResult<StreamingResult>;
+      },
+      throw: (error?: unknown) => {
+        if (closed) return Promise.reject(error);
+        closed = true;
+        return streamPromise
+          ? streamPromise.then((stream) => stream.throw(error))
+          : Promise.reject(error);
+      },
       [Symbol.asyncIterator]() {
         return this;
       },

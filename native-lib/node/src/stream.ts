@@ -8,6 +8,10 @@ import type { StreamingResult } from "./types";
  */
 export type StartStreaming = (chunkCb: (chunk: Buffer) => void) => NativeStreamingOperation;
 
+type ErrorState = { readonly hasError: false } | { readonly hasError: true; readonly error: unknown };
+
+const NO_ERROR: ErrorState = { hasError: false };
+
 /**
  * Bridges a native push-based streaming call into a pull-based async generator.
  *
@@ -35,10 +39,11 @@ export function streamFromNative(
   let metaRaw: string | null = null;
   let cancellationRequested = false;
   let cancelSucceeded = false;
-  let closeSucceeded = false;
+  let nativeCloseSucceeded = false;
+  let closeFinalized = false;
   let registered = false;
   let finalized = false;
-  let finalizationError: unknown;
+  let finalizationError: ErrorState = NO_ERROR;
   let nativeOperation: NativeStreamingOperation | undefined;
   let cancelInProgress = false;
 
@@ -55,19 +60,22 @@ export function streamFromNative(
   };
 
   const close = () => {
-    if (!nativeOperation || closeSucceeded) return;
-    nativeOperation.close();
+    if (!nativeOperation || closeFinalized) return;
+    if (!nativeCloseSucceeded) {
+      nativeOperation.close();
+      nativeCloseSucceeded = true;
+    }
     if (registered) onClose?.(operation!);
-    closeSucceeded = true;
+    closeFinalized = true;
   };
 
   const cancel = () => {
     cancellationRequested = true;
-    let lifecycleError: unknown;
+    let lifecycleError: ErrorState = NO_ERROR;
     try {
       acknowledgeBufferedChunks();
     } catch (error) {
-      lifecycleError = error;
+      lifecycleError = { hasError: true, error };
     } finally {
       wakeAll();
     }
@@ -78,7 +86,7 @@ export function streamFromNative(
         nativeOperation.cancel();
         cancelSucceeded = true;
       } catch (error) {
-        lifecycleError ??= error;
+        if (!lifecycleError.hasError) lifecycleError = { hasError: true, error };
       } finally {
         cancelInProgress = false;
       }
@@ -88,11 +96,11 @@ export function streamFromNative(
       try {
         close();
       } catch (error) {
-        lifecycleError ??= error;
+        if (!lifecycleError.hasError) lifecycleError = { hasError: true, error };
       }
     }
 
-    if (lifecycleError !== undefined) throw lifecycleError;
+    if (lifecycleError.hasError) throw lifecycleError.error;
   };
 
   const chunkCb = (chunk: Buffer) => {
@@ -168,39 +176,39 @@ export function streamFromNative(
       throw error;
     } finally {
       finalized = true;
-      let lifecycleError: unknown;
+      let lifecycleError: ErrorState = NO_ERROR;
       if (operation && registered) {
         if (!nativeSettled && !cancelSucceeded && registered) {
           try {
             cancel();
           } catch (error) {
-            lifecycleError = error;
+            lifecycleError = { hasError: true, error };
           }
         }
-        if ((nativeSettled || cancelSucceeded) && !closeSucceeded) {
+        if ((nativeSettled || cancelSucceeded) && !closeFinalized) {
           try {
             close();
           } catch (error) {
-            lifecycleError ??= error;
+            if (!lifecycleError.hasError) lifecycleError = { hasError: true, error };
           }
         }
       }
       wakeAll();
-      if (!primaryError && lifecycleError !== undefined) {
+      if (!primaryError && lifecycleError.hasError) {
         finalizationError = lifecycleError;
-        throw lifecycleError;
+        throw lifecycleError.error;
       }
     }
   })();
 
-  const requestCancellation = (): unknown => {
+  const requestCancellation = (): ErrorState => {
     cancellationRequested = true;
     wakeAll();
     try {
       cancel();
-      return undefined;
+      return NO_ERROR;
     } catch (error) {
-      return error;
+      return { hasError: true, error };
     }
   };
 
@@ -212,8 +220,8 @@ export function streamFromNative(
       const lifecycleError = requestCancellation();
       return generator.return(value).then(
         (result) => {
-          if (lifecycleError !== undefined) throw lifecycleError;
-          if (finalizationError !== undefined) throw finalizationError;
+          if (lifecycleError.hasError) throw lifecycleError.error;
+          if (finalizationError.hasError) throw finalizationError.error;
           return result;
         },
         (error) => { throw error; }
@@ -223,8 +231,8 @@ export function streamFromNative(
       const lifecycleError = requestCancellation();
       return generator.throw(error).then(
         (result) => {
-          if (lifecycleError !== undefined) throw lifecycleError;
-          if (finalizationError !== undefined) throw finalizationError;
+          if (lifecycleError.hasError) throw lifecycleError.error;
+          if (finalizationError.hasError) throw finalizationError.error;
           return result;
         },
         (primary) => { throw primary; }
