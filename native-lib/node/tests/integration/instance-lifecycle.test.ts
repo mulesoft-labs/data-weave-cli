@@ -60,22 +60,25 @@ describe("instance lifecycle during cleanup (round 6)", () => {
     await closing;
   });
 
-  // Finding #1, streaming/transform variants: the async generators must reject
-  // on first pull when started during the cleanup window.
-  it("runStreaming()/runTransform() during pending cleanup reject on first pull", async () => {
+  // Finding #1, streaming/transform variants: ordinary public methods capture
+  // their engine identity at call time, so a call during cleanup rejects before
+  // it can return a generator or admit native work.
+  it("runStreaming()/runTransform() during pending cleanup reject at call time", async () => {
     dw = new DataWeave();
     dw.initialize();
     const closing = dw.cleanup();
 
-    const sgen = dw.runStreaming("%dw 2.0\noutput application/json\n---\n[1,2,3]");
-    await expect(sgen.next()).rejects.toThrow(DataWeaveError);
+    expect(() =>
+      dw!.runStreaming("%dw 2.0\noutput application/json\n---\n[1,2,3]")
+    ).toThrow(DataWeaveError);
 
-    const tgen = dw.runTransform(
-      "output application/json\n---\npayload",
-      [Buffer.from("[1,2,3]")],
-      { mimeType: "application/json" }
-    );
-    await expect(tgen.next()).rejects.toThrow(DataWeaveError);
+    expect(() =>
+      dw!.runTransform(
+        "output application/json\n---\npayload",
+        [Buffer.from("[1,2,3]")],
+        { mimeType: "application/json" }
+      )
+    ).toThrow(DataWeaveError);
 
     await closing;
   });
@@ -157,6 +160,92 @@ describe("runTransform re-checks readiness after async input pre-buffering (roun
     release();
 
     await expect(firstNext).rejects.toBeInstanceOf(DataWeaveError);
+  });
+});
+
+describe("lazy streams are bound to their engine generation (Task 7)", () => {
+  const staleGenerationMessage = "DataWeave operation belongs to a stale engine generation.";
+
+  it("rejects stale runStreaming work and allows a replacement-generation stream", async () => {
+    const anchor = new DataWeave();
+    const target = new DataWeave();
+    anchor.initialize();
+
+    try {
+      target.initialize();
+      const stale = target.runStreaming("output application/json --- [1, 2, 3]");
+
+      await target.cleanup();
+      target.initialize();
+
+      const stalePull = stale.next();
+      await expect(stalePull).rejects.toBeInstanceOf(DataWeaveError);
+      await expect(stalePull).rejects.toThrow(staleGenerationMessage);
+
+      const current = target.runStreaming("output application/json --- [4, 5, 6]");
+      const chunks: Buffer[] = [];
+      let result = await current.next();
+      while (!result.done) {
+        chunks.push(result.value);
+        result = await current.next();
+      }
+      expect(result.value.success).toBe(true);
+      expect(JSON.parse(Buffer.concat(chunks).toString("utf-8"))).toEqual([4, 5, 6]);
+    } finally {
+      let targetError: unknown;
+      try {
+        await target.cleanup();
+      } catch (e) {
+        targetError = e;
+      }
+      await anchor.cleanup();
+      if (targetError !== undefined) throw targetError;
+    }
+  });
+
+  it("rejects stale runTransform work and allows a replacement-generation transform", async () => {
+    const anchor = new DataWeave();
+    const target = new DataWeave();
+    anchor.initialize();
+
+    try {
+      target.initialize();
+      const stale = target.runTransform(
+        "output application/json --- payload map ($ * 2)",
+        [Buffer.from("[1, 2, 3]")],
+        { mimeType: "application/json" }
+      );
+
+      await target.cleanup();
+      target.initialize();
+
+      const stalePull = stale.next();
+      await expect(stalePull).rejects.toBeInstanceOf(DataWeaveError);
+      await expect(stalePull).rejects.toThrow(staleGenerationMessage);
+
+      const current = target.runTransform(
+        "output application/json --- payload map ($ * 2)",
+        [Buffer.from("[4, 5, 6]")],
+        { mimeType: "application/json" }
+      );
+      const chunks: Buffer[] = [];
+      let result = await current.next();
+      while (!result.done) {
+        chunks.push(result.value);
+        result = await current.next();
+      }
+      expect(result.value.success).toBe(true);
+      expect(JSON.parse(Buffer.concat(chunks).toString("utf-8"))).toEqual([8, 10, 12]);
+    } finally {
+      let targetError: unknown;
+      try {
+        await target.cleanup();
+      } catch (e) {
+        targetError = e;
+      }
+      await anchor.cleanup();
+      if (targetError !== undefined) throw targetError;
+    }
   });
 });
 

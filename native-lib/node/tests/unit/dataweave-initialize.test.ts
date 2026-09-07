@@ -27,6 +27,8 @@ describe("DataWeave.initialize() native ref-count safety", () => {
     vi.mocked(ffi.createEngine).mockReset();
     vi.mocked(ffi.createEngineWithResolver).mockReset();
     vi.mocked(ffi.destroyEngine).mockReset();
+    vi.mocked(ffi.runScriptStreamingEngine).mockReset();
+    vi.mocked(ffi.runScriptTransformEngine).mockReset();
     vi.mocked(ffi.cleanup).mockReset();
   });
 
@@ -396,5 +398,128 @@ describe("DataWeave.initialize() native ref-count safety", () => {
 
     await dw.cleanup();
     expect(ffi.destroyEngine).toHaveBeenCalledWith(11);
+  });
+
+  describe("stale engine generation", () => {
+    const staleGenerationMessage = "DataWeave operation belongs to a stale engine generation.";
+
+    it("rejects a lazy runStreaming operation after replacement with a different handle before native admission", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValueOnce(2).mockReturnValueOnce(3);
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const stream = dw.runStreaming("output application/json --- [1, 2, 3]");
+
+      await dw.cleanup();
+      dw.initialize();
+
+      const firstPull = stream.next();
+      await firstPull.catch(() => undefined);
+      expect(ffi.runScriptStreamingEngine).not.toHaveBeenCalled();
+      await expect(firstPull).rejects.toBeInstanceOf(DataWeaveError);
+      await expect(firstPull).rejects.toThrow(staleGenerationMessage);
+
+      await dw.cleanup();
+    });
+
+    it("rejects a lazy runStreaming operation when the replacement reuses its handle before native admission", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(2);
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const stream = dw.runStreaming("output application/json --- [1, 2, 3]");
+
+      await dw.cleanup();
+      dw.initialize();
+
+      const firstPull = stream.next();
+      await firstPull.catch(() => undefined);
+      expect(ffi.runScriptStreamingEngine).not.toHaveBeenCalled();
+      await expect(firstPull).rejects.toBeInstanceOf(DataWeaveError);
+      await expect(firstPull).rejects.toThrow(staleGenerationMessage);
+
+      await dw.cleanup();
+    });
+
+    it("rejects a lazy runTransform operation after replacement with a different handle before native admission", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValueOnce(2).mockReturnValueOnce(3);
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform(
+        "output application/json --- payload",
+        [Buffer.from("[1, 2, 3]")],
+        { mimeType: "application/json" }
+      );
+
+      await dw.cleanup();
+      dw.initialize();
+
+      const firstPull = transform.next();
+      await firstPull.catch(() => undefined);
+      expect(ffi.runScriptTransformEngine).not.toHaveBeenCalled();
+      await expect(firstPull).rejects.toBeInstanceOf(DataWeaveError);
+      await expect(firstPull).rejects.toThrow(staleGenerationMessage);
+
+      await dw.cleanup();
+    });
+
+    it("rejects a lazy runTransform operation when the replacement reuses its handle before native admission", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(2);
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform(
+        "output application/json --- payload",
+        [Buffer.from("[1, 2, 3]")],
+        { mimeType: "application/json" }
+      );
+
+      await dw.cleanup();
+      dw.initialize();
+
+      const firstPull = transform.next();
+      await firstPull.catch(() => undefined);
+      expect(ffi.runScriptTransformEngine).not.toHaveBeenCalled();
+      await expect(firstPull).rejects.toBeInstanceOf(DataWeaveError);
+      await expect(firstPull).rejects.toThrow(staleGenerationMessage);
+
+      await dw.cleanup();
+    });
+
+    it("revalidates a runTransform operation after async input pre-buffering before native admission", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(2);
+
+      let markInputStarted!: () => void;
+      const inputStarted = new Promise<void>((resolve) => { markInputStarted = resolve; });
+      let resumeInput!: () => void;
+      const inputPaused = new Promise<void>((resolve) => { resumeInput = resolve; });
+      async function* slowInput(): AsyncGenerator<Buffer> {
+        markInputStarted();
+        await inputPaused;
+        yield Buffer.from("[1, 2, 3]");
+      }
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform(
+        "output application/json --- payload",
+        slowInput(),
+        { mimeType: "application/json" }
+      );
+      const firstPull = transform.next();
+      await inputStarted;
+
+      await dw.cleanup();
+      dw.initialize();
+      resumeInput();
+
+      await firstPull.catch(() => undefined);
+      expect(ffi.runScriptTransformEngine).not.toHaveBeenCalled();
+      await expect(firstPull).rejects.toBeInstanceOf(DataWeaveError);
+      await expect(firstPull).rejects.toThrow(staleGenerationMessage);
+
+      await dw.cleanup();
+    });
   });
 });

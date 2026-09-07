@@ -8,6 +8,11 @@ import { DataWeaveError, DataWeaveScriptError } from "./errors";
 import type { ExecutionResult, StreamingResult, Inputs, TransformOptions } from "./types";
 import type { ModuleResolver } from "./resolver";
 
+interface EngineOperationToken {
+  readonly handle: number;
+  readonly generation: number;
+}
+
 /**
  * Constructor options for {@link DataWeave}.
  */
@@ -52,6 +57,7 @@ export class DataWeave {
   private readonly resolveModule?: ModuleResolver;
   private state: "uninitialized" | "ready" | "cleaning-up" = "uninitialized";
   private engineHandle: number | null = null;
+  private engineGeneration = 0;
   private cleanupPromise: Promise<void> | null = null;
 
   /**
@@ -89,9 +95,10 @@ export class DataWeave {
     try {
       ffi.initialize(this.libPath, this.addonPath);
       libRefAcquired = true;
-      this.engineHandle = this.resolveModule
+      const engineHandle = this.resolveModule
         ? ffi.createEngineWithResolver(this.resolveModule)
         : ffi.createEngine();
+      this.engineHandle = engineHandle;
     } catch (e: unknown) {
       // If ffi.initialize() already succeeded but engine creation then threw, we
       // already hold an increment of the native library's ref-counted handle and
@@ -136,6 +143,7 @@ export class DataWeave {
       throw new DataWeaveError(`Failed to initialize: ${e instanceof Error ? e.message : e}`);
     }
     this.state = "ready";
+    this.engineGeneration++;
   }
 
   /**
@@ -251,11 +259,20 @@ export class DataWeave {
    * @returns An async generator of output chunks, returning the streaming metadata.
    * @throws DataWeaveError if the runtime is not initialized.
    */
-  async *runStreaming(script: string, inputs?: Inputs): AsyncGenerator<Buffer, StreamingResult, undefined> {
-    this.ensureReady();
+  runStreaming(script: string, inputs?: Inputs): AsyncGenerator<Buffer, StreamingResult, undefined> {
+    const token = this.captureOperationToken();
+    return this.runStreamingInternal(token, script, inputs);
+  }
+
+  private async *runStreamingInternal(
+    token: EngineOperationToken,
+    script: string,
+    inputs?: Inputs
+  ): AsyncGenerator<Buffer, StreamingResult, undefined> {
     const inputsJson = buildInputsJson(inputs ?? {});
+    this.assertCurrentOperation(token);
     return yield* streamFromNative((chunkCb) =>
-      ffi.runScriptStreamingEngine(this.engineHandle!, script, inputsJson, chunkCb)
+      ffi.runScriptStreamingEngine(token.handle, script, inputsJson, chunkCb)
     );
   }
 
@@ -275,12 +292,22 @@ export class DataWeave {
    * @returns An async generator of output chunks, returning the streaming metadata.
    * @throws DataWeaveError if the runtime is not initialized.
    */
-  async *runTransform(
+  runTransform(
     script: string,
     input: AsyncIterable<Buffer | Uint8Array> | Iterable<Buffer | Uint8Array>,
     opts?: TransformOptions
   ): AsyncGenerator<Buffer, StreamingResult, undefined> {
-    this.ensureReady();
+    const token = this.captureOperationToken();
+    return this.runTransformInternal(token, script, input, opts);
+  }
+
+  private async *runTransformInternal(
+    token: EngineOperationToken,
+    script: string,
+    input: AsyncIterable<Buffer | Uint8Array> | Iterable<Buffer | Uint8Array>,
+    opts?: TransformOptions
+  ): AsyncGenerator<Buffer, StreamingResult, undefined> {
+    this.assertCurrentOperation(token);
 
     const inputName = opts?.inputName ?? "payload";
     const inputMimeType = opts?.mimeType ?? "application/json";
@@ -290,17 +317,11 @@ export class DataWeave {
 
     const readCb = await createChunkReader(input);
 
-    // The instance may have been cleaned up while an async input pre-buffered
-    // (createChunkReader can await arbitrarily long). Re-check readiness so a
-    // caller that raced cleanup() gets a synchronous DataWeaveError rather than
-    // a resolved "Unknown engine handle" envelope. The C admission pin is the
-    // authoritative memory-safety guard (round 11 #2/#3); this only improves the
-    // failure ergonomics for a misused instance. (round 12 #4)
-    this.ensureReady();
+    this.assertCurrentOperation(token);
 
     return yield* streamFromNative((writeCb) =>
       ffi.runScriptTransformEngine(
-        this.engineHandle!,
+        token.handle,
         script,
         inputsJson,
         inputName,
@@ -310,6 +331,21 @@ export class DataWeave {
         writeCb
       )
     );
+  }
+
+  private captureOperationToken(): EngineOperationToken {
+    this.ensureReady();
+    return { handle: this.engineHandle!, generation: this.engineGeneration };
+  }
+
+  private assertCurrentOperation(token: EngineOperationToken): void {
+    if (
+      this.state !== "ready" ||
+      this.engineHandle !== token.handle ||
+      this.engineGeneration !== token.generation
+    ) {
+      throw new DataWeaveError("DataWeave operation belongs to a stale engine generation.");
+    }
   }
 
   private ensureReady(): void {
