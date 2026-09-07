@@ -14,6 +14,11 @@ interface EngineOperationToken {
   readonly generation: number;
 }
 
+interface ActiveStreamState {
+  completionSettled: boolean;
+  closeFinalized: boolean;
+}
+
 /**
  * Constructor options for {@link DataWeave}.
  */
@@ -60,6 +65,7 @@ export class DataWeave {
   private engineHandle: number | null = null;
   private engineGeneration = 0;
   private readonly activeStreams = new Set<NativeStreamingOperation>();
+  private readonly activeStreamStates = new Map<NativeStreamingOperation, ActiveStreamState>();
   private cleanupPromise: Promise<void> | null = null;
 
   /**
@@ -219,6 +225,8 @@ export class DataWeave {
     }
 
     for (const operation of activeStreams) {
+      const streamState = this.activeStreamStates.get(operation);
+      if (!streamState || streamState.closeFinalized) continue;
       try {
         operation.close();
       } catch (error) {
@@ -309,8 +317,8 @@ export class DataWeave {
         this.assertCurrentOperation(token);
         return ffi.runScriptStreamingEngine(token.handle, script, inputsJson, chunkCb);
       },
-      (operation) => { this.activeStreams.add(operation); },
-      (operation) => { this.activeStreams.delete(operation); }
+      (operation) => { this.registerActiveStream(operation); },
+      (operation) => { this.markActiveStreamClosed(operation); }
     );
   }
 
@@ -345,11 +353,26 @@ export class DataWeave {
     input: AsyncIterable<Buffer | Uint8Array> | Iterable<Buffer | Uint8Array>,
     opts?: TransformOptions
   ): AsyncGenerator<Buffer, StreamingResult, undefined> {
-    let streamPromise: Promise<AsyncGenerator<Buffer, StreamingResult, undefined>> | null = null;
-    let closed = false;
-    const getStream = () => {
-      if (!streamPromise) {
-        streamPromise = (async () => {
+    type TransformState =
+      | { readonly kind: "open" }
+      | { readonly kind: "returning" }
+      | { readonly kind: "throwing" }
+      | { readonly kind: "closed" };
+
+    let state: TransformState = { kind: "open" };
+    let stream: AsyncGenerator<Buffer, StreamingResult, undefined> | null = null;
+    let setupPromise: Promise<AsyncGenerator<Buffer, StreamingResult, undefined> | null> | null = null;
+    let requestTail: Promise<void> = Promise.resolve();
+
+    const enqueue = <T>(request: () => Promise<T>): Promise<T> => {
+      const result = requestTail.then(request, request);
+      requestTail = result.then(() => undefined, () => undefined);
+      return result;
+    };
+
+    const setup = (): Promise<AsyncGenerator<Buffer, StreamingResult, undefined> | null> => {
+      if (!setupPromise) {
+        setupPromise = (async () => {
           this.assertCurrentOperation(token);
 
           const inputName = opts?.inputName ?? "payload";
@@ -359,8 +382,9 @@ export class DataWeave {
           const inputsJson = Object.keys(extraInputs).length > 0 ? buildInputsJson(extraInputs) : "{}";
           const readCb = await createChunkReader(input);
 
+          if (state.kind !== "open") return null;
           this.assertCurrentOperation(token);
-          return streamFromNative(
+          stream = streamFromNative(
             (writeCb) =>
               ffi.runScriptTransformEngine(
                 token.handle,
@@ -372,40 +396,103 @@ export class DataWeave {
                 readCb,
                 writeCb
               ),
-            (operation) => { this.activeStreams.add(operation); },
-            (operation) => { this.activeStreams.delete(operation); }
+            (operation) => { this.registerActiveStream(operation); },
+            (operation) => { this.markActiveStreamClosed(operation); }
           );
+          return stream;
         })();
+        // The first queued next observes this rejection. This second branch
+        // prevents a concurrent return/throw from creating an unhandled promise.
+        setupPromise.catch(() => {});
       }
-      return streamPromise;
+      return setupPromise;
     };
 
     return {
-      next: (...args: [] | [undefined]) => closed
-        ? Promise.resolve(
-            { done: true, value: undefined } as unknown as IteratorReturnResult<StreamingResult>
-          )
-        : getStream().then((stream) => stream.next(...args)),
-      return: async (value) => {
-        if (closed) {
-          return { done: true, value: await value } as IteratorReturnResult<StreamingResult>;
+      next: (...args: [] | [undefined]) => enqueue(async () => {
+        if (state.kind !== "open") {
+          return { done: true, value: undefined } as unknown as IteratorReturnResult<StreamingResult>;
         }
-        closed = true;
-        return streamPromise
-          ? streamPromise.then((stream) => stream.return(value))
-          : { done: true, value: await value } as IteratorReturnResult<StreamingResult>;
+        let activeStream: AsyncGenerator<Buffer, StreamingResult, undefined> | null;
+        try {
+          activeStream = await setup();
+        } catch (error) {
+          if (state.kind !== "open") {
+            return { done: true, value: undefined } as unknown as IteratorReturnResult<StreamingResult>;
+          }
+          state = { kind: "closed" };
+          throw error;
+        }
+        if (!activeStream || state.kind !== "open") {
+          return { done: true, value: undefined } as unknown as IteratorReturnResult<StreamingResult>;
+        }
+        const result = await activeStream.next(...args);
+        if (result.done) state = { kind: "closed" };
+        return result;
+      }),
+      return: (value) => {
+        if (state.kind === "open") state = { kind: "returning" };
+        const proactiveReturn = stream?.return(value);
+        return enqueue(async () => {
+          try {
+            if (proactiveReturn) return await proactiveReturn;
+            return {
+              done: true,
+              value: await value,
+            } as IteratorReturnResult<StreamingResult>;
+          } finally {
+            state = { kind: "closed" };
+          }
+        });
       },
       throw: (error?: unknown) => {
-        if (closed) return Promise.reject(error);
-        closed = true;
-        return streamPromise
-          ? streamPromise.then((stream) => stream.throw(error))
-          : Promise.reject(error);
+        if (state.kind === "open") state = { kind: "throwing" };
+        const proactiveThrow = stream?.throw(error);
+        return enqueue(async () => {
+          try {
+            if (proactiveThrow) return await proactiveThrow;
+            throw error;
+          } finally {
+            state = { kind: "closed" };
+          }
+        });
       },
       [Symbol.asyncIterator]() {
         return this;
       },
     };
+  }
+
+  private registerActiveStream(operation: NativeStreamingOperation): void {
+    const state: ActiveStreamState = { completionSettled: false, closeFinalized: false };
+    this.activeStreams.add(operation);
+    this.activeStreamStates.set(operation, state);
+    operation.completion.then(
+      () => {
+        state.completionSettled = true;
+        this.releaseActiveStream(operation, state);
+      },
+      () => {
+        state.completionSettled = true;
+        this.releaseActiveStream(operation, state);
+      }
+    );
+  }
+
+  private markActiveStreamClosed(operation: NativeStreamingOperation): void {
+    const state = this.activeStreamStates.get(operation);
+    if (!state) return;
+    state.closeFinalized = true;
+    this.releaseActiveStream(operation, state);
+  }
+
+  private releaseActiveStream(
+    operation: NativeStreamingOperation,
+    state: ActiveStreamState
+  ): void {
+    if (!state.completionSettled || !state.closeFinalized) return;
+    this.activeStreams.delete(operation);
+    this.activeStreamStates.delete(operation);
   }
 
   private captureOperationToken(): EngineOperationToken {
