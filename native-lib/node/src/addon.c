@@ -38,6 +38,7 @@ static int g_initialized = 0;
 static int g_ref_count = 0;
 static uv_mutex_t g_mutex;
 static uv_key_t g_native_callback_depth;
+static int g_native_callback_depth_status;
 // Guards initialization of the process-global g_mutex. Init() runs once per
 // Worker environment that loads this addon, but g_mutex is process-global —
 // re-running uv_mutex_init() on an already-initialized mutex from a second
@@ -190,10 +191,13 @@ static engine_bridge_t* g_stranded_bridges = NULL;  // linked list, guarded by g
 // post-fix it is kept by its owner-env cleanup hook and the ref is deleted on the
 // owner thread at env teardown (g_test_resolver_ref_deletes counts those deletes).
 // g_test_hooks is written once in Init before any reader runs; g_test_force_strand_once
-// and g_test_resolver_ref_deletes are accessed only under g_mutex.
+// and the remaining test state are accessed only under g_mutex.
 static bool g_test_hooks = false;
 static bool g_test_force_strand_once = false;
 static long long g_test_resolver_ref_deletes = 0;
+static bool g_test_hold_next_async_op = false;
+static bool g_test_async_op_held = false;
+static bool g_test_release_async_op = false;
 
 // One record per napi_env that has ever taken an init reference (via
 // initialize()). init_refs is that env's net initialize()-minus-cleanup()
@@ -288,6 +292,28 @@ static bool g_teardown_needed = false;
 // abandon_unrecoverable_isolate_locked().
 static bool g_isolate_poisoned = false;
 static uv_cond_t g_teardown_cond;
+
+// Test-only one-shot gate for a real streaming/transform worker. Admission has
+// already reserved g_active_ops before the worker reaches this point, so holding
+// it here lets tests drive cleanup() into TEARDOWN_PENDING_WAIT without entering
+// through a native JS callback. Inert unless DATAWEAVE_TEST_HOOKS is enabled and
+// __test_holdNextAsyncOp() armed the gate.
+static void test_hold_async_op_if_armed(void) {
+  if (!g_test_hooks) return;
+  uv_mutex_lock(&g_mutex);
+  if (g_test_hold_next_async_op) {
+    g_test_hold_next_async_op = false;
+    g_test_async_op_held = true;
+    uv_cond_broadcast(&g_teardown_cond);
+    while (!g_test_release_async_op) {
+      uv_cond_wait(&g_teardown_cond, &g_mutex);
+    }
+    g_test_release_async_op = false;
+    g_test_async_op_held = false;
+    uv_cond_broadcast(&g_teardown_cond);
+  }
+  uv_mutex_unlock(&g_mutex);
+}
 
 // teardown+detach double failure (review #17 #1): an exiting worker is stuck
 // attached to this isolate, so graal_tear_down_isolate can never again get the
@@ -1285,6 +1311,7 @@ static int streaming_write_cb(void* ctx, const char* buf, int len) {
 
 static void streaming_thread_fn(void* arg) {
   struct streaming_work* w = (struct streaming_work*)arg;
+  test_hold_async_op_if_armed();
 
   void* worker_thread = NULL;
   int rc = fn_attach_thread(g_isolate, &worker_thread);
@@ -1816,6 +1843,7 @@ static void call_js_transform_write(napi_env env, napi_value js_callback, void* 
 
 static void transform_thread_fn(void* arg) {
   struct transform_work* w = (struct transform_work*)arg;
+  test_hold_async_op_if_armed();
 
   void* worker_thread = NULL;
   int rc = fn_attach_thread(g_isolate, &worker_thread);
@@ -3430,7 +3458,7 @@ static napi_value napi_cleanup(napi_env env, napi_callback_info info) {
 static void init_g_mutex(void) {
   uv_mutex_init(&g_mutex);
   uv_cond_init(&g_teardown_cond);
-  uv_key_create(&g_native_callback_depth);
+  g_native_callback_depth_status = uv_key_create(&g_native_callback_depth);
 }
 
 // --- Test-only N-API entrypoints (review #12 #3 / #13) ---
@@ -3466,8 +3494,51 @@ static napi_value napi_test_resolver_ref_delete_count(napi_env env, napi_callbac
     return out;
 }
 
+static napi_value napi_test_hold_next_async_op(napi_env env, napi_callback_info info) {
+    (void)info;
+    uv_mutex_lock(&g_mutex);
+    if (g_test_hold_next_async_op || g_test_async_op_held) {
+        uv_mutex_unlock(&g_mutex);
+        napi_throw_error(env, NULL, "A test async operation gate is already armed");
+        return NULL;
+    }
+    g_test_hold_next_async_op = true;
+    g_test_release_async_op = false;
+    uv_mutex_unlock(&g_mutex);
+    return NULL;
+}
+
+static napi_value napi_test_async_op_held(napi_env env, napi_callback_info info) {
+    (void)info;
+    uv_mutex_lock(&g_mutex);
+    bool held = g_test_async_op_held;
+    uv_mutex_unlock(&g_mutex);
+    napi_value out;
+    napi_get_boolean(env, held, &out);
+    return out;
+}
+
+static napi_value napi_test_release_async_op(napi_env env, napi_callback_info info) {
+    (void)env;
+    (void)info;
+    uv_mutex_lock(&g_mutex);
+    g_test_release_async_op = true;
+    uv_cond_broadcast(&g_teardown_cond);
+    uv_mutex_unlock(&g_mutex);
+    return NULL;
+}
+
 static napi_value Init(napi_env env, napi_value exports) {
   uv_once(&g_mutex_once, init_g_mutex);
+
+  if (g_native_callback_depth_status != 0) {
+    char message[128];
+    snprintf(message, sizeof(message),
+             "Failed to initialize native callback state (libuv error %d)",
+             g_native_callback_depth_status);
+    napi_throw_error(env, NULL, message);
+    return NULL;
+  }
 
   napi_value fn;
 
@@ -3508,6 +3579,12 @@ static napi_value Init(napi_env env, napi_value exports) {
     napi_set_named_property(env, exports, "__test_strandedCount", fn);
     napi_create_function(env, "__test_resolverRefDeleteCount", NAPI_AUTO_LENGTH, napi_test_resolver_ref_delete_count, NULL, &fn);
     napi_set_named_property(env, exports, "__test_resolverRefDeleteCount", fn);
+    napi_create_function(env, "__test_holdNextAsyncOp", NAPI_AUTO_LENGTH, napi_test_hold_next_async_op, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_holdNextAsyncOp", fn);
+    napi_create_function(env, "__test_asyncOpHeld", NAPI_AUTO_LENGTH, napi_test_async_op_held, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_asyncOpHeld", fn);
+    napi_create_function(env, "__test_releaseAsyncOp", NAPI_AUTO_LENGTH, napi_test_release_async_op, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_releaseAsyncOp", fn);
   }
 
   return exports;

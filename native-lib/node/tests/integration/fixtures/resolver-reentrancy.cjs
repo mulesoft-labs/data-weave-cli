@@ -76,8 +76,82 @@ async function runRaw() {
   }
 }
 
+async function runRawOutput(mode) {
+  const addon = require(path.join(ROOT, "build", "Release", "dwlib_addon.node"));
+  const { findLibrary } = require(path.join(ROOT, "dist", "utils.js"));
+  let innerHandle = null;
+  let outerHandle = null;
+  let nestedErrorCode = null;
+  const chunks = [];
+
+  addon.initialize(findLibrary());
+  try {
+    innerHandle = addon.createEngine();
+    outerHandle = addon.createEngine();
+    const write = (chunk) => {
+      if (nestedErrorCode === null) {
+        try {
+          addon.runScriptEngine(innerHandle, "21 * 2", "{}");
+        } catch (error) {
+          nestedErrorCode = error && error.code;
+        }
+      }
+      chunks.push(chunk);
+    };
+
+    let raw;
+    if (mode === "raw-streaming") {
+      raw = await addon.runScriptStreamingEngine(
+        outerHandle,
+        "%dw 2.0\noutput application/json\n---\n[1,2,3]",
+        "{}",
+        write
+      );
+    } else {
+      let read = false;
+      raw = await addon.runScriptTransformEngine(
+        outerHandle,
+        "output application/json\n---\npayload map ($ * 2)",
+        "{}",
+        "payload",
+        "application/json",
+        null,
+        () => {
+          if (read) return null;
+          read = true;
+          return Buffer.from("[1,2,3]");
+        },
+        write
+      );
+    }
+    console.log(JSON.stringify({
+      nestedErrorCode,
+      outerSuccess: JSON.parse(raw).success,
+      outerResult: JSON.parse(Buffer.concat(chunks).toString("utf-8")),
+    }));
+  } finally {
+    try {
+      if (outerHandle !== null) addon.destroyEngine(outerHandle);
+    } finally {
+      try {
+        if (innerHandle !== null) addon.destroyEngine(innerHandle);
+      } finally {
+        await addon.cleanup();
+      }
+    }
+  }
+}
+
 const mode = process.argv[2];
-const run = mode === "facade" ? runFacade : mode === "raw" ? runRaw : null;
+const run = mode === "facade"
+  ? runFacade
+    : mode === "raw"
+    ? runRaw
+    : mode === "raw-streaming"
+      ? () => runRawOutput(mode)
+      : mode === "raw-transform"
+        ? () => runRawOutput(mode)
+        : null;
 if (run === null) {
   console.error(`unknown mode: ${mode}`);
   process.exit(2);
