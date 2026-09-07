@@ -402,6 +402,16 @@ describe("DataWeave.initialize() native ref-count safety", () => {
 
   describe("stale engine generation", () => {
     const staleGenerationMessage = "DataWeave operation belongs to a stale engine generation.";
+    const expectStaleGenerationError = async (operation: Promise<unknown>): Promise<void> => {
+      let error: unknown;
+      try {
+        await operation;
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(DataWeaveError);
+      expect((error as DataWeaveError).message).toBe(staleGenerationMessage);
+    };
 
     it("rejects a lazy runStreaming operation after replacement with a different handle before native admission", async () => {
       vi.mocked(ffi.createEngine).mockReturnValueOnce(2).mockReturnValueOnce(3);
@@ -414,10 +424,8 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       dw.initialize();
 
       const firstPull = stream.next();
-      await firstPull.catch(() => undefined);
+      await expectStaleGenerationError(firstPull);
       expect(ffi.runScriptStreamingEngine).not.toHaveBeenCalled();
-      await expect(firstPull).rejects.toBeInstanceOf(DataWeaveError);
-      await expect(firstPull).rejects.toThrow(staleGenerationMessage);
 
       await dw.cleanup();
     });
@@ -433,10 +441,8 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       dw.initialize();
 
       const firstPull = stream.next();
-      await firstPull.catch(() => undefined);
+      await expectStaleGenerationError(firstPull);
       expect(ffi.runScriptStreamingEngine).not.toHaveBeenCalled();
-      await expect(firstPull).rejects.toBeInstanceOf(DataWeaveError);
-      await expect(firstPull).rejects.toThrow(staleGenerationMessage);
 
       await dw.cleanup();
     });
@@ -456,10 +462,8 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       dw.initialize();
 
       const firstPull = transform.next();
-      await firstPull.catch(() => undefined);
+      await expectStaleGenerationError(firstPull);
       expect(ffi.runScriptTransformEngine).not.toHaveBeenCalled();
-      await expect(firstPull).rejects.toBeInstanceOf(DataWeaveError);
-      await expect(firstPull).rejects.toThrow(staleGenerationMessage);
 
       await dw.cleanup();
     });
@@ -479,10 +483,8 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       dw.initialize();
 
       const firstPull = transform.next();
-      await firstPull.catch(() => undefined);
+      await expectStaleGenerationError(firstPull);
       expect(ffi.runScriptTransformEngine).not.toHaveBeenCalled();
-      await expect(firstPull).rejects.toBeInstanceOf(DataWeaveError);
-      await expect(firstPull).rejects.toThrow(staleGenerationMessage);
 
       await dw.cleanup();
     });
@@ -514,10 +516,8 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       dw.initialize();
       resumeInput();
 
-      await firstPull.catch(() => undefined);
+      await expectStaleGenerationError(firstPull);
       expect(ffi.runScriptTransformEngine).not.toHaveBeenCalled();
-      await expect(firstPull).rejects.toBeInstanceOf(DataWeaveError);
-      await expect(firstPull).rejects.toThrow(staleGenerationMessage);
 
       await dw.cleanup();
     });

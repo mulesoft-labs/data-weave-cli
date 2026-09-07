@@ -165,6 +165,16 @@ describe("runTransform re-checks readiness after async input pre-buffering (roun
 
 describe("lazy streams are bound to their engine generation (Task 7)", () => {
   const staleGenerationMessage = "DataWeave operation belongs to a stale engine generation.";
+  const expectStaleGenerationError = async (operation: Promise<unknown>): Promise<void> => {
+    let error: unknown;
+    try {
+      await operation;
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(DataWeaveError);
+    expect((error as DataWeaveError).message).toBe(staleGenerationMessage);
+  };
 
   it("rejects stale runStreaming work and allows a replacement-generation stream", async () => {
     const anchor = new DataWeave();
@@ -179,8 +189,7 @@ describe("lazy streams are bound to their engine generation (Task 7)", () => {
       target.initialize();
 
       const stalePull = stale.next();
-      await expect(stalePull).rejects.toBeInstanceOf(DataWeaveError);
-      await expect(stalePull).rejects.toThrow(staleGenerationMessage);
+      await expectStaleGenerationError(stalePull);
 
       const current = target.runStreaming("output application/json --- [4, 5, 6]");
       const chunks: Buffer[] = [];
@@ -220,8 +229,7 @@ describe("lazy streams are bound to their engine generation (Task 7)", () => {
       target.initialize();
 
       const stalePull = stale.next();
-      await expect(stalePull).rejects.toBeInstanceOf(DataWeaveError);
-      await expect(stalePull).rejects.toThrow(staleGenerationMessage);
+      await expectStaleGenerationError(stalePull);
 
       const current = target.runTransform(
         "output application/json --- payload map ($ * 2)",
