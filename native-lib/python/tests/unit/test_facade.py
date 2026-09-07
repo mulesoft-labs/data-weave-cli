@@ -13,10 +13,16 @@ class FakeNativeRuntime:
     def __init__(self):
         self.initialized = True
         self.thread = "thread"
+        self.operation = native._EngineOperation(handle=7, generation=1)
         self.calls = []
 
-    def run_engine_and_decode(self, *args):
-        self.calls.append(("run_engine_and_decode", args))
+    def capture_operation(self):
+        return self.operation
+
+    def run_engine_and_decode(self, script, inputs, *, operation):
+        assert operation is self.operation
+        assert operation.handle == 7
+        self.calls.append(("run_engine_and_decode", script, inputs, operation))
         return self._result()
 
     @staticmethod
@@ -102,10 +108,9 @@ def test_run_uses_engine_execution_regardless_of_resolver():
     assert instance._native.calls == [
         (
             "run_engine_and_decode",
-            (
-                b"payload",
-                b'{"value": {"content": "MQ==", "mimeType": "application/json", "charset": "utf-8"}}',
-            ),
+            b"payload",
+            b'{"value": {"content": "MQ==", "mimeType": "application/json", "charset": "utf-8"}}',
+            instance._native.operation,
         )
     ]
 
@@ -120,7 +125,12 @@ def test_run_without_resolver_routes_through_engine():
         True, "SGVsbG8=", None, False, "text/plain", "utf-8"
     )
     assert instance._native.calls == [
-        ("run_engine_and_decode", (b"payload", b"{}"))
+        (
+            "run_engine_and_decode",
+            b"payload",
+            b"{}",
+            instance._native.operation,
+        )
     ]
 
 

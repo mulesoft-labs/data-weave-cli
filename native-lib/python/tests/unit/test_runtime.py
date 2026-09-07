@@ -10,6 +10,7 @@ class _FakeNative:
         self.initialized = False
         self.handle = 0
         self.thread = object()
+        self.operation = None
         self.has_callback_streaming = True
         self.has_callback_input_output = True
         self.cleaned = 0
@@ -24,14 +25,22 @@ class _FakeNative:
     def initialize(self):
         self.initialized = True
         self.handle = 7
+        self.operation = native._EngineOperation(handle=self.handle, generation=1)
 
-    def run_engine_and_decode(self, script, inputs):
-        self.runs.append((script, inputs))
+    def capture_operation(self):
+        assert self.initialized
+        return self.operation
+
+    def run_engine_and_decode(self, script, inputs, *, operation):
+        assert operation is self.operation
+        assert operation.handle == self.handle
+        self.runs.append((script, inputs, operation))
         return '{"success":true,"result":"","binary":false,"mimeType":"application/json","charset":"UTF-8"}'
 
     def cleanup(self):
         self.cleaned += 1
         self.initialized = False
+        self.operation = None
 
 
 @pytest.mark.unit
@@ -65,5 +74,7 @@ def test_run_routes_through_engine(monkeypatch):
     dw = DataWeave()
     dw.initialize()
     dw.run("1 + 1")
-    assert dw._native.runs == [(b"1 + 1", b"{}")]
+    operation = dw._native.operation
+    assert dw._native.runs == [(b"1 + 1", b"{}", operation)]
+    assert operation == native._EngineOperation(handle=7, generation=1)
     dw.cleanup()
