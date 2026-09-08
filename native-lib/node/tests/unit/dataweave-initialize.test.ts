@@ -847,6 +847,170 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       await dw.cleanup();
     });
 
+    it("abandons unresolved setup for two pulls before return and ignores late fulfillment", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(45);
+      const readerGate = deferred<Awaited<ReturnType<typeof createChunkReader>>>();
+      vi.mocked(createChunkReader).mockReturnValueOnce(readerGate.promise);
+      const returnGate = deferred<StreamingResult>();
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform("output application/json --- payload", []);
+      const settlements = [0, 0, 0];
+      const firstPull = transform.next().finally(() => { settlements[0]++; });
+      await vi.waitFor(() => expect(createChunkReader).toHaveBeenCalledTimes(1));
+      const secondPull = transform.next().finally(() => { settlements[1]++; });
+      const returned = (transform.return as (value: unknown) => Promise<IteratorResult<Buffer, StreamingResult>>)(returnGate.promise)
+        .finally(() => { settlements[2]++; });
+      const laterPull = transform.next();
+      const pendingSetup = Symbol("pending setup");
+
+      expect(await Promise.race([
+        Promise.all([firstPull, secondPull]),
+        new Promise<typeof pendingSetup>((resolve) => setImmediate(() => resolve(pendingSetup))),
+      ])).toEqual([
+        { done: true, value: undefined },
+        { done: true, value: undefined },
+      ]);
+
+      const returnValue = { success: true } as StreamingResult;
+      returnGate.resolve(returnValue);
+      await expect(Promise.all([returned, laterPull])).resolves.toEqual([
+        { done: true, value: returnValue },
+        { done: true, value: undefined },
+      ]);
+      expect(settlements).toEqual([1, 1, 1]);
+
+      readerGate.resolve(() => null);
+      await readerGate.promise;
+      await Promise.resolve();
+      expect(ffi.runScriptTransformEngine).not.toHaveBeenCalled();
+
+      await dw.cleanup();
+    });
+
+    it("abandons unresolved setup for two pulls before throw and ignores late fulfillment", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(46);
+      const readerGate = deferred<Awaited<ReturnType<typeof createChunkReader>>>();
+      vi.mocked(createChunkReader).mockReturnValueOnce(readerGate.promise);
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform("output application/json --- payload", []);
+      const settlements = [0, 0, 0];
+      const firstPull = transform.next().finally(() => { settlements[0]++; });
+      await vi.waitFor(() => expect(createChunkReader).toHaveBeenCalledTimes(1));
+      const secondPull = transform.next().finally(() => { settlements[1]++; });
+      const thrown = new Error("consumer boom");
+      const throwing = transform.throw(thrown).finally(() => { settlements[2]++; });
+      const laterPull = transform.next();
+      const pendingSetup = Symbol("pending setup");
+
+      expect(await Promise.race([
+        Promise.allSettled([firstPull, secondPull, throwing, laterPull]),
+        new Promise<typeof pendingSetup>((resolve) => setImmediate(() => resolve(pendingSetup))),
+      ])).toEqual([
+        { status: "fulfilled", value: { done: true, value: undefined } },
+        { status: "fulfilled", value: { done: true, value: undefined } },
+        { status: "rejected", reason: thrown },
+        { status: "fulfilled", value: { done: true, value: undefined } },
+      ]);
+      expect(settlements).toEqual([1, 1, 1]);
+
+      readerGate.resolve(() => null);
+      await readerGate.promise;
+      await Promise.resolve();
+      expect(ffi.runScriptTransformEngine).not.toHaveBeenCalled();
+
+      await dw.cleanup();
+    });
+
+    it("keeps returned setup outcomes unchanged when abandoned setup rejects late", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(47);
+      const readerGate = deferred<Awaited<ReturnType<typeof createChunkReader>>>();
+      vi.mocked(createChunkReader).mockReturnValueOnce(readerGate.promise);
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+      process.on("unhandledRejection", onUnhandled);
+
+      try {
+        const dw = new DataWeave("/fake/lib");
+        dw.initialize();
+        const transform = dw.runTransform("output application/json --- payload", []);
+        const firstPull = transform.next();
+        await vi.waitFor(() => expect(createChunkReader).toHaveBeenCalledTimes(1));
+        const secondPull = transform.next();
+        const returnValue = { success: true } as StreamingResult;
+        const returned = transform.return(returnValue);
+        const laterPull = transform.next();
+        const pendingSetup = Symbol("pending setup");
+        const outcomes = await Promise.race([
+          Promise.all([firstPull, secondPull, returned, laterPull]),
+          new Promise<typeof pendingSetup>((resolve) => setImmediate(() => resolve(pendingSetup))),
+        ]);
+
+        expect(outcomes).toEqual([
+          { done: true, value: undefined },
+          { done: true, value: undefined },
+          { done: true, value: returnValue },
+          { done: true, value: undefined },
+        ]);
+
+        readerGate.reject(new Error("late setup boom"));
+        await readerGate.promise.catch(() => {});
+        await Promise.resolve();
+        expect(unhandled).toEqual([]);
+        expect(ffi.runScriptTransformEngine).not.toHaveBeenCalled();
+
+        await dw.cleanup();
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+      }
+    });
+
+    it("keeps thrown setup outcomes unchanged when abandoned setup rejects late", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(48);
+      const readerGate = deferred<Awaited<ReturnType<typeof createChunkReader>>>();
+      vi.mocked(createChunkReader).mockReturnValueOnce(readerGate.promise);
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+      process.on("unhandledRejection", onUnhandled);
+
+      try {
+        const dw = new DataWeave("/fake/lib");
+        dw.initialize();
+        const transform = dw.runTransform("output application/json --- payload", []);
+        const firstPull = transform.next();
+        await vi.waitFor(() => expect(createChunkReader).toHaveBeenCalledTimes(1));
+        const secondPull = transform.next();
+        const thrown = new Error("consumer boom");
+        const throwing = transform.throw(thrown);
+        const laterPull = transform.next();
+        const pendingSetup = Symbol("pending setup");
+        const outcomes = await Promise.race([
+          Promise.allSettled([firstPull, secondPull, throwing, laterPull]),
+          new Promise<typeof pendingSetup>((resolve) => setImmediate(() => resolve(pendingSetup))),
+        ]);
+
+        expect(outcomes).toEqual([
+          { status: "fulfilled", value: { done: true, value: undefined } },
+          { status: "fulfilled", value: { done: true, value: undefined } },
+          { status: "rejected", reason: thrown },
+          { status: "fulfilled", value: { done: true, value: undefined } },
+        ]);
+
+        readerGate.reject(new Error("late setup boom"));
+        await readerGate.promise.catch(() => {});
+        await Promise.resolve();
+        expect(unhandled).toEqual([]);
+        expect(ffi.runScriptTransformEngine).not.toHaveBeenCalled();
+
+        await dw.cleanup();
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+      }
+    });
+
     it("delivers a buffered transform chunk to an earlier next before return", async () => {
       vi.mocked(ffi.createEngine).mockReturnValue(33);
       const completion = deferred<string>();

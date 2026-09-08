@@ -364,8 +364,8 @@ export class DataWeave {
     let controlPending = false;
     let stream: AsyncGenerator<Buffer, StreamingResult, undefined> | null = null;
     let setupPromise: Promise<AsyncGenerator<Buffer, StreamingResult, undefined> | null>;
-    let setupAbandoned = false;
-    let abandonSetup = () => { setupAbandoned = true; };
+    let admissionState: "pending" | "abandoned" | "admitted" = "pending";
+    let abandonSetup = () => { admissionState = "abandoned"; };
     const requestQueue: Array<QueuedRequest<unknown>> = [];
     let requestRunning = false;
 
@@ -388,7 +388,7 @@ export class DataWeave {
       let result: Promise<unknown>;
       try {
         result = request.run(() => {
-          if (controlPending) interruptAfterQueuedPulls();
+          if (controlPending) interruptForControl();
         });
       } catch (error) {
         result = Promise.reject(error);
@@ -399,21 +399,27 @@ export class DataWeave {
       });
     }
 
-    function interruptHeadPull(): void {
-      if (stream && interruptNativeStreamIfParked(stream)) return;
-      if (!stream) abandonSetup();
-    }
-
-    function interruptAfterQueuedPulls(): void {
+    function interruptAdmittedPullForControl(): void {
       const controlIndex = requestQueue.findIndex((request) => request.kind === "control");
       if (controlIndex > 0 && requestQueue.slice(0, controlIndex).some((request) => request.kind === "next")) return;
-      interruptHeadPull();
+      if (stream) interruptNativeStreamIfParked(stream);
+    }
+
+    function interruptForControl(): void {
+      // Setup has no native pull to preserve: settle every queued pre-control
+      // next() as done immediately. Admitted streams instead retain FIFO until
+      // the last earlier pull is genuinely parked.
+      if (admissionState !== "admitted") {
+        abandonSetup();
+        return;
+      }
+      interruptAdmittedPullForControl();
     }
 
     const setup = (): Promise<AsyncGenerator<Buffer, StreamingResult, undefined> | null> =>
       setupPromise ??= new Promise((resolve, reject) => {
         abandonSetup = () => {
-          setupAbandoned = true;
+          admissionState = "abandoned";
           resolve(null);
         };
         try {
@@ -430,7 +436,7 @@ export class DataWeave {
           const inputsJson = Object.keys(extraInputs).length > 0 ? buildInputsJson(extraInputs) : "{}";
           createChunkReader(input).then(
             (readCb) => {
-              if (setupAbandoned || controlPending) return;
+              if (admissionState === "abandoned" || controlPending) return;
               try {
                 this.assertCurrentOperation(token);
                 stream = streamFromNative(
@@ -447,7 +453,10 @@ export class DataWeave {
                       writeCb
                     );
                   },
-                  (operation) => { this.registerActiveStream(operation); },
+                  (operation) => {
+                    admissionState = "admitted";
+                    this.registerActiveStream(operation);
+                  },
                   (operation) => { this.markActiveStreamClosed(operation); }
                 );
                 resolve(stream);
@@ -456,7 +465,7 @@ export class DataWeave {
               }
             },
             (error) => {
-              if (!setupAbandoned) reject(error);
+              if (admissionState !== "abandoned") reject(error);
             }
           );
         } catch (error) {
@@ -476,7 +485,7 @@ export class DataWeave {
           closed = true;
           throw error;
         }
-        if (!activeStream) {
+        if (!activeStream || admissionState === "abandoned") {
           return { done: true, value: undefined } as unknown as IteratorReturnResult<StreamingResult>;
         }
         const nextPromise = activeStream.next(...args);
@@ -501,7 +510,7 @@ export class DataWeave {
             closed = true;
           }
         });
-        if (isPrimaryControl) interruptAfterQueuedPulls();
+        if (isPrimaryControl) interruptForControl();
         return result;
       },
       throw: (error?: unknown) => {
@@ -515,7 +524,7 @@ export class DataWeave {
             closed = true;
           }
         });
-        if (isPrimaryControl) interruptAfterQueuedPulls();
+        if (isPrimaryControl) interruptForControl();
         return result;
       },
       [Symbol.asyncIterator]() {
