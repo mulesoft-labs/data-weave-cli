@@ -353,26 +353,57 @@ export class DataWeave {
     input: AsyncIterable<Buffer | Uint8Array> | Iterable<Buffer | Uint8Array>,
     opts?: TransformOptions
   ): AsyncGenerator<Buffer, StreamingResult, undefined> {
-    type TransformState =
-      | { readonly kind: "open" }
-      | { readonly kind: "returning" }
-      | { readonly kind: "throwing" }
-      | { readonly kind: "closed" };
+    type QueuedRequest<T> = {
+      readonly run: () => Promise<T>;
+      readonly resolve: (result: T) => void;
+      readonly reject: (error: unknown) => void;
+    };
 
-    let state: TransformState = { kind: "open" };
+    let closed = false;
+    let controlPending = false;
     let stream: AsyncGenerator<Buffer, StreamingResult, undefined> | null = null;
-    let setupPromise: Promise<AsyncGenerator<Buffer, StreamingResult, undefined> | null> | null = null;
-    let requestTail: Promise<void> = Promise.resolve();
+    let setupPromise: Promise<AsyncGenerator<Buffer, StreamingResult, undefined> | null>;
+    let setupAbandoned = false;
+    let abandonSetup = () => { setupAbandoned = true; };
+    const requestQueue: Array<QueuedRequest<unknown>> = [];
+    let requestRunning = false;
 
     const enqueue = <T>(request: () => Promise<T>): Promise<T> => {
-      const result = requestTail.then(request, request);
-      requestTail = result.then(() => undefined, () => undefined);
+      const result = new Promise<T>((resolve, reject) => {
+        requestQueue.push({ run: request, resolve, reject } as QueuedRequest<unknown>);
+      });
+      drainRequests();
       return result;
     };
 
-    const setup = (): Promise<AsyncGenerator<Buffer, StreamingResult, undefined> | null> => {
-      if (!setupPromise) {
-        setupPromise = (async () => {
+    const drainRequests = (): void => {
+      if (requestRunning) return;
+      const request = requestQueue.shift();
+      if (!request) return;
+      requestRunning = true;
+      let result: Promise<unknown>;
+      try {
+        result = request.run();
+      } catch (error) {
+        result = Promise.reject(error);
+      }
+      result.then(request.resolve, request.reject).finally(() => {
+        requestRunning = false;
+        drainRequests();
+      });
+    };
+
+    const setup = (): Promise<AsyncGenerator<Buffer, StreamingResult, undefined> | null> =>
+      setupPromise ??= new Promise((resolve, reject) => {
+        abandonSetup = () => {
+          setupAbandoned = true;
+          resolve(null);
+        };
+        try {
+          if (controlPending) {
+            abandonSetup();
+            return;
+          }
           this.assertCurrentOperation(token);
 
           const inputName = opts?.inputName ?? "payload";
@@ -380,80 +411,100 @@ export class DataWeave {
           const inputCharset = opts?.charset ?? null;
           const extraInputs = opts?.inputs ?? {};
           const inputsJson = Object.keys(extraInputs).length > 0 ? buildInputsJson(extraInputs) : "{}";
-          const readCb = await createChunkReader(input);
-
-          if (state.kind !== "open") return null;
-          this.assertCurrentOperation(token);
-          stream = streamFromNative(
-            (writeCb) =>
-              ffi.runScriptTransformEngine(
-                token.handle,
-                script,
-                inputsJson,
-                inputName,
-                inputMimeType,
-                inputCharset,
-                readCb,
-                writeCb
-              ),
-            (operation) => { this.registerActiveStream(operation); },
-            (operation) => { this.markActiveStreamClosed(operation); }
+          createChunkReader(input).then(
+            (readCb) => {
+              if (setupAbandoned || controlPending) return;
+              try {
+                this.assertCurrentOperation(token);
+                stream = streamFromNative(
+                  (writeCb) => {
+                    this.assertCurrentOperation(token);
+                    return ffi.runScriptTransformEngine(
+                      token.handle,
+                      script,
+                      inputsJson,
+                      inputName,
+                      inputMimeType,
+                      inputCharset,
+                      readCb,
+                      writeCb
+                    );
+                  },
+                  (operation) => { this.registerActiveStream(operation); },
+                  (operation) => { this.markActiveStreamClosed(operation); }
+                );
+                resolve(stream);
+              } catch (error) {
+                reject(error);
+              }
+            },
+            (error) => {
+              if (!setupAbandoned) reject(error);
+            }
           );
-          return stream;
-        })();
-        // The first queued next observes this rejection. This second branch
-        // prevents a concurrent return/throw from creating an unhandled promise.
-        setupPromise.catch(() => {});
-      }
-      return setupPromise;
-    };
+        } catch (error) {
+          reject(error);
+        }
+      });
 
     return {
       next: (...args: [] | [undefined]) => enqueue(async () => {
-        if (state.kind !== "open") {
+        if (closed) {
           return { done: true, value: undefined } as unknown as IteratorReturnResult<StreamingResult>;
         }
         let activeStream: AsyncGenerator<Buffer, StreamingResult, undefined> | null;
         try {
           activeStream = await setup();
         } catch (error) {
-          if (state.kind !== "open") {
-            return { done: true, value: undefined } as unknown as IteratorReturnResult<StreamingResult>;
-          }
-          state = { kind: "closed" };
+          closed = true;
           throw error;
         }
-        if (!activeStream || state.kind !== "open") {
+        if (!activeStream) {
           return { done: true, value: undefined } as unknown as IteratorReturnResult<StreamingResult>;
         }
         const result = await activeStream.next(...args);
-        if (result.done) state = { kind: "closed" };
+        if (result.done) closed = true;
         return result;
       }),
       return: (value) => {
-        if (state.kind === "open") state = { kind: "returning" };
-        const proactiveReturn = stream?.return(value);
+        const isPrimaryControl = !closed && !controlPending;
+        if (isPrimaryControl) controlPending = true;
+        // Let an earlier delegated next() consume an already-buffered chunk
+        // before cancellation wakes it if it is genuinely parked.
+        const proactiveReturn = isPrimaryControl && stream
+          ? Promise.resolve().then(() => stream!.return(value))
+          : null;
+        proactiveReturn?.catch(() => {});
+        if (isPrimaryControl && !stream) abandonSetup();
         return enqueue(async () => {
           try {
             if (proactiveReturn) return await proactiveReturn;
+            if (stream && !closed) return await stream.return(value);
             return {
               done: true,
               value: await value,
             } as IteratorReturnResult<StreamingResult>;
           } finally {
-            state = { kind: "closed" };
+            closed = true;
           }
         });
       },
       throw: (error?: unknown) => {
-        if (state.kind === "open") state = { kind: "throwing" };
-        const proactiveThrow = stream?.throw(error);
+        const isPrimaryControl = !closed && !controlPending;
+        if (isPrimaryControl) controlPending = true;
+        // Preserve the same request-ordering turn as return().
+        const proactiveThrow = isPrimaryControl && stream
+          ? Promise.resolve().then(() => stream!.throw(error))
+          : null;
+        proactiveThrow?.catch(() => {});
+        if (isPrimaryControl && !stream) abandonSetup();
         return enqueue(async () => {
           try {
             if (proactiveThrow) return await proactiveThrow;
+            if (stream && !closed) return await stream.throw(error);
             throw error;
           } finally {
-            state = { kind: "closed" };
+            closed = true;
           }
         });
       },

@@ -426,6 +426,27 @@ describe("streamFromNative", () => {
     expect(nativeOperation.close).not.toHaveBeenCalled();
   });
 
+  it("preserves the first cancellation failure when the finalization retry also fails", async () => {
+    const nativeOperation = operation(new Promise<string>(() => {}));
+    nativeOperation.cancel = vi.fn()
+      .mockImplementationOnce(() => { throw undefined; })
+      .mockImplementationOnce(() => { throw null; });
+    const gen = streamFromNative((cb) => {
+      cb(Buffer.from("x"));
+      return nativeOperation;
+    });
+
+    await gen.next();
+    const returned = await gen.return(undefined).then(
+      () => ({ status: "fulfilled" as const }),
+      (reason: unknown) => ({ status: "rejected" as const, reason })
+    );
+
+    expect(returned).toEqual({ status: "rejected", reason: undefined });
+    expect(nativeOperation.cancel).toHaveBeenCalledTimes(2);
+    expect(nativeOperation.close).not.toHaveBeenCalled();
+  });
+
   it("preserves a consumer error when close also throws", async () => {
     const completion = deferred<string>();
     const nativeOperation = operation(completion.promise);

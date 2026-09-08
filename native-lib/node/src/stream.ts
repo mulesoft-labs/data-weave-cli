@@ -224,7 +224,12 @@ export function streamFromNative(
           if (finalizationError.hasError) throw finalizationError.error;
           return result;
         },
-        (error) => { throw error; }
+        (error) => {
+          // A retry failure from generator finalization cannot replace the
+          // lifecycle failure observed by this cancellation request.
+          if (lifecycleError.hasError) throw lifecycleError.error;
+          throw error;
+        }
       );
     },
     throw(error?: unknown) {
