@@ -1,0 +1,427 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DataWeave } from "../../src/dataweave";
+import { buildInputsJson, findLibrary } from "../../src/utils";
+
+interface NativeStreamingOperation {
+  readonly completion: Promise<string>;
+  acknowledge(bytes: number): void;
+  cancel(): void;
+  close(): void;
+}
+
+interface OutputFlowStats {
+  operationId: number;
+  outstandingBytes: number;
+  outstandingChunks: number;
+  peakBufferedBytes: number;
+  peakBufferedChunks: number;
+  largestChunkBytes: number;
+  highBytes: number;
+  lowBytes: number;
+  highChunks: number;
+  lowChunks: number;
+  paused: boolean;
+  cancelled: boolean;
+  done: boolean;
+  liveFlows: number;
+}
+
+interface TestAddon {
+  initialize(libPath: string): void;
+  createEngine(): number;
+  destroyEngine(handle: number): void;
+  runScriptStreamingEngine(
+    handle: number,
+    script: string,
+    inputsJson: string,
+    chunkCb: (chunk: Buffer) => void
+  ): NativeStreamingOperation;
+  runScriptTransformEngine(
+    handle: number,
+    script: string,
+    inputsJson: string,
+    inputName: string,
+    inputMimeType: string,
+    inputCharset: string | null,
+    readCb: (bufSize: number) => Buffer | null,
+    writeCb: (chunk: Buffer) => void
+  ): NativeStreamingOperation;
+  cleanup(): Promise<void>;
+  __test_outputStats(operationId?: number): OutputFlowStats;
+  __test_outputOperationId(operation: NativeStreamingOperation): number;
+}
+
+const ADDON_PATH = "../../build/Release/dwlib_addon.node";
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const addon = require(ADDON_PATH) as TestAddon;
+const LIB_PATH = findLibrary();
+const LARGE_SIZE = 2 * 1024 * 1024 + 32771;
+const PASSTHROUGH_SCRIPT =
+  "output application/octet-stream deferred=true\n---\npayload";
+
+function patternedBytes(size = LARGE_SIZE): Buffer {
+  const bytes = Buffer.allocUnsafe(size);
+  for (let i = 0; i < size; i++) bytes[i] = 32 + (i % 95);
+  return bytes;
+}
+
+function octetStreamInputs(payload: Buffer): string {
+  return buildInputsJson({
+    payload: {
+      content: payload,
+      mimeType: "application/octet-stream",
+    },
+  });
+}
+
+function immediate(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+async function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs = 10000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function waitForStats(
+  predicate: (stats: OutputFlowStats) => boolean,
+  label: string,
+  operationId?: number,
+  timeoutMs = 10000
+): Promise<OutputFlowStats> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const stats = operationId === undefined
+      ? addon.__test_outputStats()
+      : addon.__test_outputStats(operationId);
+    if (predicate(stats)) return stats;
+    if (Date.now() >= deadline) {
+      throw new Error(`${label} timed out; last stats: ${JSON.stringify(stats)}`);
+    }
+    await immediate();
+  }
+}
+
+function expectBounded(stats: OutputFlowStats): void {
+  expect(stats.peakBufferedChunks).toBeLessThanOrEqual(stats.highChunks + 1);
+  expect(stats.peakBufferedBytes).toBeLessThanOrEqual(
+    stats.highBytes + stats.largestChunkBytes
+  );
+}
+
+async function waitForPendingChunk(pending: Buffer[], label: string): Promise<Buffer> {
+  const deadline = Date.now() + 10000;
+  while (pending.length === 0) {
+    if (Date.now() >= deadline) throw new Error(`${label} timed out`);
+    await immediate();
+  }
+  return pending.shift()!;
+}
+
+async function drainAfterPause(
+  operation: NativeStreamingOperation,
+  operationId: number,
+  pending: Buffer[],
+  received: Buffer[],
+  settled: () => boolean
+): Promise<string> {
+  const paused = await waitForStats(
+    (stats) => stats.paused && stats.outstandingChunks === pending.length,
+    "producer pause with every admitted callback delivered",
+    operationId
+  );
+  expectBounded(paused);
+
+  const deliveredAtPause = received.length;
+  let projectedBytes = paused.outstandingBytes;
+  let projectedChunks = paused.outstandingChunks;
+  while (projectedBytes > paused.lowBytes || projectedChunks > paused.lowChunks) {
+    const chunk = await waitForPendingChunk(pending, "low-water acknowledgement");
+    operation.acknowledge(chunk.length);
+    projectedBytes -= chunk.length;
+    projectedChunks--;
+  }
+
+  expect(projectedBytes).toBeLessThanOrEqual(paused.lowBytes);
+  expect(projectedChunks).toBeLessThanOrEqual(paused.lowChunks);
+  await waitForStats(
+    () => received.length > deliveredAtPause,
+    "producer wake below both low watermarks",
+    operationId
+  );
+
+  const deadline = Date.now() + 15000;
+  while (!settled() || pending.length > 0) {
+    if (pending.length > 0) {
+      operation.acknowledge(pending.shift()!.length);
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `stepwise drain timed out; stats: ${JSON.stringify(addon.__test_outputStats(operationId))}`
+      );
+    }
+    await immediate();
+  }
+
+  return withTimeout(operation.completion, "native completion after drain");
+}
+
+async function runWithEngine(
+  body: (handle: number) => Promise<void>
+): Promise<void> {
+  const handle = addon.createEngine();
+  try {
+    await body(handle);
+  } finally {
+    addon.destroyEngine(handle);
+  }
+}
+
+beforeAll(() => {
+  addon.initialize(LIB_PATH);
+});
+
+afterAll(async () => {
+  await addon.cleanup();
+});
+
+describe.sequential("native Node output flow control", () => {
+  it("returns a validated, idempotent operation controller", async () => {
+    await runWithEngine(async (handle) => {
+      const chunks: Buffer[] = [];
+      let operation: NativeStreamingOperation | undefined;
+      try {
+        operation = addon.runScriptStreamingEngine(
+          handle,
+          "output application/json deferred=true --- [1, 2, 3]",
+          "{}",
+          (chunk) => chunks.push(chunk)
+        );
+
+        expect(operation).toEqual(
+          expect.objectContaining({
+            completion: expect.any(Promise),
+            acknowledge: expect.any(Function),
+            cancel: expect.any(Function),
+            close: expect.any(Function),
+          })
+        );
+
+        for (const invalid of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, "1"]) {
+          expect(() => operation!.acknowledge(invalid as number)).toThrow();
+        }
+
+        const raw = await withTimeout(operation.completion, "controller completion");
+        expect(JSON.parse(raw).success).toBe(true);
+        for (const chunk of chunks) operation.acknowledge(chunk.length);
+
+        expect(() => operation.cancel()).not.toThrow();
+        expect(() => operation.cancel()).not.toThrow();
+        expect(() => operation.close()).not.toThrow();
+        expect(() => operation.close()).not.toThrow();
+        expect(() => operation.acknowledge(1)).not.toThrow();
+      } finally {
+        if (operation !== undefined) {
+          operation.cancel?.();
+          operation.close?.();
+          const completion = operation.completion ?? (operation as unknown as Promise<string>);
+          await withTimeout(Promise.resolve(completion), "controller test cleanup");
+        }
+      }
+    });
+  });
+
+  it("bounds a paused streaming producer and resumes only after low-water credit", async () => {
+    await runWithEngine(async (handle) => {
+      expect(typeof addon.__test_outputStats).toBe("function");
+      const expected = patternedBytes();
+      const received: Buffer[] = [];
+      const pending: Buffer[] = [];
+      let operation!: NativeStreamingOperation;
+      let operationId!: number;
+      let completionSettled = false;
+
+      operation = addon.runScriptStreamingEngine(
+        handle,
+        PASSTHROUGH_SCRIPT,
+        octetStreamInputs(expected),
+        (chunk) => {
+          received.push(chunk);
+          pending.push(chunk);
+          if (received.length === 1) operation.acknowledge(pending.shift()!.length);
+        }
+      );
+      operationId = addon.__test_outputOperationId(operation);
+      operation.completion.finally(() => { completionSettled = true; }).catch(() => {});
+
+      try {
+        const paused = await waitForStats(
+          (stats) => stats.paused,
+          "streaming producer pause",
+          operationId
+        );
+        expect(completionSettled).toBe(false);
+        expectBounded(paused);
+
+        const raw = await drainAfterPause(
+          operation,
+          operationId,
+          pending,
+          received,
+          () => completionSettled
+        );
+        expect(Buffer.concat(received)).toEqual(expected);
+        expect(JSON.parse(raw)).toMatchObject({
+          success: true,
+          mimeType: "application/octet-stream",
+        });
+
+        const drained = addon.__test_outputStats(operationId);
+        expect(drained).toMatchObject({
+          outstandingBytes: 0,
+          outstandingChunks: 0,
+          done: true,
+        });
+      } finally {
+        operation.cancel();
+        operation.close();
+        await withTimeout(operation.completion, "streaming test cleanup");
+      }
+    });
+  }, 30000);
+
+  it("bounds transform output without changing the transform read bridge", async () => {
+    await runWithEngine(async (handle) => {
+      const expected = patternedBytes();
+      const received: Buffer[] = [];
+      const pending: Buffer[] = [];
+      let offset = 0;
+      let operation!: NativeStreamingOperation;
+      let operationId!: number;
+      let completionSettled = false;
+
+      operation = addon.runScriptTransformEngine(
+        handle,
+        PASSTHROUGH_SCRIPT,
+        "{}",
+        "payload",
+        "application/octet-stream",
+        null,
+        (bufSize) => {
+          if (offset >= expected.length) return null;
+          const chunk = expected.subarray(offset, Math.min(offset + bufSize, expected.length));
+          offset += chunk.length;
+          return chunk;
+        },
+        (chunk) => {
+          received.push(chunk);
+          pending.push(chunk);
+          if (received.length === 1) operation.acknowledge(pending.shift()!.length);
+        }
+      );
+      operationId = addon.__test_outputOperationId(operation);
+      operation.completion.finally(() => { completionSettled = true; }).catch(() => {});
+
+      try {
+        const paused = await waitForStats(
+          (stats) => stats.paused,
+          "transform producer pause",
+          operationId
+        );
+        expect(completionSettled).toBe(false);
+        expectBounded(paused);
+
+        const raw = await drainAfterPause(
+          operation,
+          operationId,
+          pending,
+          received,
+          () => completionSettled
+        );
+        expect(offset).toBe(expected.length);
+        expect(Buffer.concat(received)).toEqual(expected);
+        expect(JSON.parse(raw)).toMatchObject({
+          success: true,
+          mimeType: "application/octet-stream",
+        });
+      } finally {
+        operation.cancel();
+        operation.close();
+        await withTimeout(operation.completion, "transform test cleanup");
+      }
+    });
+  }, 30000);
+
+  it("settles and closes when an iterator returns while the producer is paused", async () => {
+    const dw = new DataWeave();
+    dw.initialize();
+    const stream = dw.runStreaming(PASSTHROUGH_SCRIPT, {
+      payload: {
+        content: patternedBytes(),
+        mimeType: "application/octet-stream",
+      },
+    });
+
+    try {
+      const first = await withTimeout(stream.next(), "first iterator chunk");
+      expect(first.done).toBe(false);
+      await waitForStats((stats) => stats.paused, "iterator producer pause");
+
+      await withTimeout(stream.return(undefined), "paused iterator return");
+      await withTimeout(dw.cleanup(), "cleanup after paused iterator return");
+      await waitForStats(
+        (stats) => stats.cancelled && stats.done && stats.outstandingBytes === 0,
+        "cancelled iterator settlement"
+      );
+      expect(addon.__test_outputStats().liveFlows).toBe(0);
+
+      await expect(stream.next()).resolves.toEqual({ done: true, value: undefined });
+      dw.initialize();
+      expect(dw.run("output application/json --- 6 * 7").getString()).toBe("42");
+    } finally {
+      await withTimeout(dw.cleanup(), "iterator test final cleanup");
+    }
+  }, 30000);
+
+  it("DataWeave.cleanup cancels a paused producer and deterministically settles its iterator", async () => {
+    const dw = new DataWeave();
+    dw.initialize();
+    const anchor = new DataWeave();
+    anchor.initialize();
+    const stream = dw.runStreaming(PASSTHROUGH_SCRIPT, {
+      payload: {
+        content: patternedBytes(),
+        mimeType: "application/octet-stream",
+      },
+    });
+
+    try {
+      const first = await withTimeout(stream.next(), "first cleanup-test chunk");
+      expect(first.done).toBe(false);
+      await waitForStats((stats) => stats.paused, "cleanup-test producer pause");
+
+      await withTimeout(dw.cleanup(), "DataWeave.cleanup while producer paused");
+      await waitForStats(
+        (stats) => stats.cancelled && stats.done && stats.outstandingChunks === 0,
+        "cleanup cancellation settlement"
+      );
+      expect(addon.__test_outputStats().liveFlows).toBe(0);
+      await expect(stream.next()).resolves.toEqual({ done: true, value: undefined });
+
+      dw.initialize();
+      expect(dw.run("output application/json --- 20 + 22").getString()).toBe("42");
+    } finally {
+      await withTimeout(dw.cleanup(), "cleanup test final cleanup");
+      await withTimeout(anchor.cleanup(), "cleanup test anchor cleanup");
+    }
+  }, 30000);
+});
