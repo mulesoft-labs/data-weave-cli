@@ -3,7 +3,7 @@ import { resolveAddonPath } from "./addon-path";
 import { findLibrary, buildInputsJson } from "./utils";
 import { parseNativeResponse } from "./result";
 import { createChunkReader } from "./reader";
-import { streamFromNative } from "./stream";
+import { interruptNativeStreamIfParked, nativeStreamParked, streamFromNative } from "./stream";
 import { DataWeaveError, DataWeaveScriptError } from "./errors";
 import type { NativeStreamingOperation } from "./ffi";
 import type { ExecutionResult, StreamingResult, Inputs, TransformOptions } from "./types";
@@ -354,7 +354,8 @@ export class DataWeave {
     opts?: TransformOptions
   ): AsyncGenerator<Buffer, StreamingResult, undefined> {
     type QueuedRequest<T> = {
-      readonly run: () => Promise<T>;
+      readonly kind: "next" | "control";
+      readonly run: (onParked: () => void) => Promise<T>;
       readonly resolve: (result: T) => void;
       readonly reject: (error: unknown) => void;
     };
@@ -368,22 +369,27 @@ export class DataWeave {
     const requestQueue: Array<QueuedRequest<unknown>> = [];
     let requestRunning = false;
 
-    const enqueue = <T>(request: () => Promise<T>): Promise<T> => {
+    const enqueue = <T>(
+      kind: QueuedRequest<T>["kind"],
+      request: QueuedRequest<T>["run"]
+    ): Promise<T> => {
       const result = new Promise<T>((resolve, reject) => {
-        requestQueue.push({ run: request, resolve, reject } as QueuedRequest<unknown>);
+        requestQueue.push({ kind, run: request, resolve, reject } as QueuedRequest<unknown>);
       });
       drainRequests();
       return result;
     };
 
-    const drainRequests = (): void => {
+    function drainRequests(): void {
       if (requestRunning) return;
       const request = requestQueue.shift();
       if (!request) return;
       requestRunning = true;
       let result: Promise<unknown>;
       try {
-        result = request.run();
+        result = request.run(() => {
+          if (controlPending) interruptAfterQueuedPulls();
+        });
       } catch (error) {
         result = Promise.reject(error);
       }
@@ -391,7 +397,18 @@ export class DataWeave {
         requestRunning = false;
         drainRequests();
       });
-    };
+    }
+
+    function interruptHeadPull(): void {
+      if (stream && interruptNativeStreamIfParked(stream)) return;
+      if (!stream) abandonSetup();
+    }
+
+    function interruptAfterQueuedPulls(): void {
+      const controlIndex = requestQueue.findIndex((request) => request.kind === "control");
+      if (controlIndex > 0 && requestQueue.slice(0, controlIndex).some((request) => request.kind === "next")) return;
+      interruptHeadPull();
+    }
 
     const setup = (): Promise<AsyncGenerator<Buffer, StreamingResult, undefined> | null> =>
       setupPromise ??= new Promise((resolve, reject) => {
@@ -448,7 +465,7 @@ export class DataWeave {
       });
 
     return {
-      next: (...args: [] | [undefined]) => enqueue(async () => {
+      next: (...args: [] | [undefined]) => enqueue("next", async (onParked) => {
         if (closed) {
           return { done: true, value: undefined } as unknown as IteratorReturnResult<StreamingResult>;
         }
@@ -462,23 +479,19 @@ export class DataWeave {
         if (!activeStream) {
           return { done: true, value: undefined } as unknown as IteratorReturnResult<StreamingResult>;
         }
-        const result = await activeStream.next(...args);
+        const nextPromise = activeStream.next(...args);
+        nativeStreamParked(activeStream).then((parked) => {
+          if (parked) onParked();
+        });
+        const result = await nextPromise;
         if (result.done) closed = true;
         return result;
       }),
       return: (value) => {
         const isPrimaryControl = !closed && !controlPending;
         if (isPrimaryControl) controlPending = true;
-        // Let an earlier delegated next() consume an already-buffered chunk
-        // before cancellation wakes it if it is genuinely parked.
-        const proactiveReturn = isPrimaryControl && stream
-          ? Promise.resolve().then(() => stream!.return(value))
-          : null;
-        proactiveReturn?.catch(() => {});
-        if (isPrimaryControl && !stream) abandonSetup();
-        return enqueue(async () => {
+        const result = enqueue("control", async (_onParked) => {
           try {
-            if (proactiveReturn) return await proactiveReturn;
             if (stream && !closed) return await stream.return(value);
             return {
               done: true,
@@ -488,25 +501,22 @@ export class DataWeave {
             closed = true;
           }
         });
+        if (isPrimaryControl) interruptAfterQueuedPulls();
+        return result;
       },
       throw: (error?: unknown) => {
         const isPrimaryControl = !closed && !controlPending;
         if (isPrimaryControl) controlPending = true;
-        // Preserve the same request-ordering turn as return().
-        const proactiveThrow = isPrimaryControl && stream
-          ? Promise.resolve().then(() => stream!.throw(error))
-          : null;
-        proactiveThrow?.catch(() => {});
-        if (isPrimaryControl && !stream) abandonSetup();
-        return enqueue(async () => {
+        const result = enqueue("control", async (_onParked) => {
           try {
-            if (proactiveThrow) return await proactiveThrow;
             if (stream && !closed) return await stream.throw(error);
             throw error;
           } finally {
             closed = true;
           }
         });
+        if (isPrimaryControl) interruptAfterQueuedPulls();
+        return result;
       },
       [Symbol.asyncIterator]() {
         return this;

@@ -8,6 +8,27 @@ import type { StreamingResult } from "./types";
  */
 export type StartStreaming = (chunkCb: (chunk: Buffer) => void) => NativeStreamingOperation;
 
+interface InterruptibleAsyncGenerator<Y, R, N> extends AsyncGenerator<Y, R, N> {
+  readonly parked: Promise<boolean>;
+  interruptIfParked(): boolean;
+}
+
+type NativeStreamIterator = InterruptibleAsyncGenerator<Buffer, StreamingResult, undefined>;
+
+/** Interrupts a delegated pull only when it has no buffered result to consume. */
+export function interruptNativeStreamIfParked(
+  iterator: AsyncGenerator<Buffer, StreamingResult, undefined>
+): boolean {
+  return (iterator as NativeStreamIterator).interruptIfParked();
+}
+
+/** Reports whether the currently delegated pull had to wait for native output. */
+export function nativeStreamParked(
+  iterator: AsyncGenerator<Buffer, StreamingResult, undefined>
+): Promise<boolean> {
+  return (iterator as NativeStreamIterator).parked;
+}
+
 type ErrorState = { readonly hasError: false } | { readonly hasError: true; readonly error: unknown };
 
 const NO_ERROR: ErrorState = { hasError: false };
@@ -46,6 +67,10 @@ export function streamFromNative(
   let finalizationError: ErrorState = NO_ERROR;
   let nativeOperation: NativeStreamingOperation | undefined;
   let cancelInProgress = false;
+  let pullParked = false;
+  let interruptionError: ErrorState = NO_ERROR;
+  let parked = Promise.resolve(false);
+  let resolveParked: ((value: boolean) => void) | undefined;
 
   const wakeAll = () => {
     while (pendingResolves.length > 0) {
@@ -117,6 +142,22 @@ export function streamFromNative(
     pendingResolves.shift()?.();
   };
 
+  function requestCancellation(): ErrorState {
+    cancellationRequested = true;
+    wakeAll();
+    try {
+      cancel();
+      return NO_ERROR;
+    } catch (error) {
+      return { hasError: true, error };
+    }
+  }
+
+  function interruptPull(): void {
+    const lifecycleError = requestCancellation();
+    if (lifecycleError.hasError) interruptionError = lifecycleError;
+  }
+
   const generator = (async function* (): AsyncGenerator<Buffer, StreamingResult, undefined> {
     let primaryError = false;
     try {
@@ -157,7 +198,12 @@ export function streamFromNative(
         if (cancellationRequested) {
           return undefined as unknown as StreamingResult;
         }
-        await new Promise<void>((resolve) => { pendingResolves.push(resolve); });
+        const wake = new Promise<void>((resolve) => { pendingResolves.push(resolve); });
+        pullParked = true;
+        resolveParked?.(true);
+        await wake;
+        pullParked = false;
+        if (interruptionError.hasError) throw interruptionError.error;
       }
 
       await nativeSettlementHandled;
@@ -201,20 +247,22 @@ export function streamFromNative(
     }
   })();
 
-  const requestCancellation = (): ErrorState => {
-    cancellationRequested = true;
-    wakeAll();
-    try {
-      cancel();
-      return NO_ERROR;
-    } catch (error) {
-      return { hasError: true, error };
-    }
-  };
-
-  const iterator: AsyncGenerator<Buffer, StreamingResult, undefined> = {
+  const iterator: NativeStreamIterator = {
+    get parked() {
+      return parked;
+    },
     next(...args: [] | [undefined]) {
-      return generator.next(...args);
+      parked = new Promise<boolean>((resolve) => { resolveParked = resolve; });
+      return generator.next(...args).then(
+        (result) => {
+          resolveParked?.(false);
+          return result;
+        },
+        (error) => {
+          resolveParked?.(false);
+          throw error;
+        }
+      );
     },
     return(value) {
       const lifecycleError = requestCancellation();
@@ -242,6 +290,11 @@ export function streamFromNative(
         },
         (primary) => { throw primary; }
       );
+    },
+    interruptIfParked() {
+      if (!pullParked || chunks.length > 0 || nativeSettled || cancellationRequested) return false;
+      interruptPull();
+      return true;
     },
     [Symbol.asyncIterator]() {
       return this;

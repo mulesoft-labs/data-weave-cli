@@ -877,6 +877,290 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       await dw.cleanup();
     });
 
+    it("delivers two buffered chunks to two earlier pulls before return", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(37);
+      const completion = deferred<string>();
+      const nativeOperation = operation(completion.promise);
+      nativeOperation.cancel = vi.fn(() => completion.resolve(okStreamingMeta()));
+      let push!: (chunk: Buffer) => void;
+      vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
+        (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
+          push = writeCb;
+          return nativeOperation;
+        }
+      );
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform("output application/json --- payload", []);
+      const admissionPull = transform.next();
+      await vi.waitFor(() => expect(ffi.runScriptTransformEngine).toHaveBeenCalledTimes(1));
+      push(Buffer.from("admitted"));
+      await expect(admissionPull).resolves.toEqual({ done: false, value: Buffer.from("admitted") });
+      push(Buffer.from("a"));
+      push(Buffer.from("bb"));
+      const firstPull = transform.next();
+      const secondPull = transform.next();
+      const returned = transform.return(undefined);
+
+      await expect(Promise.all([firstPull, secondPull, returned])).resolves.toEqual([
+        { done: false, value: Buffer.from("a") },
+        { done: false, value: Buffer.from("bb") },
+        { done: true, value: undefined },
+      ]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([[8], [1], [2]]);
+      expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
+      expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+
+      await dw.cleanup();
+    });
+
+    it("delivers two buffered chunks to two earlier pulls before throw", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(38);
+      const completion = deferred<string>();
+      const nativeOperation = operation(completion.promise);
+      nativeOperation.cancel = vi.fn(() => completion.resolve(okStreamingMeta()));
+      let push!: (chunk: Buffer) => void;
+      vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
+        (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
+          push = writeCb;
+          return nativeOperation;
+        }
+      );
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform("output application/json --- payload", []);
+      const admissionPull = transform.next();
+      await vi.waitFor(() => expect(ffi.runScriptTransformEngine).toHaveBeenCalledTimes(1));
+      push(Buffer.from("admitted"));
+      await expect(admissionPull).resolves.toEqual({ done: false, value: Buffer.from("admitted") });
+      push(Buffer.from("a"));
+      push(Buffer.from("bb"));
+      const firstPull = transform.next();
+      const secondPull = transform.next();
+      const thrown = new Error("consumer boom");
+      const throwing = transform.throw(thrown);
+
+      const outcomes = await Promise.allSettled([firstPull, secondPull, throwing]);
+      expect(outcomes).toEqual([
+        { status: "fulfilled", value: { done: false, value: Buffer.from("a") } },
+        { status: "fulfilled", value: { done: false, value: Buffer.from("bb") } },
+        { status: "rejected", reason: thrown },
+      ]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([[8], [1], [2]]);
+      expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
+      expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+
+      await dw.cleanup();
+    });
+
+    it("settles four earlier pulls exactly once before return", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(39);
+      const completion = deferred<string>();
+      const nativeOperation = operation(completion.promise);
+      nativeOperation.cancel = vi.fn(() => completion.resolve(okStreamingMeta()));
+      vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
+        (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
+          writeCb(Buffer.from("a"));
+          writeCb(Buffer.from("bb"));
+          writeCb(Buffer.from("ccc"));
+          writeCb(Buffer.from("dddd"));
+          return nativeOperation;
+        }
+      );
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform("output application/json --- payload", []);
+      const settlements = [0, 0, 0, 0, 0];
+      const firstPull = transform.next().finally(() => { settlements[0]++; });
+      await vi.waitFor(() => expect(ffi.runScriptTransformEngine).toHaveBeenCalledTimes(1));
+      const secondPull = transform.next().finally(() => { settlements[1]++; });
+      const thirdPull = transform.next().finally(() => { settlements[2]++; });
+      const fourthPull = transform.next().finally(() => { settlements[3]++; });
+      const returned = transform.return(undefined).finally(() => { settlements[4]++; });
+
+      await expect(Promise.all([firstPull, secondPull, thirdPull, fourthPull, returned])).resolves.toEqual([
+        { done: false, value: Buffer.from("a") },
+        { done: false, value: Buffer.from("bb") },
+        { done: false, value: Buffer.from("ccc") },
+        { done: false, value: Buffer.from("dddd") },
+        { done: true, value: undefined },
+      ]);
+      expect(settlements).toEqual([1, 1, 1, 1, 1]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1], [2], [3], [4]]);
+      expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
+
+      await dw.cleanup();
+    });
+
+    it("wakes only a genuinely parked tail after earlier pulls drain buffered chunks", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(40);
+      const completion = deferred<string>();
+      const nativeOperation = operation(completion.promise);
+      nativeOperation.cancel = vi.fn(() => completion.resolve(okStreamingMeta()));
+      vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
+        (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
+          writeCb(Buffer.from("a"));
+          writeCb(Buffer.from("bb"));
+          return nativeOperation;
+        }
+      );
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform("output application/json --- payload", []);
+      const firstPull = transform.next();
+      await vi.waitFor(() => expect(ffi.runScriptTransformEngine).toHaveBeenCalledTimes(1));
+      const secondPull = transform.next();
+      const parkedPull = transform.next();
+      await secondPull;
+      await Promise.resolve();
+      const returned = transform.return(undefined);
+
+      await expect(Promise.all([firstPull, secondPull, parkedPull, returned])).resolves.toEqual([
+        { done: false, value: Buffer.from("a") },
+        { done: false, value: Buffer.from("bb") },
+        { done: true, value: undefined },
+        { done: true, value: undefined },
+      ]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1], [2]]);
+      expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
+      expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+
+      await dw.cleanup();
+    });
+
+    it("throws after waking only a genuinely parked tail behind earlier buffered pulls", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(41);
+      const completion = deferred<string>();
+      const nativeOperation = operation(completion.promise);
+      nativeOperation.cancel = vi.fn(() => completion.resolve(okStreamingMeta()));
+      vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
+        (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
+          writeCb(Buffer.from("a"));
+          writeCb(Buffer.from("bb"));
+          return nativeOperation;
+        }
+      );
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform("output application/json --- payload", []);
+      const firstPull = transform.next();
+      await vi.waitFor(() => expect(ffi.runScriptTransformEngine).toHaveBeenCalledTimes(1));
+      const secondPull = transform.next();
+      const parkedPull = transform.next();
+      await secondPull;
+      await Promise.resolve();
+      const thrown = new Error("consumer boom");
+      const throwing = transform.throw(thrown);
+
+      const outcomes = await Promise.allSettled([firstPull, secondPull, parkedPull, throwing]);
+      expect(outcomes).toEqual([
+        { status: "fulfilled", value: { done: false, value: Buffer.from("a") } },
+        { status: "fulfilled", value: { done: false, value: Buffer.from("bb") } },
+        { status: "fulfilled", value: { done: true, value: undefined } },
+        { status: "rejected", reason: thrown },
+      ]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1], [2]]);
+      expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
+      expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+
+      await dw.cleanup();
+    });
+
+    it("surfaces cancellation failure after interrupting a parked transform pull", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(42);
+      const completion = deferred<string>();
+      const nativeOperation = operation(completion.promise);
+      nativeOperation.cancel = vi.fn(() => { throw new Error("cancel boom"); });
+      vi.mocked(ffi.runScriptTransformEngine).mockReturnValue(nativeOperation);
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform("output application/json --- payload", []);
+      const parkedPull = transform.next();
+      await vi.waitFor(() => expect(ffi.runScriptTransformEngine).toHaveBeenCalledTimes(1));
+      const returned = transform.return(undefined);
+
+      await expect(parkedPull).rejects.toThrow("cancel boom");
+      await expect(returned).rejects.toThrow("cancel boom");
+      expect(nativeOperation.cancel).toHaveBeenCalledTimes(3);
+      expect(nativeOperation.close).not.toHaveBeenCalled();
+    });
+
+    it("does not let a pull after return block interruption of an earlier parked pull", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(43);
+      const completion = deferred<string>();
+      const nativeOperation = operation(completion.promise);
+      nativeOperation.cancel = vi.fn(() => completion.resolve(okStreamingMeta()));
+      vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
+        (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
+          writeCb(Buffer.from("a"));
+          return nativeOperation;
+        }
+      );
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform("output application/json --- payload", []);
+      const firstPull = transform.next();
+      await vi.waitFor(() => expect(ffi.runScriptTransformEngine).toHaveBeenCalledTimes(1));
+      const parkedPull = transform.next();
+      const returned = transform.return(undefined);
+      const laterPull = transform.next();
+
+      await vi.waitFor(() => expect(nativeOperation.cancel).toHaveBeenCalledTimes(1), { timeout: 250 });
+      await expect(Promise.all([firstPull, parkedPull, returned, laterPull])).resolves.toEqual([
+        { done: false, value: Buffer.from("a") },
+        { done: true, value: undefined },
+        { done: true, value: undefined },
+        { done: true, value: undefined },
+      ]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1]]);
+      expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+
+      await dw.cleanup();
+    });
+
+    it("does not interrupt a parked pull while another earlier pull remains queued", async () => {
+      vi.mocked(ffi.createEngine).mockReturnValue(44);
+      const completion = deferred<string>();
+      const nativeOperation = operation(completion.promise);
+      nativeOperation.cancel = vi.fn(() => completion.resolve(okStreamingMeta()));
+      let push!: (chunk: Buffer) => void;
+      vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
+        (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
+          push = writeCb;
+          return nativeOperation;
+        }
+      );
+
+      const dw = new DataWeave("/fake/lib");
+      dw.initialize();
+      const transform = dw.runTransform("output application/json --- payload", []);
+      const firstPull = transform.next();
+      await vi.waitFor(() => expect(ffi.runScriptTransformEngine).toHaveBeenCalledTimes(1));
+      const secondPull = transform.next();
+      const returned = transform.return(undefined);
+
+      expect(nativeOperation.cancel).not.toHaveBeenCalled();
+      push(Buffer.from("a"));
+
+      await expect(Promise.all([firstPull, secondPull, returned])).resolves.toEqual([
+        { done: false, value: Buffer.from("a") },
+        { done: true, value: undefined },
+        { done: true, value: undefined },
+      ]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1]]);
+      expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
+      expect(nativeOperation.close).toHaveBeenCalledTimes(1);
+
+      await dw.cleanup();
+    });
+
     it("throw during pending transform setup wins over setup rejection", async () => {
       vi.mocked(ffi.createEngine).mockReturnValue(29);
       const readerGate = deferred<Awaited<ReturnType<typeof createChunkReader>>>();
