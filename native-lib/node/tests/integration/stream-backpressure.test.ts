@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
 import { DataWeave } from "../../src/dataweave";
 import { buildInputsJson, findLibrary } from "../../src/utils";
 
@@ -34,10 +36,19 @@ interface OutputFlowStats {
   liveFlows: number;
 }
 
+type OutputSettlementFault =
+  | "initial-create-generic"
+  | "initial-pending-exception"
+  | "initial-call-generic-after-call"
+  | "fallback-call-generic"
+  | "fallback-pending-exception"
+  | "fallback-call-generic-after-call";
+
 interface TestAddon {
   initialize(libPath: string): void;
   createEngine(): number;
   destroyEngine(handle: number): void;
+  runScriptEngine(handle: number, script: string, inputsJson: string): string;
   runScriptStreamingEngine(
     handle: number,
     script: string,
@@ -58,7 +69,13 @@ interface TestAddon {
   __test_outputStats(operationId?: number): OutputFlowStats;
   __test_outputOperationId(operation: NativeStreamingOperation): number;
   __test_createForeignWrappedObject(): object;
-  __test_failNextOutputSettlement(): void;
+  __test_failNextOutputSettlement(stage: OutputSettlementFault): void;
+  __test_holdNextOutputDelivery(): void;
+  __test_heldOutputDelivery(): { held: boolean; sequence: bigint; bytes: number };
+  __test_releaseOutputDelivery(): void;
+  __test_holdNextAsyncOp(): void;
+  __test_asyncOpHeld(): boolean;
+  __test_releaseAsyncOp(): void;
 }
 
 interface PendingChunk {
@@ -217,14 +234,14 @@ afterAll(async () => {
 describe.sequential("native Node output flow control", () => {
   it("returns a validated, idempotent operation controller", async () => {
     await runWithEngine(async (handle) => {
-      const chunks: Buffer[] = [];
+      const chunks: PendingChunk[] = [];
       let operation: NativeStreamingOperation | undefined;
       try {
         operation = addon.runScriptStreamingEngine(
           handle,
           "output application/json deferred=true --- [1, 2, 3]",
           "{}",
-          (chunk) => chunks.push(chunk)
+          (chunk, sequence) => chunks.push({ chunk, sequence })
         );
 
         expect(operation).toEqual(
@@ -256,6 +273,9 @@ describe.sequential("native Node output flow control", () => {
 
         const raw = await withTimeout(operation.completion, "controller completion");
         expect(JSON.parse(raw).success).toBe(true);
+        for (const { chunk, sequence } of chunks) {
+          operation.acknowledge(sequence, chunk.length);
+        }
         expect(() => operation.cancel()).not.toThrow();
         expect(() => operation.cancel()).not.toThrow();
         expect(() => operation.close()).not.toThrow();
@@ -283,15 +303,17 @@ describe.sequential("native Node output flow control", () => {
       const foreign = addon.__test_createForeignWrappedObject();
 
       try {
-        for (const method of [operation.acknowledge, operation.cancel, operation.close]) {
-          expect(() => method.call(foreign, 1n, 1)).toThrow(TypeError);
+        for (const receiver of [foreign, {}]) {
+          for (const method of [operation.acknowledge, operation.cancel, operation.close]) {
+            expect(() => method.call(receiver, 1n, 1)).toThrow(TypeError);
+          }
+          expect(() => operation.then.call(receiver, () => {})).toThrow(TypeError);
+          expect(() => operation.catch.call(receiver, () => {})).toThrow(TypeError);
+          expect(() => operation.finally.call(receiver, () => {})).toThrow(TypeError);
+          expect(() => addon.__test_outputOperationId(receiver as NativeStreamingOperation)).toThrow(
+            TypeError
+          );
         }
-        expect(() => operation.then.call(foreign, () => {})).toThrow(TypeError);
-        expect(() => operation.catch.call(foreign, () => {})).toThrow(TypeError);
-        expect(() => operation.finally.call(foreign, () => {})).toThrow(TypeError);
-        expect(() => addon.__test_outputOperationId(foreign as NativeStreamingOperation)).toThrow(
-          TypeError
-        );
 
         await withTimeout(operation.completion, "receiver-tag operation completion");
       } finally {
@@ -441,6 +463,214 @@ describe.sequential("native Node output flow control", () => {
     });
   }, 30000);
 
+  it.each([
+    {
+      name: "streaming",
+      expected: Buffer.from("reserved streaming output"),
+      start: (
+        handle: number,
+        received: Buffer[],
+        acknowledge: (chunk: Buffer, sequence: bigint) => void
+      ) => addon.runScriptStreamingEngine(
+        handle,
+        PASSTHROUGH_SCRIPT,
+        octetStreamInputs(Buffer.from("reserved streaming output")),
+        (chunk, sequence) => {
+          received.push(chunk);
+          acknowledge(chunk, sequence);
+        }
+      ),
+    },
+    {
+      name: "transform",
+      expected: Buffer.from("reserved transform output"),
+      start: (
+        handle: number,
+        received: Buffer[],
+        acknowledge: (chunk: Buffer, sequence: bigint) => void
+      ) => {
+        const input = Buffer.from("reserved transform output");
+        let offset = 0;
+        return addon.runScriptTransformEngine(
+          handle,
+          PASSTHROUGH_SCRIPT,
+          "{}",
+          "payload",
+          "application/octet-stream",
+          null,
+          (bufSize) => {
+            if (offset >= input.length) return null;
+            const chunk = input.subarray(offset, Math.min(offset + bufSize, input.length));
+            offset += chunk.length;
+            return chunk;
+          },
+          (chunk, sequence) => {
+            received.push(chunk);
+            acknowledge(chunk, sequence);
+          }
+        );
+      },
+    },
+  ])("rejects a reserved-but-undelivered $name acknowledgement without changing accounting", async ({ expected, start }) => {
+    const received: Buffer[] = [];
+    await runWithEngine(async (handle) => {
+      addon.__test_holdNextOutputDelivery();
+      let operation!: NativeStreamingOperation;
+      operation = start(handle, received, (chunk, sequence) => {
+        operation.acknowledge(sequence, chunk.length);
+      });
+      const operationId = addon.__test_outputOperationId(operation);
+
+      try {
+        const held = await waitForOutputDeliveryBarrier("reserved output delivery");
+        const before = addon.__test_outputStats(operationId);
+        expect(held).toMatchObject({ held: true, sequence: 1n });
+        expect(before).toMatchObject({
+          outstandingBytes: held.bytes,
+          outstandingChunks: 1,
+        });
+
+        expect(() => operation.acknowledge(held.sequence, held.bytes)).toThrow(
+          "has not been delivered"
+        );
+        expect(addon.__test_outputStats(operationId)).toEqual(before);
+
+        addon.__test_releaseOutputDelivery();
+        const raw = await withTimeout(operation.completion, "released output completion");
+        expect(Buffer.concat(received)).toEqual(expected);
+        expect(JSON.parse(raw)).toMatchObject({ success: true });
+        expect(addon.__test_outputStats(operationId)).toMatchObject({
+          outstandingBytes: 0,
+          outstandingChunks: 0,
+          done: true,
+        });
+      } finally {
+        addon.__test_releaseOutputDelivery();
+        operation?.cancel();
+        operation?.close();
+      }
+    });
+  });
+
+  it.each([
+    {
+      name: "streaming",
+      start: (handle: number, callback: (chunk: Buffer, sequence: bigint) => void) =>
+        addon.runScriptStreamingEngine(
+          handle,
+          PASSTHROUGH_SCRIPT,
+          octetStreamInputs(patternedBytes()),
+          callback
+        ),
+    },
+    {
+      name: "transform",
+      start: (handle: number, callback: (chunk: Buffer, sequence: bigint) => void) => {
+        const input = patternedBytes();
+        let offset = 0;
+        return addon.runScriptTransformEngine(
+          handle,
+          PASSTHROUGH_SCRIPT,
+          "{}",
+          "payload",
+          "application/octet-stream",
+          null,
+          (bufSize) => {
+            if (offset >= input.length) return null;
+            const chunk = input.subarray(offset, Math.min(offset + bufSize, input.length));
+            offset += chunk.length;
+            return chunk;
+          },
+          callback
+        );
+      },
+    },
+  ])("cancels and settles raw $name output when its callback throws", async ({ start }) => {
+    await runWithEngine(async (handle) => {
+      const operation = start(handle, () => { throw new Error("output callback boom"); });
+      const operationId = addon.__test_outputOperationId(operation);
+
+      try {
+        const raw = await withTimeout(operation.completion, "throwing callback completion");
+        expect(JSON.parse(raw)).toMatchObject({ success: false });
+        await waitForStats(
+          (stats) => stats.cancelled && stats.done && stats.outstandingChunks === 0,
+          "throwing callback cancellation",
+          operationId
+        );
+      } finally {
+        operation.close();
+      }
+
+      await waitForStats((stats) => stats.liveFlows === 0, "throwing callback flow release");
+      expect(JSON.parse(addon.runScriptEngine(handle, "output application/json --- 6 * 7", "{}")))
+        .toMatchObject({ success: true });
+    });
+  });
+
+  it("settles without leaking when JS ownership closes while a producer is paused", async () => {
+    await runWithEngine(async (handle) => {
+      const operation = addon.runScriptStreamingEngine(
+        handle,
+        PASSTHROUGH_SCRIPT,
+        octetStreamInputs(patternedBytes()),
+        () => {}
+      );
+      const operationId = addon.__test_outputOperationId(operation);
+
+      await waitForStats((stats) => stats.paused, "close-before-completion pause", operationId);
+      operation.close();
+      operation.cancel();
+      await withTimeout(operation.completion, "close-before-completion settlement");
+      await waitForStats(
+        (stats) => stats.cancelled && stats.done && stats.liveFlows === 0,
+        "close-before-completion flow release",
+        operationId
+      );
+    });
+  });
+
+  it("settles without leaking when close cancels a paused producer by itself", async () => {
+    await runWithEngine(async (handle) => {
+      const operation = addon.runScriptStreamingEngine(
+        handle,
+        PASSTHROUGH_SCRIPT,
+        octetStreamInputs(patternedBytes()),
+        () => {}
+      );
+      const operationId = addon.__test_outputOperationId(operation);
+
+      await waitForStats((stats) => stats.paused, "close-only pause", operationId);
+      operation.close();
+      await withTimeout(operation.completion, "close-only settlement");
+      await waitForStats(
+        (stats) => stats.cancelled && stats.done && stats.liveFlows === 0,
+        "close-only flow release",
+        operationId
+      );
+    });
+  });
+
+  it("runs the exact controller finalizer path under exposed GC", () => {
+    const fixture = join(__dirname, "fixtures", "output-controller-finalizer.cjs");
+    const addonPath = join(__dirname, "..", "..", "build", "Release", "dwlib_addon.node");
+    const child = spawnSync(process.execPath, ["--expose-gc", fixture, addonPath, LIB_PATH], {
+      cwd: __dirname,
+      encoding: "utf-8",
+      timeout: 30000,
+      env: { ...process.env, DATAWEAVE_TEST_HOOKS: "1" },
+    });
+
+    expect(child.error, child.error?.message).toBeUndefined();
+    expect(child.signal, child.stderr).toBeNull();
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout.trim())).toEqual({
+      completionSettled: true,
+      liveFlows: 0,
+      reusedResult: "42",
+    });
+  });
+
   it("bounds transform output without changing the transform read bridge", async () => {
     await runWithEngine(async (handle) => {
       const expected = patternedBytes();
@@ -579,6 +809,9 @@ describe.sequential("native Node output flow control", () => {
         "{}",
         () => {}
       ),
+      startPublic: (dw: DataWeave) => dw.runStreaming(
+        "%dw 2.0\noutput application/json\n---\n[]"
+      ),
     },
     {
       name: "transform",
@@ -592,20 +825,101 @@ describe.sequential("native Node output flow control", () => {
         () => null,
         () => {}
       ),
+      startPublic: (dw: DataWeave) => dw.runTransform(
+        "%dw 2.0\noutput application/json\n---\npayload",
+        [Buffer.from("[]")]
+      ),
     },
-  ])("settles $name completion when the normal terminal resolution fails", async ({ start }) => {
-    await runWithEngine(async (handle) => {
-      addon.__test_failNextOutputSettlement();
-      const operation = start(handle);
+  ])("settles $name completion and cleanup for every recoverable terminal N-API fault", async ({ start, startPublic }) => {
+    for (const fault of [
+      "initial-create-generic",
+      "initial-pending-exception",
+      "fallback-call-generic",
+      "fallback-pending-exception",
+    ] as const) {
+      await runWithEngine(async (handle) => {
+        addon.__test_failNextOutputSettlement(fault);
+        const operation = start(handle);
+        const operationId = addon.__test_outputOperationId(operation);
 
+        try {
+          const raw = await withTimeout(
+            operation.completion,
+            `${fault} terminal settlement`
+          );
+          expect(JSON.parse(raw)).toMatchObject({ success: false });
+        } finally {
+          operation.cancel();
+          operation.close();
+        }
+
+        await waitForStats(
+          (stats) => stats.done && stats.liveFlows === 0,
+          `${fault} terminal flow completion`,
+          operationId
+        );
+      });
+
+      const dw = new DataWeave();
+      dw.initialize();
+      addon.__test_holdNextAsyncOp();
+      addon.__test_failNextOutputSettlement(fault);
+      const stream = startPublic(dw);
+      const firstPull = stream.next();
       try {
-        await expect(
-          withTimeout(operation.completion, "fault-injected terminal settlement")
-        ).resolves.toContain("Failed to settle native output completion");
+        await waitForAsyncOpHeld(`${fault} public operation admission`);
+        const cleanup = dw.cleanup();
+        addon.__test_releaseAsyncOp();
+        await withTimeout(cleanup, `${fault} DataWeave cleanup`);
+        await firstPull;
+        await waitForStats((stats) => stats.liveFlows === 0, `${fault} public flow release`);
+        dw.initialize();
+        expect(dw.run("output application/json --- 6 * 7").getString()).toBe("42");
       } finally {
-        operation.cancel();
-        operation.close();
+        addon.__test_releaseAsyncOp();
+        await withTimeout(dw.cleanup(), `${fault} final cleanup`);
       }
+    }
+  }, 30000);
+
+  it.each([
+    "initial-call-generic-after-call",
+    "fallback-call-generic-after-call",
+  ] as const)("fails closed instead of reusing a consumed deferred after %s", (fault) => {
+    const fixture = join(__dirname, "fixtures", "output-settlement-after-call.cjs");
+    const addonPath = join(__dirname, "..", "..", "build", "Release", "dwlib_addon.node");
+    const child = spawnSync(process.execPath, [fixture, addonPath, LIB_PATH, fault], {
+      cwd: __dirname,
+      encoding: "utf-8",
+      timeout: 30000,
+      env: { ...process.env, DATAWEAVE_TEST_HOOKS: "1" },
     });
+
+    expect(child.error, child.error?.message).toBeUndefined();
+    expect(child.status === 0 && child.signal === null, child.stderr).toBe(false);
+    expect(child.signal).not.toBe("SIGSEGV");
+    expect(child.stderr).toContain("Output completion settlement failed after deferred consumption");
   });
 });
+
+async function waitForOutputDeliveryBarrier(label: string): Promise<{
+  held: boolean;
+  sequence: bigint;
+  bytes: number;
+}> {
+  const deadline = Date.now() + 10000;
+  while (true) {
+    const held = addon.__test_heldOutputDelivery();
+    if (held.held) return held;
+    if (Date.now() >= deadline) throw new Error(`${label} timed out`);
+    await immediate();
+  }
+}
+
+async function waitForAsyncOpHeld(label: string): Promise<void> {
+  const deadline = Date.now() + 10000;
+  while (!addon.__test_asyncOpHeld()) {
+    if (Date.now() >= deadline) throw new Error(`${label} timed out`);
+    await immediate();
+  }
+}

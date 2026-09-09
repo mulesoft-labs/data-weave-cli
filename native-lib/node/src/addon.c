@@ -199,7 +199,24 @@ static long long g_test_resolver_ref_deletes = 0;
 static bool g_test_hold_next_async_op = false;
 static bool g_test_async_op_held = false;
 static bool g_test_release_async_op = false;
-static bool g_test_fail_next_output_settlement = false;
+
+typedef enum {
+  OUTPUT_SETTLEMENT_FAULT_NONE = 0,
+  OUTPUT_SETTLEMENT_FAULT_INITIAL_CREATE_GENERIC,
+  OUTPUT_SETTLEMENT_FAULT_INITIAL_PENDING_EXCEPTION,
+  OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_GENERIC_AFTER_CALL,
+  OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC,
+  OUTPUT_SETTLEMENT_FAULT_FALLBACK_PENDING_EXCEPTION,
+  OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC_AFTER_CALL,
+} output_settlement_fault_t;
+
+static output_settlement_fault_t g_test_next_output_settlement_fault =
+  OUTPUT_SETTLEMENT_FAULT_NONE;
+static bool g_test_hold_next_output_delivery = false;
+static bool g_test_output_delivery_held = false;
+static bool g_test_release_output_delivery = false;
+static uint64_t g_test_held_output_sequence = 0;
+static size_t g_test_held_output_bytes = 0;
 
 // One record per napi_env that has ever taken an init reference (via
 // initialize()). init_refs is that env's net initialize()-minus-cleanup()
@@ -1226,6 +1243,8 @@ typedef struct output_flow {
   output_credit_t* credit_head;
   output_credit_t* credit_tail;
   napi_ref thenable_ref;
+  napi_ref settlement_fallback_ref;
+  bool settlement_started;
 } output_flow_t;
 
 typedef struct output_flow_stats {
@@ -1295,7 +1314,7 @@ static void output_flow_retain(output_flow_t* flow) {
   uv_mutex_unlock(&flow->mutex);
 }
 
-static void output_flow_release(output_flow_t* flow) {
+static void output_flow_release(output_flow_t* flow, napi_env env) {
   if (flow == NULL) return;
   bool destroy = false;
   uv_mutex_lock(&flow->mutex);
@@ -1305,9 +1324,13 @@ static void output_flow_release(output_flow_t* flow) {
   }
   uv_mutex_unlock(&flow->mutex);
   if (!destroy) return;
-  // A dead env auto-reclaims this N-API reference. A live env path deletes it
-  // in output_flow_mark_done before the final native owner is released.
+  // A dead env auto-reclaims N-API references. Live-env terminal paths delete
+  // them before releasing the final native owner.
   flow->thenable_ref = NULL;
+  if (env != NULL && flow->settlement_fallback_ref != NULL) {
+    napi_delete_reference(env, flow->settlement_fallback_ref);
+  }
+  flow->settlement_fallback_ref = NULL;
 
   if (g_test_hooks) {
     uv_mutex_lock(&g_test_output_mutex);
@@ -1468,6 +1491,34 @@ static bool output_flow_mark_delivered(output_flow_t* flow, uint64_t sequence) {
   return delivered;
 }
 
+static bool output_flow_is_cancelled(output_flow_t* flow);
+
+static bool test_hold_output_delivery_if_armed(
+    output_flow_t* flow, uint64_t sequence, size_t bytes) {
+  if (!g_test_hooks) return true;
+  bool cancelled = false;
+  uv_mutex_lock(&g_test_output_mutex);
+  if (g_test_hold_next_output_delivery) {
+    g_test_hold_next_output_delivery = false;
+    g_test_output_delivery_held = true;
+    g_test_held_output_sequence = sequence;
+    g_test_held_output_bytes = bytes;
+    while (!g_test_release_output_delivery) {
+      uv_mutex_unlock(&g_test_output_mutex);
+      cancelled = output_flow_is_cancelled(flow);
+      if (!cancelled) uv_sleep(1);
+      uv_mutex_lock(&g_test_output_mutex);
+      if (cancelled) break;
+    }
+    g_test_release_output_delivery = false;
+    g_test_output_delivery_held = false;
+    g_test_held_output_sequence = 0;
+    g_test_held_output_bytes = 0;
+  }
+  uv_mutex_unlock(&g_test_output_mutex);
+  return !cancelled && !output_flow_is_cancelled(flow);
+}
+
 // Enqueue/allocation rollback always targets the newest reservation because
 // callbacks reserve and enqueue serially on the sole producer worker.
 static void output_flow_rollback(
@@ -1489,9 +1540,7 @@ static void output_flow_rollback(
   uv_mutex_unlock(&flow->mutex);
 }
 
-static void output_flow_cancel(output_flow_t* flow) {
-  if (flow == NULL) return;
-  uv_mutex_lock(&flow->mutex);
+static void output_flow_cancel_locked(output_flow_t* flow) {
   if (!flow->cancelled) {
     flow->cancelled = true;
     flow->paused = false;
@@ -1507,6 +1556,20 @@ static void output_flow_cancel(output_flow_t* flow) {
     flow->credit_tail = NULL;
   }
   uv_cond_broadcast(&flow->cond);
+}
+
+static void output_flow_cancel(output_flow_t* flow) {
+  if (flow == NULL) return;
+  uv_mutex_lock(&flow->mutex);
+  output_flow_cancel_locked(flow);
+  output_flow_record_stats_locked(flow);
+  uv_mutex_unlock(&flow->mutex);
+}
+
+static void output_flow_cancel_if_running(output_flow_t* flow) {
+  if (flow == NULL) return;
+  uv_mutex_lock(&flow->mutex);
+  if (!flow->done) output_flow_cancel_locked(flow);
   output_flow_record_stats_locked(flow);
   uv_mutex_unlock(&flow->mutex);
 }
@@ -1530,6 +1593,24 @@ static void output_flow_retain_thenable(
     }
   }
   uv_mutex_unlock(&flow->mutex);
+}
+
+static bool output_flow_begin_settlement(output_flow_t* flow) {
+  if (flow == NULL) return false;
+  uv_mutex_lock(&flow->mutex);
+  bool begin = !flow->settlement_started;
+  if (begin) flow->settlement_started = true;
+  uv_mutex_unlock(&flow->mutex);
+  return begin;
+}
+
+static void output_flow_release_settlement_ref(output_flow_t* flow, napi_env env) {
+  if (flow == NULL || env == NULL) return;
+  uv_mutex_lock(&flow->mutex);
+  napi_ref fallback_ref = flow->settlement_fallback_ref;
+  flow->settlement_fallback_ref = NULL;
+  uv_mutex_unlock(&flow->mutex);
+  if (fallback_ref != NULL) napi_delete_reference(env, fallback_ref);
 }
 
 static void output_flow_mark_done(output_flow_t* flow, napi_env env) {
@@ -1568,11 +1649,11 @@ static void output_controller_cancel(output_controller_t* holder) {
   uv_mutex_unlock(&holder->mutex);
   if (flow != NULL) {
     output_flow_cancel(flow);
-    output_flow_release(flow);
+    output_flow_release(flow, NULL);
   }
 }
 
-static void output_controller_close(output_controller_t* holder) {
+static void output_controller_close(output_controller_t* holder, napi_env env) {
   if (holder == NULL) return;
   uv_mutex_lock(&holder->mutex);
   output_flow_t* flow = NULL;
@@ -1582,16 +1663,18 @@ static void output_controller_close(output_controller_t* holder) {
     holder->flow = NULL;
   }
   uv_mutex_unlock(&holder->mutex);
-  if (flow != NULL) output_flow_release(flow);
+  if (flow != NULL) {
+    output_flow_cancel_if_running(flow);
+    output_flow_release(flow, env);
+  }
 }
 
 static void output_controller_finalize(napi_env env, void* data, void* hint) {
-  (void)env;
   (void)hint;
   output_controller_t* holder = (output_controller_t*)data;
   if (holder == NULL) return;
   output_controller_cancel(holder);
-  output_controller_close(holder);
+  output_controller_close(holder, env);
   uv_mutex_destroy(&holder->mutex);
   free(holder);
 }
@@ -1651,7 +1734,7 @@ static napi_value napi_output_acknowledge(napi_env env, napi_callback_info info)
   uv_mutex_unlock(&holder->mutex);
   if (flow != NULL) {
     output_ack_result_t result = output_flow_acknowledge(flow, sequence, (size_t)value);
-    output_flow_release(flow);
+    output_flow_release(flow, NULL);
     switch (result) {
       case OUTPUT_ACK_IGNORED:
       case OUTPUT_ACK_ACCEPTED:
@@ -1686,7 +1769,7 @@ static napi_value napi_output_cancel(napi_env env, napi_callback_info info) {
 static napi_value napi_output_close(napi_env env, napi_callback_info info) {
   output_controller_t* holder = output_controller_unwrap(env, info, 0, NULL);
   if (holder == NULL) return NULL;
-  output_controller_close(holder);
+  output_controller_close(holder, env);
   return NULL;
 }
 
@@ -1728,7 +1811,7 @@ static napi_value napi_output_promise_method(napi_env env, napi_callback_info in
     // Retain only after the Promise method call succeeds. Failed assimilation
     // must not root a controller that no caller can use to close the flow.
     output_flow_retain_thenable(flow, env, controller);
-    output_flow_release(flow);
+    output_flow_release(flow, NULL);
   }
   return result;
 }
@@ -1768,7 +1851,7 @@ static napi_value output_controller_create(
                            napi_output_promise_method, (void*)"finally", &method) != napi_ok ||
       napi_set_named_property(env, controller, "finally", method) != napi_ok) {
     output_controller_cancel(holder);
-    output_controller_close(holder);
+    output_controller_close(holder, env);
     uv_mutex_destroy(&holder->mutex);
     free(holder);
     napi_throw_error(env, NULL, "Failed to create output controller");
@@ -1776,7 +1859,7 @@ static napi_value output_controller_create(
   }
   if (napi_wrap(env, controller, holder, output_controller_finalize, NULL, NULL) != napi_ok) {
     output_controller_cancel(holder);
-    output_controller_close(holder);
+    output_controller_close(holder, env);
     uv_mutex_destroy(&holder->mutex);
     free(holder);
     napi_throw_error(env, NULL, "Failed to wrap output controller");
@@ -1786,7 +1869,7 @@ static napi_value output_controller_create(
     void* removed = NULL;
     napi_remove_wrap(env, controller, &removed);
     output_controller_cancel(holder);
-    output_controller_close(holder);
+    output_controller_close(holder, env);
     uv_mutex_destroy(&holder->mutex);
     free(holder);
     napi_throw_error(env, NULL, "Failed to tag output controller");
@@ -1804,40 +1887,161 @@ static const char OOM_JSON[] = "{\"success\":false,\"error\":\"Out of memory\"}"
 static const char SETTLEMENT_ERROR_JSON[] =
   "{\"success\":false,\"error\":\"Failed to settle native output completion\"}";
 
-static bool test_consume_output_settlement_fault(void) {
-  if (!g_test_hooks) return false;
+static output_settlement_fault_t test_consume_output_settlement_fault(void) {
+  if (!g_test_hooks) return OUTPUT_SETTLEMENT_FAULT_NONE;
   uv_mutex_lock(&g_test_output_mutex);
-  bool fail = g_test_fail_next_output_settlement;
-  g_test_fail_next_output_settlement = false;
+  output_settlement_fault_t fault = g_test_next_output_settlement_fault;
+  g_test_next_output_settlement_fault = OUTPUT_SETTLEMENT_FAULT_NONE;
   uv_mutex_unlock(&g_test_output_mutex);
-  return fail;
+  return fault;
 }
 
-static void settle_output_deferred(
-    napi_env env, napi_deferred deferred, const char* result_json) {
-  napi_value result;
-  napi_status status = napi_create_string_utf8(
-    env, result_json, strlen(result_json), &result
-  );
-  if (status == napi_ok) {
-    status = test_consume_output_settlement_fault()
-      ? napi_generic_failure
-      : napi_resolve_deferred(env, deferred, result);
+static bool clear_pending_exception(napi_env env) {
+  bool pending = false;
+  if (napi_is_exception_pending(env, &pending) != napi_ok || !pending) {
+    return false;
   }
-  if (status == napi_ok) return;
+  napi_value exception;
+  if (napi_get_and_clear_last_exception(env, &exception) != napi_ok) {
+    fprintf(stderr,
+            "[DataWeave Node addon] Failed to clear an output settlement exception.\n");
+    return false;
+  }
+  return true;
+}
 
+static napi_status settle_output_fallback(
+    napi_env env, napi_deferred deferred, napi_ref fallback_ref,
+    bool* conclude_called) {
+  *conclude_called = false;
+  napi_value holder;
+  napi_status status = napi_get_reference_value(env, fallback_ref, &holder);
+  if (status != napi_ok) return status;
+  napi_value fallback;
+  status = napi_get_named_property(env, holder, "value", &fallback);
+  if (status != napi_ok) return status;
+  *conclude_called = true;
+  return napi_resolve_deferred(env, deferred, fallback);
+}
+
+static void output_settlement_fail_closed(napi_status status) {
+  // Node frees a deferred whenever napi_resolve_deferred/reject_deferred is
+  // invoked, including failure returns. Continuing would either reuse freed
+  // memory or leave callers waiting forever, so terminate deterministically.
+  char message[128];
+  int length = snprintf(
+    message, sizeof(message),
+    "Output completion settlement failed after deferred consumption (napi status %d)",
+    (int)status
+  );
+  size_t message_length = length > 0
+    ? ((size_t)length < sizeof(message) ? (size_t)length : sizeof(message) - 1)
+    : 0;
+  static const char location[] = "DataWeave Node addon";
+  napi_fatal_error(
+    location, sizeof(location) - 1, message, message_length
+  );
+}
+
+static napi_status settle_output_deferred(
+    napi_env env, napi_deferred deferred, output_flow_t* flow,
+    const char* result_json) {
+  if (env == NULL || flow == NULL || !output_flow_begin_settlement(flow)) {
+    return napi_ok;
+  }
+
+  output_settlement_fault_t fault = test_consume_output_settlement_fault();
+  napi_value result;
+  bool fail_initial =
+    fault == OUTPUT_SETTLEMENT_FAULT_INITIAL_CREATE_GENERIC ||
+    fault == OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC ||
+    fault == OUTPUT_SETTLEMENT_FAULT_FALLBACK_PENDING_EXCEPTION ||
+    fault == OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC_AFTER_CALL;
+  napi_status status = fail_initial
+    ? napi_generic_failure
+    : napi_create_string_utf8(env, result_json, strlen(result_json), &result);
+  if (status == napi_ok) {
+    if (fault == OUTPUT_SETTLEMENT_FAULT_INITIAL_PENDING_EXCEPTION) {
+      napi_throw_error(env, NULL, "Injected initial output settlement exception");
+      status = napi_pending_exception;
+    } else {
+      status = napi_resolve_deferred(env, deferred, result);
+      if (status == napi_ok &&
+          fault == OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_GENERIC_AFTER_CALL) {
+        status = napi_generic_failure;
+      }
+      if (status != napi_ok) {
+        if (status == napi_pending_exception &&
+            !clear_pending_exception(env)) {
+          output_flow_release_settlement_ref(flow, env);
+          return status;
+        }
+        output_settlement_fail_closed(status);
+      }
+      output_flow_release_settlement_ref(flow, env);
+      return napi_ok;
+    }
+  }
+  if (status == napi_pending_exception && !clear_pending_exception(env)) {
+    output_flow_release_settlement_ref(flow, env);
+    return status;
+  }
+
+  bool conclude_called = false;
+  if (fault == OUTPUT_SETTLEMENT_FAULT_FALLBACK_PENDING_EXCEPTION) {
+    napi_throw_error(env, NULL, "Injected fallback output settlement exception");
+    status = napi_pending_exception;
+  } else if (fault == OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC) {
+    status = napi_generic_failure;
+  } else {
+    status = settle_output_fallback(
+      env, deferred, flow->settlement_fallback_ref, &conclude_called
+    );
+  }
+  if (status == napi_ok &&
+      fault == OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC_AFTER_CALL) {
+    status = napi_generic_failure;
+  }
+  if (status == napi_ok) {
+    output_flow_release_settlement_ref(flow, env);
+    return napi_ok;
+  }
+  if (status == napi_pending_exception && !clear_pending_exception(env)) {
+    output_flow_release_settlement_ref(flow, env);
+    return status;
+  }
+  if (conclude_called) output_settlement_fail_closed(status);
+
+  status = settle_output_fallback(
+    env, deferred, flow->settlement_fallback_ref, &conclude_called
+  );
+  if (status != napi_ok) {
+    if (status == napi_pending_exception && !conclude_called) {
+      if (!clear_pending_exception(env)) {
+        output_flow_release_settlement_ref(flow, env);
+        return status;
+      }
+    }
+    output_settlement_fail_closed(status);
+  }
+  output_flow_release_settlement_ref(flow, env);
+  return napi_ok;
+}
+
+static bool prepare_output_settlement(napi_env env, output_flow_t* flow) {
   napi_value fallback;
   if (napi_create_string_utf8(
-          env, SETTLEMENT_ERROR_JSON, NAPI_AUTO_LENGTH, &fallback) == napi_ok) {
-    if (napi_resolve_deferred(env, deferred, fallback) == napi_ok) return;
+        env, SETTLEMENT_ERROR_JSON, NAPI_AUTO_LENGTH, &fallback) != napi_ok) {
+    return false;
   }
-
-  // napi_get_undefined does not allocate. If string creation itself failed
-  // under memory pressure, still make a final allocation-free settlement
-  // attempt rather than leaving the operation permanently pending.
-  if (napi_get_undefined(env, &fallback) == napi_ok) {
-    napi_resolve_deferred(env, deferred, fallback);
+  // N-API v8 cannot retain a primitive string directly, so keep it reachable
+  // through a referenced object before the asynchronous operation starts.
+  napi_value holder;
+  if (napi_create_object(env, &holder) != napi_ok ||
+      napi_set_named_property(env, holder, "value", fallback) != napi_ok) {
+    return false;
   }
+  return napi_create_reference(env, holder, 1, &flow->settlement_fallback_ref) == napi_ok;
 }
 
 // chunk_data with len == -1 is a sentinel indicating completion (buf holds meta JSON)
@@ -1877,7 +2081,7 @@ static void output_chunk_release(struct chunk_data* chunk, bool rollback) {
     if (rollback) {
       output_flow_rollback(chunk->flow, chunk->sequence, chunk->accounted_bytes);
     }
-    output_flow_release(chunk->flow);
+    output_flow_release(chunk->flow, NULL);
   }
   free(chunk->buf);
   free(chunk);
@@ -1899,7 +2103,7 @@ static void call_js_write(napi_env env, napi_value js_callback, void* context, v
     // would leak `w` and could strand a bridge marked for deferred destruction
     // indefinitely.
     if (env != NULL) {
-      settle_output_deferred(env, w->deferred, chunk->buf);
+      settle_output_deferred(env, w->deferred, w->flow, chunk->buf);
     }
 
     output_flow_mark_done(w->flow, env);
@@ -1916,7 +2120,7 @@ static void call_js_write(napi_env env, napi_value js_callback, void* context, v
     // dead/tearing down -- tell bridge_end_op (and any bridge_finalize it
     // triggers) not to touch the napi_ref, since b->env is this same dead env.
     bridge_end_op(w->bridge, /*env_still_alive=*/env != NULL);
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, NULL);
     free(w);
     return;
   }
@@ -1974,6 +2178,9 @@ static int streaming_write_cb(void* ctx, const char* buf, int len) {
   if (len < 0 || output_flow_is_cancelled(w->flow)) return -1;
   uint64_t sequence;
   if (!output_flow_reserve(w->flow, (size_t)len, &sequence)) return -1;
+  if (!test_hold_output_delivery_if_armed(w->flow, sequence, (size_t)len)) {
+    return -1;
+  }
   // Round-9 (#2): OOM here must not deref NULL / memcpy into NULL. Returning -1
   // aborts the native run cleanly (write-callback contract: non-zero stops the
   // DataWeave run); the worker then still produces a terminal meta_result and
@@ -2112,7 +2319,7 @@ static void streaming_thread_fn(void* arg) {
     free(w->inputs_json);
     bridge_end_op(w->bridge, /*env_still_alive=*/false);
     output_flow_mark_done(w->flow, NULL);
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, NULL);
     free(w);
   }
 }
@@ -2229,6 +2436,14 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
     napi_throw_error(env, NULL, "OOM");
     return NULL;
   }
+  if (!prepare_output_settlement(env, w->flow)) {
+    output_flow_release(w->flow, NULL);
+    free(w->script); free(w->inputs_json); free(w);
+    bridge_end_op(pinned, /*env_still_alive=*/true);
+    uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "runScriptStreamingEngine: failed to create settlement fallback");
+    return NULL;
+  }
 
   // Round-9 (#3, updated round-11 #2): the resource creations below run AFTER
   // g_active_ops was reserved (and after w + its buffers were allocated), and
@@ -2240,7 +2455,7 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
   // (teardown wedge).
   napi_value resource_name;
   if (napi_create_string_utf8(env, "dwStreaming", NAPI_AUTO_LENGTH, &resource_name) != napi_ok) {
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -2250,7 +2465,7 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
   if (napi_create_threadsafe_function(env, argv[3], NULL, resource_name,
                                       OUTPUT_TSFN_QUEUE_SIZE, 1, NULL, NULL,
                                       w, call_js_write, &w->tsfn) != napi_ok) {
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -2268,7 +2483,7 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
   w->sentinel = malloc(sizeof(struct chunk_data));
   if (w->sentinel == NULL) {
     napi_release_threadsafe_function(w->tsfn, napi_tsfn_release);
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -2281,7 +2496,7 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
     // The tsfn was created above; release it before freeing w (it holds w as
     // its context). No worker exists yet, so this release is the sole discharge.
     napi_release_threadsafe_function(w->tsfn, napi_tsfn_release);
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, env);
     free(w->sentinel); free(w->script); free(w->inputs_json); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -2292,7 +2507,7 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
   napi_value controller = output_controller_create(env, promise, w->flow);
   if (controller == NULL) {
     napi_release_threadsafe_function(w->tsfn, napi_tsfn_release);
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, env);
     free(w->sentinel); free(w->script); free(w->inputs_json); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -2326,7 +2541,7 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
     napi_release_threadsafe_function(w->tsfn, napi_tsfn_release);
 
     settle_output_deferred(
-      env, w->deferred,
+      env, w->deferred, w->flow,
       "{\"success\":false,\"error\":\"Failed to spawn streaming worker thread\"}"
     );
 
@@ -2334,7 +2549,7 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
     free(w->script);
     free(w->inputs_json);
     output_flow_mark_done(w->flow, env);
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, env);
     free(w);
   }
 
@@ -2494,6 +2709,9 @@ static int transform_write_cb(void* ctx, const char* buf, int len) {
   if (len < 0 || output_flow_is_cancelled(w->flow)) return -1;
   uint64_t sequence;
   if (!output_flow_reserve(w->flow, (size_t)len, &sequence)) return -1;
+  if (!test_hold_output_delivery_if_armed(w->flow, sequence, (size_t)len)) {
+    return -1;
+  }
   // Round-9 (#2): OOM-safe, mirrors streaming_write_cb. Return -1 to abort the
   // native run cleanly; the worker still delivers a terminal sentinel.
   struct chunk_data* chunk = malloc(sizeof(struct chunk_data));
@@ -2543,7 +2761,7 @@ static void call_js_transform_write(napi_env env, napi_value js_callback, void* 
     // would leak `w` and could strand a bridge marked for deferred destruction
     // indefinitely.
     if (env != NULL) {
-      settle_output_deferred(env, w->deferred, chunk->buf);
+      settle_output_deferred(env, w->deferred, w->flow, chunk->buf);
     }
 
     output_flow_mark_done(w->flow, env);
@@ -2564,7 +2782,7 @@ static void call_js_transform_write(napi_env env, napi_value js_callback, void* 
     // dead/tearing down -- tell bridge_end_op (and any bridge_finalize it
     // triggers) not to touch the napi_ref, since b->env is this same dead env.
     bridge_end_op(w->bridge, /*env_still_alive=*/env != NULL);
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, NULL);
     free(w);
     return;
   }
@@ -2719,7 +2937,7 @@ static void transform_thread_fn(void* arg) {
     free(w->input_charset);
     bridge_end_op(w->bridge, /*env_still_alive=*/false);
     output_flow_mark_done(w->flow, NULL);
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, NULL);
     free(w);
   }
 }
@@ -2855,6 +3073,15 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
     napi_throw_error(env, NULL, "OOM");
     return NULL;
   }
+  if (!prepare_output_settlement(env, w->flow)) {
+    output_flow_release(w->flow, env);
+    free(w->script); free(w->inputs_json); free(w->input_name);
+    free(w->input_mime_type); free(w->input_charset); free(w);
+    bridge_end_op(pinned, /*env_still_alive=*/true);
+    uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "runScriptTransformEngine: failed to create settlement fallback");
+    return NULL;
+  }
 
   // Round-9 (#3, updated round-11 #2): check each resource creation; on
   // failure release the engine pin (`pinned`, taken at admission) via
@@ -2864,7 +3091,7 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
   // before freeing w if it was created.
   napi_value resource_name;
   if (napi_create_string_utf8(env, "dwTransform", NAPI_AUTO_LENGTH, &resource_name) != napi_ok) {
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w->input_name); free(w->input_mime_type); free(w->input_charset); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -2873,7 +3100,7 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
   }
 
   if (napi_create_threadsafe_function(env, argv[6], NULL, resource_name, 0, 1, NULL, NULL, NULL, call_js_read, &w->read_tsfn) != napi_ok) {
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w->input_name); free(w->input_mime_type); free(w->input_charset); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -2884,7 +3111,7 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
                                       OUTPUT_TSFN_QUEUE_SIZE, 1, NULL, NULL,
                                       w, call_js_transform_write, &w->write_tsfn) != napi_ok) {
     napi_release_threadsafe_function(w->read_tsfn, napi_tsfn_release);
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w->input_name); free(w->input_mime_type); free(w->input_charset); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -2903,7 +3130,7 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
   if (w->sentinel == NULL) {
     napi_release_threadsafe_function(w->read_tsfn, napi_tsfn_release);
     napi_release_threadsafe_function(w->write_tsfn, napi_tsfn_release);
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w->input_name); free(w->input_mime_type); free(w->input_charset); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -2915,7 +3142,7 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
   if (napi_create_promise(env, &w->deferred, &promise) != napi_ok) {
     napi_release_threadsafe_function(w->read_tsfn, napi_tsfn_release);
     napi_release_threadsafe_function(w->write_tsfn, napi_tsfn_release);
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, env);
     free(w->sentinel); free(w->script); free(w->inputs_json); free(w->input_name); free(w->input_mime_type); free(w->input_charset); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -2927,7 +3154,7 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
   if (controller == NULL) {
     napi_release_threadsafe_function(w->read_tsfn, napi_tsfn_release);
     napi_release_threadsafe_function(w->write_tsfn, napi_tsfn_release);
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, env);
     free(w->sentinel); free(w->script); free(w->inputs_json);
     free(w->input_name); free(w->input_mime_type); free(w->input_charset); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
@@ -2964,7 +3191,7 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
     napi_release_threadsafe_function(w->write_tsfn, napi_tsfn_release);
 
     settle_output_deferred(
-      env, w->deferred,
+      env, w->deferred, w->flow,
       "{\"success\":false,\"error\":\"Failed to spawn transform worker thread\"}"
     );
 
@@ -2975,7 +3202,7 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
     free(w->input_mime_type);
     free(w->input_charset);
     output_flow_mark_done(w->flow, NULL);
-    output_flow_release(w->flow);
+    output_flow_release(w->flow, NULL);
     free(w);
   }
 
@@ -4372,10 +4599,90 @@ static napi_value napi_test_create_foreign_wrapped_object(
 
 static napi_value napi_test_fail_next_output_settlement(
     napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  size_t length;
+  char stage[64];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 1 ||
+      napi_get_value_string_utf8(env, argv[0], stage, sizeof(stage), &length) != napi_ok) {
+    napi_throw_type_error(env, NULL, "A settlement fault stage is required");
+    return NULL;
+  }
+  output_settlement_fault_t fault = OUTPUT_SETTLEMENT_FAULT_NONE;
+  if (strcmp(stage, "initial-create-generic") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_INITIAL_CREATE_GENERIC;
+  } else if (strcmp(stage, "initial-pending-exception") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_INITIAL_PENDING_EXCEPTION;
+  } else if (strcmp(stage, "initial-call-generic-after-call") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_GENERIC_AFTER_CALL;
+  } else if (strcmp(stage, "fallback-call-generic") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC;
+  } else if (strcmp(stage, "fallback-pending-exception") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_FALLBACK_PENDING_EXCEPTION;
+  } else if (strcmp(stage, "fallback-call-generic-after-call") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC_AFTER_CALL;
+  } else {
+    napi_throw_range_error(env, NULL, "Unknown settlement fault stage");
+    return NULL;
+  }
+  uv_mutex_lock(&g_test_output_mutex);
+  if (g_test_next_output_settlement_fault != OUTPUT_SETTLEMENT_FAULT_NONE) {
+    uv_mutex_unlock(&g_test_output_mutex);
+    napi_throw_error(env, NULL, "An output settlement fault is already armed");
+    return NULL;
+  }
+  g_test_next_output_settlement_fault = fault;
+  uv_mutex_unlock(&g_test_output_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_hold_next_output_delivery(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_test_output_mutex);
+  if (g_test_hold_next_output_delivery || g_test_output_delivery_held) {
+    uv_mutex_unlock(&g_test_output_mutex);
+    napi_throw_error(env, NULL, "An output delivery gate is already armed");
+    return NULL;
+  }
+  g_test_hold_next_output_delivery = true;
+  g_test_release_output_delivery = false;
+  uv_mutex_unlock(&g_test_output_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_held_output_delivery(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_test_output_mutex);
+  bool held = g_test_output_delivery_held;
+  uint64_t sequence = g_test_held_output_sequence;
+  size_t bytes = g_test_held_output_bytes;
+  uv_mutex_unlock(&g_test_output_mutex);
+
+  napi_value out;
+  napi_value value;
+  napi_create_object(env, &out);
+  napi_get_boolean(env, held, &value);
+  napi_set_named_property(env, out, "held", value);
+  napi_create_bigint_uint64(env, sequence, &value);
+  napi_set_named_property(env, out, "sequence", value);
+  napi_create_double(env, (double)bytes, &value);
+  napi_set_named_property(env, out, "bytes", value);
+  return out;
+}
+
+static napi_value napi_test_release_output_delivery(
+    napi_env env, napi_callback_info info) {
   (void)env;
   (void)info;
   uv_mutex_lock(&g_test_output_mutex);
-  g_test_fail_next_output_settlement = true;
+  g_test_release_output_delivery = true;
+  if (!g_test_output_delivery_held) {
+    g_test_hold_next_output_delivery = false;
+    g_test_held_output_sequence = 0;
+    g_test_held_output_bytes = 0;
+  }
   uv_mutex_unlock(&g_test_output_mutex);
   return NULL;
 }
@@ -4528,6 +4835,12 @@ static napi_value Init(napi_env env, napi_value exports) {
     napi_set_named_property(env, exports, "__test_createForeignWrappedObject", fn);
     napi_create_function(env, "__test_failNextOutputSettlement", NAPI_AUTO_LENGTH, napi_test_fail_next_output_settlement, NULL, &fn);
     napi_set_named_property(env, exports, "__test_failNextOutputSettlement", fn);
+    napi_create_function(env, "__test_holdNextOutputDelivery", NAPI_AUTO_LENGTH, napi_test_hold_next_output_delivery, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_holdNextOutputDelivery", fn);
+    napi_create_function(env, "__test_heldOutputDelivery", NAPI_AUTO_LENGTH, napi_test_held_output_delivery, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_heldOutputDelivery", fn);
+    napi_create_function(env, "__test_releaseOutputDelivery", NAPI_AUTO_LENGTH, napi_test_release_output_delivery, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_releaseOutputDelivery", fn);
   }
 
   return exports;
