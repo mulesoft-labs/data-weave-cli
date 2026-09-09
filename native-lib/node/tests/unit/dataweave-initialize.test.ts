@@ -43,6 +43,13 @@ function operation(completion: Promise<string>): NativeStreamingOperation {
   };
 }
 
+function sequencedCallback<T extends (chunk: Buffer, sequence: bigint) => void>(
+  callback: T
+): (chunk: Buffer) => void {
+  let sequence = 0n;
+  return (chunk) => callback(chunk, ++sequence);
+}
+
 const okStreamingMeta = () => JSON.stringify({
   success: true,
   mimeType: "application/json",
@@ -565,8 +572,9 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       const completion = deferred<string>();
       const nativeOperation = operation(completion.promise);
       vi.mocked(ffi.runScriptStreamingEngine).mockImplementation((_handle, _script, _inputs, cb) => {
-        cb(Buffer.from("x"));
-        cb(Buffer.from("yy"));
+        const push = sequencedCallback(cb);
+        push(Buffer.from("x"));
+        push(Buffer.from("yy"));
         return nativeOperation;
       });
 
@@ -575,10 +583,10 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       const stream = dw.runStreaming("output application/json --- [1]");
       const first = await stream.next();
       expect(first.value?.toString()).toBe("x");
-      expect(nativeOperation.acknowledge).toHaveBeenCalledWith(1);
+      expect(nativeOperation.acknowledge).toHaveBeenCalledWith(1n, 1);
 
       const cleanupPromise = dw.cleanup();
-      expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 2);
+      expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 2n, 2);
       expect(nativeOperation.acknowledge).toHaveBeenCalledTimes(2);
       expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
 
@@ -1018,8 +1026,9 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       nativeOperation.cancel = vi.fn(() => completion.resolve(okStreamingMeta()));
       vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
         (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
-          writeCb(Buffer.from("a"));
-          writeCb(Buffer.from("b"));
+          const push = sequencedCallback(writeCb);
+          push(Buffer.from("a"));
+          push(Buffer.from("b"));
           return nativeOperation;
         }
       );
@@ -1034,8 +1043,8 @@ describe("DataWeave.initialize() native ref-count safety", () => {
 
       await expect(secondPull).resolves.toEqual({ done: false, value: Buffer.from("b") });
       await expect(returned).resolves.toEqual({ done: true, value: undefined });
-      expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(1, 1);
-      expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 1);
+      expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(1, 1n, 1);
+      expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 2n, 1);
       expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
 
       await dw.cleanup();
@@ -1049,7 +1058,7 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       let push!: (chunk: Buffer) => void;
       vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
         (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
-          push = writeCb;
+          push = sequencedCallback(writeCb);
           return nativeOperation;
         }
       );
@@ -1072,7 +1081,11 @@ describe("DataWeave.initialize() native ref-count safety", () => {
         { done: false, value: Buffer.from("bb") },
         { done: true, value: undefined },
       ]);
-      expect(nativeOperation.acknowledge.mock.calls).toEqual([[8], [1], [2]]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([
+        [1n, 8],
+        [2n, 1],
+        [3n, 2],
+      ]);
       expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
       expect(nativeOperation.close).toHaveBeenCalledTimes(1);
 
@@ -1087,7 +1100,7 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       let push!: (chunk: Buffer) => void;
       vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
         (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
-          push = writeCb;
+          push = sequencedCallback(writeCb);
           return nativeOperation;
         }
       );
@@ -1112,7 +1125,11 @@ describe("DataWeave.initialize() native ref-count safety", () => {
         { status: "fulfilled", value: { done: false, value: Buffer.from("bb") } },
         { status: "rejected", reason: thrown },
       ]);
-      expect(nativeOperation.acknowledge.mock.calls).toEqual([[8], [1], [2]]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([
+        [1n, 8],
+        [2n, 1],
+        [3n, 2],
+      ]);
       expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
       expect(nativeOperation.close).toHaveBeenCalledTimes(1);
 
@@ -1126,10 +1143,11 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       nativeOperation.cancel = vi.fn(() => completion.resolve(okStreamingMeta()));
       vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
         (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
-          writeCb(Buffer.from("a"));
-          writeCb(Buffer.from("bb"));
-          writeCb(Buffer.from("ccc"));
-          writeCb(Buffer.from("dddd"));
+          const push = sequencedCallback(writeCb);
+          push(Buffer.from("a"));
+          push(Buffer.from("bb"));
+          push(Buffer.from("ccc"));
+          push(Buffer.from("dddd"));
           return nativeOperation;
         }
       );
@@ -1153,7 +1171,12 @@ describe("DataWeave.initialize() native ref-count safety", () => {
         { done: true, value: undefined },
       ]);
       expect(settlements).toEqual([1, 1, 1, 1, 1]);
-      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1], [2], [3], [4]]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([
+        [1n, 1],
+        [2n, 2],
+        [3n, 3],
+        [4n, 4],
+      ]);
       expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
 
       await dw.cleanup();
@@ -1166,8 +1189,9 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       nativeOperation.cancel = vi.fn(() => completion.resolve(okStreamingMeta()));
       vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
         (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
-          writeCb(Buffer.from("a"));
-          writeCb(Buffer.from("bb"));
+          const push = sequencedCallback(writeCb);
+          push(Buffer.from("a"));
+          push(Buffer.from("bb"));
           return nativeOperation;
         }
       );
@@ -1189,7 +1213,7 @@ describe("DataWeave.initialize() native ref-count safety", () => {
         { done: true, value: undefined },
         { done: true, value: undefined },
       ]);
-      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1], [2]]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1n, 1], [2n, 2]]);
       expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
       expect(nativeOperation.close).toHaveBeenCalledTimes(1);
 
@@ -1203,8 +1227,9 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       nativeOperation.cancel = vi.fn(() => completion.resolve(okStreamingMeta()));
       vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
         (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
-          writeCb(Buffer.from("a"));
-          writeCb(Buffer.from("bb"));
+          const push = sequencedCallback(writeCb);
+          push(Buffer.from("a"));
+          push(Buffer.from("bb"));
           return nativeOperation;
         }
       );
@@ -1228,7 +1253,7 @@ describe("DataWeave.initialize() native ref-count safety", () => {
         { status: "fulfilled", value: { done: true, value: undefined } },
         { status: "rejected", reason: thrown },
       ]);
-      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1], [2]]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1n, 1], [2n, 2]]);
       expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
       expect(nativeOperation.close).toHaveBeenCalledTimes(1);
 
@@ -1262,7 +1287,7 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       nativeOperation.cancel = vi.fn(() => completion.resolve(okStreamingMeta()));
       vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
         (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
-          writeCb(Buffer.from("a"));
+          sequencedCallback(writeCb)(Buffer.from("a"));
           return nativeOperation;
         }
       );
@@ -1283,7 +1308,7 @@ describe("DataWeave.initialize() native ref-count safety", () => {
         { done: true, value: undefined },
         { done: true, value: undefined },
       ]);
-      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1]]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1n, 1]]);
       expect(nativeOperation.close).toHaveBeenCalledTimes(1);
 
       await dw.cleanup();
@@ -1297,7 +1322,7 @@ describe("DataWeave.initialize() native ref-count safety", () => {
       let push!: (chunk: Buffer) => void;
       vi.mocked(ffi.runScriptTransformEngine).mockImplementation(
         (_handle, _script, _inputs, _inputName, _mimeType, _charset, _readCb, writeCb) => {
-          push = writeCb;
+          push = sequencedCallback(writeCb);
           return nativeOperation;
         }
       );
@@ -1318,7 +1343,7 @@ describe("DataWeave.initialize() native ref-count safety", () => {
         { done: true, value: undefined },
         { done: true, value: undefined },
       ]);
-      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1]]);
+      expect(nativeOperation.acknowledge.mock.calls).toEqual([[1n, 1]]);
       expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
       expect(nativeOperation.close).toHaveBeenCalledTimes(1);
 

@@ -4,9 +4,17 @@ import { buildInputsJson, findLibrary } from "../../src/utils";
 
 interface NativeStreamingOperation {
   readonly completion: Promise<string>;
-  acknowledge(bytes: number): void;
+  acknowledge(sequence: bigint, bytes: number): void;
   cancel(): void;
   close(): void;
+  then<TResult1 = string, TResult2 = never>(
+    onfulfilled?: ((value: string) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
+  ): Promise<TResult1 | TResult2>;
+  catch<TResult = never>(
+    onrejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null
+  ): Promise<string | TResult>;
+  finally(onfinally?: (() => void) | null): Promise<string>;
 }
 
 interface OutputFlowStats {
@@ -34,7 +42,7 @@ interface TestAddon {
     handle: number,
     script: string,
     inputsJson: string,
-    chunkCb: (chunk: Buffer) => void
+    chunkCb: (chunk: Buffer, sequence: bigint) => void
   ): NativeStreamingOperation;
   runScriptTransformEngine(
     handle: number,
@@ -44,11 +52,18 @@ interface TestAddon {
     inputMimeType: string,
     inputCharset: string | null,
     readCb: (bufSize: number) => Buffer | null,
-    writeCb: (chunk: Buffer) => void
+    writeCb: (chunk: Buffer, sequence: bigint) => void
   ): NativeStreamingOperation;
   cleanup(): Promise<void>;
   __test_outputStats(operationId?: number): OutputFlowStats;
   __test_outputOperationId(operation: NativeStreamingOperation): number;
+  __test_createForeignWrappedObject(): object;
+  __test_failNextOutputSettlement(): void;
+}
+
+interface PendingChunk {
+  readonly chunk: Buffer;
+  readonly sequence: bigint;
 }
 
 const ADDON_PATH = "../../build/Release/dwlib_addon.node";
@@ -118,7 +133,7 @@ function expectBounded(stats: OutputFlowStats): void {
   );
 }
 
-async function waitForPendingChunk(pending: Buffer[], label: string): Promise<Buffer> {
+async function waitForPendingChunk(pending: PendingChunk[], label: string): Promise<PendingChunk> {
   const deadline = Date.now() + 10000;
   while (pending.length === 0) {
     if (Date.now() >= deadline) throw new Error(`${label} timed out`);
@@ -130,7 +145,7 @@ async function waitForPendingChunk(pending: Buffer[], label: string): Promise<Bu
 async function drainAfterPause(
   operation: NativeStreamingOperation,
   operationId: number,
-  pending: Buffer[],
+  pending: PendingChunk[],
   received: Buffer[],
   settled: () => boolean
 ): Promise<string> {
@@ -145,8 +160,8 @@ async function drainAfterPause(
   let projectedBytes = paused.outstandingBytes;
   let projectedChunks = paused.outstandingChunks;
   while (projectedBytes > paused.lowBytes || projectedChunks > paused.lowChunks) {
-    const chunk = await waitForPendingChunk(pending, "low-water acknowledgement");
-    operation.acknowledge(chunk.length);
+    const { chunk, sequence } = await waitForPendingChunk(pending, "low-water acknowledgement");
+    operation.acknowledge(sequence, chunk.length);
     projectedBytes -= chunk.length;
     projectedChunks--;
   }
@@ -160,9 +175,14 @@ async function drainAfterPause(
   );
 
   const deadline = Date.now() + 15000;
-  while (!settled() || pending.length > 0) {
+  while (
+    !settled() ||
+    pending.length > 0 ||
+    addon.__test_outputStats(operationId).outstandingChunks > 0
+  ) {
     if (pending.length > 0) {
-      operation.acknowledge(pending.shift()!.length);
+      const { chunk, sequence } = pending.shift()!;
+      operation.acknowledge(sequence, chunk.length);
     }
     if (Date.now() >= deadline) {
       throw new Error(
@@ -217,18 +237,30 @@ describe.sequential("native Node output flow control", () => {
         );
 
         for (const invalid of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, "1"]) {
-          expect(() => operation!.acknowledge(invalid as number)).toThrow();
+          expect(() => operation!.acknowledge(1n, invalid as number)).toThrow();
+        }
+
+        for (const invalid of [
+          -1,
+          0,
+          0.5,
+          Number.NaN,
+          Number.POSITIVE_INFINITY,
+          "1",
+          -1n,
+          0n,
+          1n << 64n,
+        ]) {
+          expect(() => operation!.acknowledge(invalid as bigint, 1)).toThrow();
         }
 
         const raw = await withTimeout(operation.completion, "controller completion");
         expect(JSON.parse(raw).success).toBe(true);
-        for (const chunk of chunks) operation.acknowledge(chunk.length);
-
         expect(() => operation.cancel()).not.toThrow();
         expect(() => operation.cancel()).not.toThrow();
         expect(() => operation.close()).not.toThrow();
         expect(() => operation.close()).not.toThrow();
-        expect(() => operation.acknowledge(1)).not.toThrow();
+        expect(() => operation.acknowledge(1n, 1)).not.toThrow();
       } finally {
         if (operation !== undefined) {
           operation.cancel?.();
@@ -240,12 +272,41 @@ describe.sequential("native Node output flow control", () => {
     });
   });
 
+  it("rejects borrowed controller methods and test introspection on a foreign wrapper", async () => {
+    await runWithEngine(async (handle) => {
+      const operation = addon.runScriptStreamingEngine(
+        handle,
+        "%dw 2.0\noutput application/json\n---\n[]",
+        "{}",
+        () => {}
+      );
+      const foreign = addon.__test_createForeignWrappedObject();
+
+      try {
+        for (const method of [operation.acknowledge, operation.cancel, operation.close]) {
+          expect(() => method.call(foreign, 1n, 1)).toThrow(TypeError);
+        }
+        expect(() => operation.then.call(foreign, () => {})).toThrow(TypeError);
+        expect(() => operation.catch.call(foreign, () => {})).toThrow(TypeError);
+        expect(() => operation.finally.call(foreign, () => {})).toThrow(TypeError);
+        expect(() => addon.__test_outputOperationId(foreign as NativeStreamingOperation)).toThrow(
+          TypeError
+        );
+
+        await withTimeout(operation.completion, "receiver-tag operation completion");
+      } finally {
+        operation.cancel();
+        operation.close();
+      }
+    });
+  });
+
   it("bounds a paused streaming producer and resumes only after low-water credit", async () => {
     await runWithEngine(async (handle) => {
       expect(typeof addon.__test_outputStats).toBe("function");
       const expected = patternedBytes();
       const received: Buffer[] = [];
-      const pending: Buffer[] = [];
+      const pending: PendingChunk[] = [];
       let operation!: NativeStreamingOperation;
       let operationId!: number;
       let completionSettled = false;
@@ -254,10 +315,13 @@ describe.sequential("native Node output flow control", () => {
         handle,
         PASSTHROUGH_SCRIPT,
         octetStreamInputs(expected),
-        (chunk) => {
+        (chunk, sequence) => {
           received.push(chunk);
-          pending.push(chunk);
-          if (received.length === 1) operation.acknowledge(pending.shift()!.length);
+          pending.push({ chunk, sequence });
+          if (received.length === 1) {
+            const first = pending.shift()!;
+            operation.acknowledge(first.sequence, first.chunk.length);
+          }
         }
       );
       operationId = addon.__test_outputOperationId(operation);
@@ -299,11 +363,89 @@ describe.sequential("native Node output flow control", () => {
     });
   }, 30000);
 
+  it("rejects duplicate, early, out-of-order, and mismatched acknowledgements without releasing credit", async () => {
+    await runWithEngine(async (handle) => {
+      const pending: PendingChunk[] = [];
+      let earlyAcknowledgementRejected = false;
+      let operation!: NativeStreamingOperation;
+      operation = addon.runScriptStreamingEngine(
+        handle,
+        PASSTHROUGH_SCRIPT,
+        octetStreamInputs(Buffer.alloc(LARGE_SIZE, 65)),
+        (chunk, sequence) => {
+          if (pending.length === 0) {
+            try {
+              operation.acknowledge(sequence + 1n, chunk.length);
+            } catch {
+              earlyAcknowledgementRejected = true;
+            }
+          }
+          pending.push({ chunk, sequence });
+        }
+      );
+      const operationId = addon.__test_outputOperationId(operation);
+
+      try {
+        const paused = await waitForStats(
+          (stats) => stats.paused && pending.length >= 2,
+          "equal-sized acknowledgement validation window",
+          operationId
+        );
+        const first = pending[0];
+        const second = pending[1];
+        expect(first.chunk.length).toBe(second.chunk.length);
+        expect(earlyAcknowledgementRejected).toBe(true);
+
+        const expectRejectedWithoutAccountingChange = (
+          invoke: () => void,
+          before: OutputFlowStats
+        ): void => {
+          expect(invoke).toThrow();
+          expect(addon.__test_outputStats(operationId)).toMatchObject({
+            outstandingBytes: before.outstandingBytes,
+            outstandingChunks: before.outstandingChunks,
+            paused: true,
+          });
+        };
+
+        expectRejectedWithoutAccountingChange(
+          () => operation.acknowledge(second.sequence, second.chunk.length),
+          paused
+        );
+        expectRejectedWithoutAccountingChange(
+          () => operation.acknowledge(first.sequence + 1000000n, first.chunk.length),
+          paused
+        );
+        expectRejectedWithoutAccountingChange(
+          () => operation.acknowledge(first.sequence, first.chunk.length - 1),
+          paused
+        );
+
+        operation.acknowledge(first.sequence, first.chunk.length);
+        pending.shift();
+        const afterFirst = addon.__test_outputStats(operationId);
+        expect(afterFirst.outstandingChunks).toBe(paused.outstandingChunks - 1);
+        expectRejectedWithoutAccountingChange(
+          () => operation.acknowledge(first.sequence, first.chunk.length),
+          afterFirst
+        );
+
+        operation.cancel();
+        expect(() => operation.acknowledge(first.sequence, first.chunk.length)).not.toThrow();
+        await withTimeout(operation.completion, "invalid acknowledgement cleanup");
+      } finally {
+        operation.cancel();
+        operation.close();
+        await withTimeout(operation.completion, "acknowledgement test cleanup");
+      }
+    });
+  }, 30000);
+
   it("bounds transform output without changing the transform read bridge", async () => {
     await runWithEngine(async (handle) => {
       const expected = patternedBytes();
       const received: Buffer[] = [];
-      const pending: Buffer[] = [];
+      const pending: PendingChunk[] = [];
       let offset = 0;
       let operation!: NativeStreamingOperation;
       let operationId!: number;
@@ -322,10 +464,13 @@ describe.sequential("native Node output flow control", () => {
           offset += chunk.length;
           return chunk;
         },
-        (chunk) => {
+        (chunk, sequence) => {
           received.push(chunk);
-          pending.push(chunk);
-          if (received.length === 1) operation.acknowledge(pending.shift()!.length);
+          pending.push({ chunk, sequence });
+          if (received.length === 1) {
+            const first = pending.shift()!;
+            operation.acknowledge(first.sequence, first.chunk.length);
+          }
         }
       );
       operationId = addon.__test_outputOperationId(operation);
@@ -424,4 +569,43 @@ describe.sequential("native Node output flow control", () => {
       await withTimeout(anchor.cleanup(), "cleanup test anchor cleanup");
     }
   }, 30000);
+
+  it.each([
+    {
+      name: "streaming",
+      start: (handle: number) => addon.runScriptStreamingEngine(
+        handle,
+        "%dw 2.0\noutput application/json\n---\n[]",
+        "{}",
+        () => {}
+      ),
+    },
+    {
+      name: "transform",
+      start: (handle: number) => addon.runScriptTransformEngine(
+        handle,
+        "%dw 2.0\noutput application/json\n---\npayload",
+        "{}",
+        "payload",
+        "application/json",
+        "UTF-8",
+        () => null,
+        () => {}
+      ),
+    },
+  ])("settles $name completion when the normal terminal resolution fails", async ({ start }) => {
+    await runWithEngine(async (handle) => {
+      addon.__test_failNextOutputSettlement();
+      const operation = start(handle);
+
+      try {
+        await expect(
+          withTimeout(operation.completion, "fault-injected terminal settlement")
+        ).resolves.toContain("Failed to settle native output completion");
+      } finally {
+        operation.cancel();
+        operation.close();
+      }
+    });
+  });
 });

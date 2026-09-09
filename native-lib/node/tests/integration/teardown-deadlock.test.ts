@@ -98,11 +98,8 @@ describe("re-init during pending teardown (W-23692110, round 5 P1)", () => {
 
       testAddon.__test_releaseAsyncOp();
       gateReleased = true;
-      let outerResult = await firstNext;
-      while (!outerResult.done) {
-        outerResult = await outer.next();
-      }
-      expect(outerResult.value.success).toBe(true);
+      await firstNext;
+      await expect(outer.next()).resolves.toEqual({ done: true, value: undefined });
       await cleanupPromise;
     } finally {
       if (gateArmed && !gateReleased) testAddon.__test_releaseAsyncOp();

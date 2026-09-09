@@ -35,21 +35,76 @@ function operation(completion: Promise<string>): NativeStreamingOperation {
   };
 }
 
+function deliver(
+  callback: (chunk: Buffer, sequence: bigint) => void,
+  chunk: Buffer,
+  sequence: bigint
+): void {
+  callback(chunk, sequence);
+}
+
 describe("streamFromNative", () => {
+  it("preserves opaque sequence identity until dequeue while yielding only Buffer", async () => {
+    const completion = deferred<string>();
+    const nativeOperation = operation(completion.promise);
+    let push!: (chunk: Buffer, sequence: bigint) => void;
+    const gen = streamFromNative((callback) => {
+      push = callback as unknown as typeof push;
+      return nativeOperation;
+    });
+
+    const pending = gen.next();
+    push(Buffer.from("same"), 9007199254740993n);
+    expect(nativeOperation.acknowledge).not.toHaveBeenCalled();
+
+    const first = await pending;
+    expect(first).toEqual({ done: false, value: Buffer.from("same") });
+    expect(Buffer.isBuffer(first.value)).toBe(true);
+    expect(nativeOperation.acknowledge).toHaveBeenCalledExactlyOnceWith(
+      9007199254740993n,
+      4
+    );
+
+    completion.resolve(okMeta());
+    await gen.next();
+  });
+
+  it("returns each abandoned callback's exact sequence and bytes once", async () => {
+    const completion = deferred<string>();
+    const nativeOperation = operation(completion.promise);
+    nativeOperation.cancel = vi.fn(() => completion.resolve(okMeta()));
+    const gen = streamFromNative((callback) => {
+      deliver(callback, Buffer.from("x"), 41n);
+      deliver(callback, Buffer.from("x"), 42n);
+      deliver(callback, Buffer.from("yy"), 43n);
+      return nativeOperation;
+    });
+
+    const first = await gen.next();
+    expect(first.value).toEqual(Buffer.from("x"));
+    await gen.return(undefined);
+
+    expect(nativeOperation.acknowledge.mock.calls).toEqual([
+      [41n, 1],
+      [42n, 1],
+      [43n, 2],
+    ]);
+  });
+
   it("yields chunks pushed before completion, in order", async () => {
     const nativeOperation = operation(Promise.resolve(okMeta()));
     const { chunks, result } = await collect(
       streamFromNative((cb) => {
-        cb(Buffer.from("a"));
-        cb(Buffer.from("b"));
-        cb(Buffer.from("c"));
+        deliver(cb, Buffer.from("a"), 1n);
+        deliver(cb, Buffer.from("b"), 2n);
+        deliver(cb, Buffer.from("c"), 3n);
         return nativeOperation;
       })
     );
     expect(chunks.map((c) => c.toString())).toEqual(["a", "b", "c"]);
-    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(1, 1);
-    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 1);
-    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(3, 1);
+    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(1, 1n, 1);
+    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 2n, 1);
+    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(3, 3n, 1);
     expect(result.success).toBe(true);
     expect(result.mimeType).toBe("application/json");
     expect(nativeOperation.cancel).not.toHaveBeenCalled();
@@ -85,7 +140,7 @@ describe("streamFromNative", () => {
   it("parks the consumer until a chunk arrives, then wakes it", async () => {
     const meta = deferred<string>();
     const nativeOperation = operation(meta.promise);
-    let push!: (chunk: Buffer) => void;
+    let push!: (chunk: Buffer, sequence: bigint) => void;
     const gen = streamFromNative((cb) => {
       push = cb;
       return nativeOperation;
@@ -94,14 +149,14 @@ describe("streamFromNative", () => {
     // First pull starts the generator and parks — no chunk is ready yet.
     const pending = gen.next();
     // Producing a chunk should wake the parked consumer.
-    push(Buffer.from("late"));
+    push(Buffer.from("late"), 1n);
     // Callback enqueue alone does not return native credit.
     expect(nativeOperation.acknowledge).not.toHaveBeenCalled();
     const first = await pending;
     expect(first.done).toBe(false);
     expect(first.value!.toString()).toBe("late");
     expect(nativeOperation.acknowledge).toHaveBeenCalledTimes(1);
-    expect(nativeOperation.acknowledge).toHaveBeenCalledWith(4);
+    expect(nativeOperation.acknowledge).toHaveBeenCalledWith(1n, 4);
 
     // Completing the stream ends the generator with the parsed metadata.
     meta.resolve(okMeta({ mimeType: "text/plain" }));
@@ -143,21 +198,21 @@ describe("streamFromNative", () => {
     const { chunks, result } = await collect(
       streamFromNative((cb) => {
         // Chunks buffered but not yet consumed when the native call resolves.
-        cb(Buffer.from("x"));
-        cb(Buffer.from("yy"));
+        deliver(cb, Buffer.from("x"), 1n);
+        deliver(cb, Buffer.from("yy"), 2n);
         return nativeOperation;
       })
     );
     expect(chunks.map((c) => c.toString())).toEqual(["x", "yy"]);
-    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(1, 1);
-    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 2);
+    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(1, 1n, 1);
+    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 2n, 2);
     expect(nativeOperation.acknowledge).toHaveBeenCalledTimes(2);
     expect(result.success).toBe(true);
   });
 
   it("acknowledges a late callback after completion and close", async () => {
     const nativeOperation = operation(Promise.resolve(okMeta()));
-    let push!: (chunk: Buffer) => void;
+    let push!: (chunk: Buffer, sequence: bigint) => void;
     const gen = streamFromNative((cb) => {
       push = cb;
       return nativeOperation;
@@ -166,9 +221,9 @@ describe("streamFromNative", () => {
     await collect(gen);
     expect(nativeOperation.close).toHaveBeenCalledTimes(1);
 
-    push(Buffer.from("late"));
+    push(Buffer.from("late"), 1n);
     expect(nativeOperation.acknowledge).toHaveBeenCalledTimes(1);
-    expect(nativeOperation.acknowledge).toHaveBeenCalledWith(4);
+    expect(nativeOperation.acknowledge).toHaveBeenCalledWith(1n, 4);
   });
 
   it("propagates a failure envelope as the terminal result", async () => {
@@ -210,8 +265,8 @@ describe("streamFromNative", () => {
   it("drains buffered chunks, then throws, when start() rejects after pushing chunks", async () => {
     const nativeOperation = operation(Promise.reject(new Error("late boom")));
     const gen = streamFromNative((cb) => {
-      cb(Buffer.from("x"));
-      cb(Buffer.from("yy"));
+      deliver(cb, Buffer.from("x"), 1n);
+      deliver(cb, Buffer.from("yy"), 2n);
       return nativeOperation;
     });
 
@@ -219,8 +274,8 @@ describe("streamFromNative", () => {
     const a = await gen.next();
     const b = await gen.next();
     expect([a.value?.toString(), b.value?.toString()]).toEqual(["x", "yy"]);
-    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(1, 1);
-    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 2);
+    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(1, 1n, 1);
+    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 2n, 2);
 
     // ...then the drained generator surfaces the start error.
     await expect(gen.next()).rejects.toThrow("late boom");
@@ -278,7 +333,7 @@ describe("streamFromNative", () => {
     const nativeOperation = operation(new Promise<string>(() => {}));
     nativeOperation.cancel = vi.fn(() => { throw thrown; });
     const gen = streamFromNative((cb) => {
-      cb(Buffer.from("x"));
+      deliver(cb, Buffer.from("x"), 1n);
       return nativeOperation;
     });
 
@@ -338,17 +393,17 @@ describe("streamFromNative", () => {
     const completion = deferred<string>();
     const nativeOperation = operation(completion.promise);
     const gen = streamFromNative((cb) => {
-      cb(Buffer.from("x"));
-      cb(Buffer.from("yy"));
+      deliver(cb, Buffer.from("x"), 1n);
+      deliver(cb, Buffer.from("yy"), 2n);
       return nativeOperation;
     });
 
     const first = await gen.next();
     expect(first.value?.toString()).toBe("x");
-    expect(nativeOperation.acknowledge).toHaveBeenCalledWith(1);
+    expect(nativeOperation.acknowledge).toHaveBeenCalledWith(1n, 1);
 
     await expect(gen.return(undefined)).resolves.toEqual({ done: true, value: undefined });
-    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 2);
+    expect(nativeOperation.acknowledge).toHaveBeenNthCalledWith(2, 2n, 2);
     expect(nativeOperation.acknowledge).toHaveBeenCalledTimes(2);
     expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
     expect(nativeOperation.close).toHaveBeenCalledTimes(1);
@@ -359,7 +414,7 @@ describe("streamFromNative", () => {
     const nativeOperation = operation(completion.promise);
     nativeOperation.cancel = vi.fn(() => completion.resolve(okMeta()));
     const gen = streamFromNative((cb) => {
-      cb(Buffer.from("x"));
+      deliver(cb, Buffer.from("x"), 1n);
       return nativeOperation;
     });
 
@@ -377,7 +432,7 @@ describe("streamFromNative", () => {
     const nativeOperation = operation(completion.promise);
     const gen = streamFromNative(
       (cb) => {
-        cb(Buffer.from("x"));
+        deliver(cb, Buffer.from("x"), 1n);
         return nativeOperation;
       },
       (managedOperation) => managedOperation.cancel()
@@ -387,7 +442,7 @@ describe("streamFromNative", () => {
     completion.resolve(okMeta());
     await expect(pending).resolves.toEqual({ done: true, value: undefined });
 
-    expect(nativeOperation.acknowledge).toHaveBeenCalledWith(1);
+    expect(nativeOperation.acknowledge).toHaveBeenCalledWith(1n, 1);
     expect(nativeOperation.cancel).toHaveBeenCalledTimes(1);
     expect(nativeOperation.close).toHaveBeenCalledTimes(1);
   });
@@ -396,7 +451,7 @@ describe("streamFromNative", () => {
     const completion = deferred<string>();
     const nativeOperation = operation(completion.promise);
     const gen = streamFromNative((cb) => {
-      cb(Buffer.from("x"));
+      deliver(cb, Buffer.from("x"), 1n);
       return nativeOperation;
     });
 
@@ -415,7 +470,7 @@ describe("streamFromNative", () => {
       throw new Error("cancel boom");
     });
     const gen = streamFromNative((cb) => {
-      cb(Buffer.from("x"));
+      deliver(cb, Buffer.from("x"), 1n);
       return nativeOperation;
     });
 
@@ -432,7 +487,7 @@ describe("streamFromNative", () => {
       .mockImplementationOnce(() => { throw undefined; })
       .mockImplementationOnce(() => { throw null; });
     const gen = streamFromNative((cb) => {
-      cb(Buffer.from("x"));
+      deliver(cb, Buffer.from("x"), 1n);
       return nativeOperation;
     });
 
@@ -453,7 +508,7 @@ describe("streamFromNative", () => {
     nativeOperation.cancel = vi.fn(() => completion.resolve(okMeta()));
     nativeOperation.close = vi.fn(() => { throw new Error("close boom"); });
     const gen = streamFromNative((cb) => {
-      cb(Buffer.from("x"));
+      deliver(cb, Buffer.from("x"), 1n);
       return nativeOperation;
     });
 
@@ -471,8 +526,8 @@ describe("streamFromNative", () => {
         throw new Error("ack boom");
       });
     const gen = streamFromNative((cb) => {
-      cb(Buffer.from("x"));
-      cb(Buffer.from("y"));
+      deliver(cb, Buffer.from("x"), 1n);
+      deliver(cb, Buffer.from("y"), 2n);
       return nativeOperation;
     });
 
@@ -491,7 +546,7 @@ describe("streamFromNative", () => {
     });
     nativeOperation.cancel = vi.fn(() => completion.resolve(okMeta()));
     let managedOperation!: NativeStreamingOperation;
-    let push!: (chunk: Buffer) => void;
+    let push!: (chunk: Buffer, sequence: bigint) => void;
     const gen = streamFromNative(
       (cb) => {
         push = cb;
@@ -501,7 +556,7 @@ describe("streamFromNative", () => {
     );
     const firstPull = gen.next();
     await vi.waitFor(() => expect(managedOperation).toBeDefined());
-    push(Buffer.from("x"));
+    push(Buffer.from("x"), 1n);
 
     expect(() => managedOperation.cancel()).toThrow("ack boom");
 
@@ -580,7 +635,7 @@ describe("streamFromNative", () => {
     nativeOperation.cancel = vi.fn(() => completion.resolve(okMeta()));
     nativeOperation.close = vi.fn(() => { throw new Error("close boom"); });
     const gen = streamFromNative((cb) => {
-      cb(Buffer.from("x"));
+      deliver(cb, Buffer.from("x"), 1n);
       return nativeOperation;
     });
 

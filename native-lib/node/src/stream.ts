@@ -1,12 +1,17 @@
 import { parseStreamingResult } from "./result";
-import type { NativeStreamingOperation } from "./ffi";
+import type { NativeChunkCallback, NativeStreamingOperation } from "./ffi";
 import type { StreamingResult } from "./types";
 
 /**
  * Starts a native streaming call, wiring its chunk callback to `chunkCb` and
  * returning its controller once native admission succeeds.
  */
-export type StartStreaming = (chunkCb: (chunk: Buffer) => void) => NativeStreamingOperation;
+export type StartStreaming = (chunkCb: NativeChunkCallback) => NativeStreamingOperation;
+
+interface NativeChunk {
+  readonly chunk: Buffer;
+  readonly sequence: bigint;
+}
 
 interface InterruptibleAsyncGenerator<Y, R, N> extends AsyncGenerator<Y, R, N> {
   readonly parked: Promise<boolean>;
@@ -50,7 +55,7 @@ export function streamFromNative(
   onStart?: (operation: NativeStreamingOperation) => void,
   onClose?: (operation: NativeStreamingOperation) => void
 ): AsyncGenerator<Buffer, StreamingResult, undefined> {
-  const chunks: Buffer[] = [];
+  const chunks: NativeChunk[] = [];
   const pendingResolves: Array<() => void> = [];
   let operation: NativeStreamingOperation | undefined;
   let nativeSettled = false;
@@ -80,7 +85,8 @@ export function streamFromNative(
 
   const acknowledgeBufferedChunks = () => {
     while (chunks.length > 0) {
-      operation!.acknowledge(chunks.shift()!.length);
+      const { chunk, sequence } = chunks.shift()!;
+      operation!.acknowledge(sequence, chunk.length);
     }
   };
 
@@ -128,17 +134,17 @@ export function streamFromNative(
     if (lifecycleError.hasError) throw lifecycleError.error;
   };
 
-  const chunkCb = (chunk: Buffer) => {
+  const chunkCb: NativeChunkCallback = (chunk, sequence) => {
     if (finalized || cancellationRequested) {
       try {
-        operation?.acknowledge(chunk.length);
+        operation?.acknowledge(sequence, chunk.length);
       } catch {
         // No consumer remains to observe a late callback failure. Ownership is
         // retained unless close succeeds, so DataWeave cleanup can still retry.
       }
       return;
     }
-    chunks.push(chunk);
+    chunks.push({ chunk, sequence });
     pendingResolves.shift()?.();
   };
 
@@ -165,7 +171,7 @@ export function streamFromNative(
       const startedOperation = nativeOperation;
       operation = {
         completion: startedOperation.completion,
-        acknowledge: (bytes) => startedOperation.acknowledge(bytes),
+        acknowledge: (sequence, bytes) => startedOperation.acknowledge(sequence, bytes),
         cancel,
         close,
       };
@@ -189,8 +195,8 @@ export function streamFromNative(
 
       while (true) {
         if (!cancellationRequested && chunks.length > 0) {
-          const chunk = chunks.shift()!;
-          operation.acknowledge(chunk.length);
+          const { chunk, sequence } = chunks.shift()!;
+          operation.acknowledge(sequence, chunk.length);
           yield chunk;
           continue;
         }

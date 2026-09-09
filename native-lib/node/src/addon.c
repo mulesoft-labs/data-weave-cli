@@ -199,6 +199,7 @@ static long long g_test_resolver_ref_deletes = 0;
 static bool g_test_hold_next_async_op = false;
 static bool g_test_async_op_held = false;
 static bool g_test_release_async_op = false;
+static bool g_test_fail_next_output_settlement = false;
 
 // One record per napi_env that has ever taken an init reference (via
 // initialize()). init_refs is that env's net initialize()-minus-cleanup()
@@ -1201,6 +1202,9 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
 
 typedef struct output_credit {
   size_t bytes;
+  uint64_t sequence;
+  bool delivered;
+  bool acknowledged;
   struct output_credit* previous;
   struct output_credit* next;
 } output_credit_t;
@@ -1218,6 +1222,7 @@ typedef struct output_flow {
   bool done;
   unsigned int refs;
   uint64_t operation_id;
+  uint64_t next_sequence;
   output_credit_t* credit_head;
   output_credit_t* credit_tail;
   napi_ref thenable_ref;
@@ -1324,7 +1329,8 @@ static void output_flow_release(output_flow_t* flow) {
 }
 
 // Only the native producer waits here. No caller holds g_mutex while waiting.
-static bool output_flow_reserve(output_flow_t* flow, size_t bytes) {
+static bool output_flow_reserve(
+    output_flow_t* flow, size_t bytes, uint64_t* sequence_out) {
   if (flow == NULL) return false;
   output_credit_t* credit = (output_credit_t*)calloc(1, sizeof(output_credit_t));
   if (credit == NULL) return false;
@@ -1370,6 +1376,7 @@ static bool output_flow_reserve(output_flow_t* flow, size_t bytes) {
   // wait, which drains prior credit; ordinary reservations are already bounded.
   flow->outstanding_bytes += bytes;
   flow->outstanding_chunks++;
+  credit->sequence = ++flow->next_sequence;
   credit->previous = flow->credit_tail;
   if (flow->credit_tail != NULL) flow->credit_tail->next = credit;
   else flow->credit_head = credit;
@@ -1382,41 +1389,93 @@ static bool output_flow_reserve(output_flow_t* flow, size_t bytes) {
   }
   if (bytes > flow->largest_chunk_bytes) flow->largest_chunk_bytes = bytes;
   output_flow_record_stats_locked(flow);
+  *sequence_out = credit->sequence;
   uv_mutex_unlock(&flow->mutex);
   return true;
 }
 
-static void output_flow_acknowledge(output_flow_t* flow, size_t bytes) {
-  if (flow == NULL) return;
+typedef enum {
+  OUTPUT_ACK_IGNORED = 0,
+  OUTPUT_ACK_ACCEPTED,
+  OUTPUT_ACK_INVALID_SEQUENCE,
+  OUTPUT_ACK_NOT_DELIVERED,
+  OUTPUT_ACK_OUT_OF_ORDER,
+  OUTPUT_ACK_BYTES_MISMATCH,
+  OUTPUT_ACK_DUPLICATE,
+} output_ack_result_t;
+
+static output_ack_result_t output_flow_acknowledge(
+    output_flow_t* flow, uint64_t sequence, size_t bytes) {
+  if (flow == NULL) return OUTPUT_ACK_IGNORED;
   uv_mutex_lock(&flow->mutex);
+  if (flow->cancelled) {
+    output_flow_record_stats_locked(flow);
+    uv_mutex_unlock(&flow->mutex);
+    return OUTPUT_ACK_IGNORED;
+  }
+
   output_credit_t* credit = flow->credit_head;
-  // Task 8 acknowledges each dequeued chunk exactly once in FIFO order. A
-  // mismatched byte count is a no-op rather than corrupting the queue.
-  if (!flow->cancelled && credit != NULL && credit->bytes == bytes &&
-      bytes <= flow->outstanding_bytes && flow->outstanding_chunks > 0) {
+  output_credit_t* requested = credit;
+  while (requested != NULL && requested->sequence != sequence) {
+    requested = requested->next;
+  }
+  output_ack_result_t result;
+  if (requested == NULL) {
+    result = flow->done
+      ? OUTPUT_ACK_IGNORED
+      : sequence <= flow->next_sequence
+      ? OUTPUT_ACK_DUPLICATE
+      : OUTPUT_ACK_INVALID_SEQUENCE;
+  } else if (!requested->delivered) {
+    result = OUTPUT_ACK_NOT_DELIVERED;
+  } else if (requested != credit) {
+    result = OUTPUT_ACK_OUT_OF_ORDER;
+  } else if (requested->bytes != bytes) {
+    result = OUTPUT_ACK_BYTES_MISMATCH;
+  } else if (requested->acknowledged) {
+    result = OUTPUT_ACK_DUPLICATE;
+  } else if (bytes <= flow->outstanding_bytes && flow->outstanding_chunks > 0) {
+    requested->acknowledged = true;
     flow->outstanding_bytes -= bytes;
     flow->outstanding_chunks--;
-    flow->credit_head = credit->next;
+    flow->credit_head = requested->next;
     if (flow->credit_head != NULL) flow->credit_head->previous = NULL;
     else flow->credit_tail = NULL;
-    free(credit);
+    free(requested);
     if (flow->paused &&
         flow->outstanding_bytes <= OUTPUT_LOW_BYTES &&
         flow->outstanding_chunks <= OUTPUT_LOW_CHUNKS) {
       uv_cond_broadcast(&flow->cond);
     }
+    result = OUTPUT_ACK_ACCEPTED;
+  } else {
+    result = OUTPUT_ACK_INVALID_SEQUENCE;
   }
   output_flow_record_stats_locked(flow);
   uv_mutex_unlock(&flow->mutex);
+  return result;
+}
+
+static bool output_flow_mark_delivered(output_flow_t* flow, uint64_t sequence) {
+  if (flow == NULL) return false;
+  uv_mutex_lock(&flow->mutex);
+  output_credit_t* credit = flow->credit_head;
+  while (credit != NULL && credit->sequence != sequence) credit = credit->next;
+  bool delivered = !flow->cancelled && !flow->done && credit != NULL;
+  if (delivered) credit->delivered = true;
+  output_flow_record_stats_locked(flow);
+  uv_mutex_unlock(&flow->mutex);
+  return delivered;
 }
 
 // Enqueue/allocation rollback always targets the newest reservation because
 // callbacks reserve and enqueue serially on the sole producer worker.
-static void output_flow_rollback(output_flow_t* flow, size_t bytes) {
+static void output_flow_rollback(
+    output_flow_t* flow, uint64_t sequence, size_t bytes) {
   if (flow == NULL) return;
   uv_mutex_lock(&flow->mutex);
   output_credit_t* credit = flow->credit_tail;
-  if (credit != NULL && credit->bytes == bytes &&
+  if (credit != NULL && credit->sequence == sequence && credit->bytes == bytes &&
       bytes <= flow->outstanding_bytes && flow->outstanding_chunks > 0) {
     flow->outstanding_bytes -= bytes;
     flow->outstanding_chunks--;
@@ -1496,6 +1555,11 @@ typedef struct output_controller {
   uint64_t operation_id;
 } output_controller_t;
 
+static const napi_type_tag OUTPUT_CONTROLLER_TAG = {
+  0x9d29436c7a6848e1ULL,
+  0xa8e6af21e52d879bULL,
+};
+
 static void output_controller_cancel(output_controller_t* holder) {
   if (holder == NULL) return;
   uv_mutex_lock(&holder->mutex);
@@ -1544,6 +1608,12 @@ static output_controller_t* output_controller_unwrap(
     napi_throw_type_error(env, NULL, "Missing output controller argument");
     return NULL;
   }
+  bool tagged = false;
+  if (napi_check_object_type_tag(env, this_arg, &OUTPUT_CONTROLLER_TAG, &tagged) != napi_ok ||
+      !tagged) {
+    napi_throw_type_error(env, NULL, "Invalid output controller receiver");
+    return NULL;
+  }
   output_controller_t* holder = NULL;
   if (napi_unwrap(env, this_arg, (void**)&holder) != napi_ok || holder == NULL) {
     napi_throw_type_error(env, NULL, "Invalid output controller receiver");
@@ -1553,17 +1623,26 @@ static output_controller_t* output_controller_unwrap(
 }
 
 static napi_value napi_output_acknowledge(napi_env env, napi_callback_info info) {
-  napi_value argv[1];
-  output_controller_t* holder = output_controller_unwrap(env, info, 1, argv);
+  napi_value argv[2];
+  output_controller_t* holder = output_controller_unwrap(env, info, 2, argv);
   if (holder == NULL) return NULL;
   napi_valuetype type;
+  uint64_t sequence;
   double value;
-  if (napi_typeof(env, argv[0], &type) != napi_ok || type != napi_number ||
-      napi_get_value_double(env, argv[0], &value) != napi_ok ||
+  bool lossless = false;
+  if (napi_typeof(env, argv[0], &type) != napi_ok || type != napi_bigint ||
+      napi_get_value_bigint_uint64(env, argv[0], &sequence, &lossless) != napi_ok ||
+      !lossless || sequence == 0) {
+    napi_throw_range_error(env, NULL,
+                           "acknowledge(sequence, bytes) requires a positive uint64 BigInt sequence");
+    return NULL;
+  }
+  if (napi_typeof(env, argv[1], &type) != napi_ok || type != napi_number ||
+      napi_get_value_double(env, argv[1], &value) != napi_ok ||
       value != value || value < 0 || value > 9007199254740991.0 ||
       value > (double)SIZE_MAX || value != (double)(size_t)value) {
     napi_throw_range_error(env, NULL,
-                           "acknowledge(bytes) requires a finite non-negative safe integer");
+                           "acknowledge(sequence, bytes) requires finite non-negative safe integer bytes");
     return NULL;
   }
   uv_mutex_lock(&holder->mutex);
@@ -1571,8 +1650,28 @@ static napi_value napi_output_acknowledge(napi_env env, napi_callback_info info)
   if (flow != NULL) output_flow_retain(flow);
   uv_mutex_unlock(&holder->mutex);
   if (flow != NULL) {
-    output_flow_acknowledge(flow, (size_t)value);
+    output_ack_result_t result = output_flow_acknowledge(flow, sequence, (size_t)value);
     output_flow_release(flow);
+    switch (result) {
+      case OUTPUT_ACK_IGNORED:
+      case OUTPUT_ACK_ACCEPTED:
+        return NULL;
+      case OUTPUT_ACK_INVALID_SEQUENCE:
+        napi_throw_range_error(env, NULL, "Unknown output sequence");
+        return NULL;
+      case OUTPUT_ACK_NOT_DELIVERED:
+        napi_throw_error(env, NULL, "Output sequence has not been delivered");
+        return NULL;
+      case OUTPUT_ACK_OUT_OF_ORDER:
+        napi_throw_error(env, NULL, "Output acknowledgement is out of order");
+        return NULL;
+      case OUTPUT_ACK_BYTES_MISMATCH:
+        napi_throw_range_error(env, NULL, "Output acknowledgement byte count does not match");
+        return NULL;
+      case OUTPUT_ACK_DUPLICATE:
+        napi_throw_error(env, NULL, "Output sequence was already acknowledged");
+        return NULL;
+    }
   }
   return NULL;
 }
@@ -1600,6 +1699,22 @@ static napi_value napi_output_promise_method(napi_env env, napi_callback_info in
     napi_throw_type_error(env, NULL, "Invalid output controller promise method");
     return NULL;
   }
+  bool tagged = false;
+  if (napi_check_object_type_tag(env, controller, &OUTPUT_CONTROLLER_TAG, &tagged) != napi_ok ||
+      !tagged) {
+    napi_throw_type_error(env, NULL, "Invalid output controller receiver");
+    return NULL;
+  }
+  const char* name = (const char*)data;
+  napi_value completion;
+  napi_value method;
+  napi_value result;
+  if (napi_get_named_property(env, controller, "completion", &completion) != napi_ok ||
+      napi_get_named_property(env, completion, name, &method) != napi_ok ||
+      napi_call_function(env, completion, method, argc, argv, &result) != napi_ok) {
+    return NULL;
+  }
+
   output_controller_t* holder = NULL;
   if (napi_unwrap(env, controller, (void**)&holder) != napi_ok || holder == NULL) {
     napi_throw_type_error(env, NULL, "Invalid output controller receiver");
@@ -1610,20 +1725,10 @@ static napi_value napi_output_promise_method(napi_env env, napi_callback_info in
   if (flow != NULL) output_flow_retain(flow);
   uv_mutex_unlock(&holder->mutex);
   if (flow != NULL) {
-    // Retain only once a caller actually treats the controller as thenable.
-    // A simply dropped controller still finalizes promptly and cancels.
+    // Retain only after the Promise method call succeeds. Failed assimilation
+    // must not root a controller that no caller can use to close the flow.
     output_flow_retain_thenable(flow, env, controller);
     output_flow_release(flow);
-  }
-
-  const char* name = (const char*)data;
-  napi_value completion;
-  napi_value method;
-  napi_value result;
-  if (napi_get_named_property(env, controller, "completion", &completion) != napi_ok ||
-      napi_get_named_property(env, completion, name, &method) != napi_ok ||
-      napi_call_function(env, completion, method, argc, argv, &result) != napi_ok) {
-    return NULL;
   }
   return result;
 }
@@ -1677,6 +1782,16 @@ static napi_value output_controller_create(
     napi_throw_error(env, NULL, "Failed to wrap output controller");
     return NULL;
   }
+  if (napi_type_tag_object(env, controller, &OUTPUT_CONTROLLER_TAG) != napi_ok) {
+    void* removed = NULL;
+    napi_remove_wrap(env, controller, &removed);
+    output_controller_cancel(holder);
+    output_controller_close(holder);
+    uv_mutex_destroy(&holder->mutex);
+    free(holder);
+    napi_throw_error(env, NULL, "Failed to tag output controller");
+    return NULL;
+  }
   return controller;
 }
 
@@ -1686,6 +1801,44 @@ static napi_value output_controller_create(
 // must first check `buf != OOM_JSON` -- freeing a static pointer is UB. The
 // wording matches the existing terse worker error style ("Empty response").
 static const char OOM_JSON[] = "{\"success\":false,\"error\":\"Out of memory\"}";
+static const char SETTLEMENT_ERROR_JSON[] =
+  "{\"success\":false,\"error\":\"Failed to settle native output completion\"}";
+
+static bool test_consume_output_settlement_fault(void) {
+  if (!g_test_hooks) return false;
+  uv_mutex_lock(&g_test_output_mutex);
+  bool fail = g_test_fail_next_output_settlement;
+  g_test_fail_next_output_settlement = false;
+  uv_mutex_unlock(&g_test_output_mutex);
+  return fail;
+}
+
+static void settle_output_deferred(
+    napi_env env, napi_deferred deferred, const char* result_json) {
+  napi_value result;
+  napi_status status = napi_create_string_utf8(
+    env, result_json, strlen(result_json), &result
+  );
+  if (status == napi_ok) {
+    status = test_consume_output_settlement_fault()
+      ? napi_generic_failure
+      : napi_resolve_deferred(env, deferred, result);
+  }
+  if (status == napi_ok) return;
+
+  napi_value fallback;
+  if (napi_create_string_utf8(
+          env, SETTLEMENT_ERROR_JSON, NAPI_AUTO_LENGTH, &fallback) == napi_ok) {
+    if (napi_resolve_deferred(env, deferred, fallback) == napi_ok) return;
+  }
+
+  // napi_get_undefined does not allocate. If string creation itself failed
+  // under memory pressure, still make a final allocation-free settlement
+  // attempt rather than leaving the operation permanently pending.
+  if (napi_get_undefined(env, &fallback) == napi_ok) {
+    napi_resolve_deferred(env, deferred, fallback);
+  }
+}
 
 // chunk_data with len == -1 is a sentinel indicating completion (buf holds meta JSON)
 struct chunk_data {
@@ -1693,6 +1846,7 @@ struct chunk_data {
   int len;
   output_flow_t* flow;
   size_t accounted_bytes;
+  uint64_t sequence;
 };
 
 struct streaming_work {
@@ -1720,7 +1874,9 @@ struct streaming_work {
 static void output_chunk_release(struct chunk_data* chunk, bool rollback) {
   if (chunk == NULL) return;
   if (chunk->flow != NULL) {
-    if (rollback) output_flow_rollback(chunk->flow, chunk->accounted_bytes);
+    if (rollback) {
+      output_flow_rollback(chunk->flow, chunk->sequence, chunk->accounted_bytes);
+    }
     output_flow_release(chunk->flow);
   }
   free(chunk->buf);
@@ -1743,12 +1899,7 @@ static void call_js_write(napi_env env, napi_value js_callback, void* context, v
     // would leak `w` and could strand a bridge marked for deferred destruction
     // indefinitely.
     if (env != NULL) {
-      napi_value result;
-      if (napi_create_string_utf8(env, chunk->buf, strlen(chunk->buf), &result) == napi_ok) {
-        napi_resolve_deferred(env, w->deferred, result);
-      } else {
-        output_flow_cancel(w->flow);
-      }
+      settle_output_deferred(env, w->deferred, chunk->buf);
     }
 
     output_flow_mark_done(w->flow, env);
@@ -1786,16 +1937,25 @@ static void call_js_write(napi_env env, napi_value js_callback, void* context, v
   }
 
   napi_value buffer;
+  napi_value sequence;
   void* buf_data;
   napi_status status = napi_create_buffer_copy(
     env, chunk->len, chunk->buf, &buf_data, &buffer
   );
   if (status == napi_ok) {
+    status = napi_create_bigint_uint64(env, chunk->sequence, &sequence);
+  }
+  if (status == napi_ok) {
     napi_value global;
     status = napi_get_global(env, &global);
     if (status == napi_ok) {
+      if (!output_flow_mark_delivered(chunk->flow, chunk->sequence)) {
+        output_chunk_release(chunk, /*rollback=*/false);
+        return;
+      }
       native_callback_enter();
-      status = napi_call_function(env, global, js_callback, 1, &buffer, NULL);
+      napi_value argv[2] = {buffer, sequence};
+      status = napi_call_function(env, global, js_callback, 2, argv, NULL);
       native_callback_exit();
     }
   }
@@ -1812,21 +1972,22 @@ static void call_js_write(napi_env env, napi_value js_callback, void* context, v
 static int streaming_write_cb(void* ctx, const char* buf, int len) {
   struct streaming_work* w = (struct streaming_work*)ctx;
   if (len < 0 || output_flow_is_cancelled(w->flow)) return -1;
-  if (!output_flow_reserve(w->flow, (size_t)len)) return -1;
+  uint64_t sequence;
+  if (!output_flow_reserve(w->flow, (size_t)len, &sequence)) return -1;
   // Round-9 (#2): OOM here must not deref NULL / memcpy into NULL. Returning -1
   // aborts the native run cleanly (write-callback contract: non-zero stops the
   // DataWeave run); the worker then still produces a terminal meta_result and
   // sentinel, so the op resolves.
   struct chunk_data* chunk = malloc(sizeof(struct chunk_data));
   if (chunk == NULL) {
-    output_flow_rollback(w->flow, (size_t)len);
+    output_flow_rollback(w->flow, sequence, (size_t)len);
     output_flow_cancel(w->flow);
     return -1;
   }
   chunk->buf = len == 0 ? NULL : malloc((size_t)len);
   if (len > 0 && chunk->buf == NULL) {
     free(chunk);
-    output_flow_rollback(w->flow, (size_t)len);
+    output_flow_rollback(w->flow, sequence, (size_t)len);
     output_flow_cancel(w->flow);
     return -1;
   }
@@ -1834,6 +1995,7 @@ static int streaming_write_cb(void* ctx, const char* buf, int len) {
   chunk->len = len;
   chunk->flow = w->flow;
   chunk->accounted_bytes = (size_t)len;
+  chunk->sequence = sequence;
   output_flow_retain(w->flow);
 
   napi_status status = napi_call_threadsafe_function(
@@ -1916,6 +2078,7 @@ static void streaming_thread_fn(void* arg) {
   sentinel->len = -1;
   sentinel->flow = NULL;
   sentinel->accounted_bytes = 0;
+  sentinel->sequence = 0;
   napi_status enq = napi_call_threadsafe_function(w->tsfn, sentinel, napi_tsfn_blocking);
   if (enq != napi_ok) {
     // The env is tearing down (napi_closing): the sentinel was dropped and
@@ -2162,9 +2325,10 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
     bridge_end_op(w->bridge, /*env_still_alive=*/true);
     napi_release_threadsafe_function(w->tsfn, napi_tsfn_release);
 
-    napi_value result;
-    napi_create_string_utf8(env, "{\"success\":false,\"error\":\"Failed to spawn streaming worker thread\"}", NAPI_AUTO_LENGTH, &result);
-    napi_resolve_deferred(env, w->deferred, result);
+    settle_output_deferred(
+      env, w->deferred,
+      "{\"success\":false,\"error\":\"Failed to spawn streaming worker thread\"}"
+    );
 
     free(w->sentinel);
     free(w->script);
@@ -2328,19 +2492,20 @@ static int transform_read_cb(void* ctx, char* buf, int buf_size) {
 static int transform_write_cb(void* ctx, const char* buf, int len) {
   struct transform_work* w = (struct transform_work*)ctx;
   if (len < 0 || output_flow_is_cancelled(w->flow)) return -1;
-  if (!output_flow_reserve(w->flow, (size_t)len)) return -1;
+  uint64_t sequence;
+  if (!output_flow_reserve(w->flow, (size_t)len, &sequence)) return -1;
   // Round-9 (#2): OOM-safe, mirrors streaming_write_cb. Return -1 to abort the
   // native run cleanly; the worker still delivers a terminal sentinel.
   struct chunk_data* chunk = malloc(sizeof(struct chunk_data));
   if (chunk == NULL) {
-    output_flow_rollback(w->flow, (size_t)len);
+    output_flow_rollback(w->flow, sequence, (size_t)len);
     output_flow_cancel(w->flow);
     return -1;
   }
   chunk->buf = len == 0 ? NULL : malloc((size_t)len);
   if (len > 0 && chunk->buf == NULL) {
     free(chunk);
-    output_flow_rollback(w->flow, (size_t)len);
+    output_flow_rollback(w->flow, sequence, (size_t)len);
     output_flow_cancel(w->flow);
     return -1;
   }
@@ -2348,6 +2513,7 @@ static int transform_write_cb(void* ctx, const char* buf, int len) {
   chunk->len = len;
   chunk->flow = w->flow;
   chunk->accounted_bytes = (size_t)len;
+  chunk->sequence = sequence;
   output_flow_retain(w->flow);
 
   napi_status status = napi_call_threadsafe_function(
@@ -2377,12 +2543,7 @@ static void call_js_transform_write(napi_env env, napi_value js_callback, void* 
     // would leak `w` and could strand a bridge marked for deferred destruction
     // indefinitely.
     if (env != NULL) {
-      napi_value result;
-      if (napi_create_string_utf8(env, chunk->buf, strlen(chunk->buf), &result) == napi_ok) {
-        napi_resolve_deferred(env, w->deferred, result);
-      } else {
-        output_flow_cancel(w->flow);
-      }
+      settle_output_deferred(env, w->deferred, chunk->buf);
     }
 
     output_flow_mark_done(w->flow, env);
@@ -2424,16 +2585,25 @@ static void call_js_transform_write(napi_env env, napi_value js_callback, void* 
   }
 
   napi_value buffer;
+  napi_value sequence;
   void* buf_data;
   napi_status status = napi_create_buffer_copy(
     env, chunk->len, chunk->buf, &buf_data, &buffer
   );
   if (status == napi_ok) {
+    status = napi_create_bigint_uint64(env, chunk->sequence, &sequence);
+  }
+  if (status == napi_ok) {
     napi_value global;
     status = napi_get_global(env, &global);
     if (status == napi_ok) {
+      if (!output_flow_mark_delivered(chunk->flow, chunk->sequence)) {
+        output_chunk_release(chunk, /*rollback=*/false);
+        return;
+      }
       native_callback_enter();
-      status = napi_call_function(env, global, js_callback, 1, &buffer, NULL);
+      napi_value argv[2] = {buffer, sequence};
+      status = napi_call_function(env, global, js_callback, 2, argv, NULL);
       native_callback_exit();
     }
   }
@@ -2514,6 +2684,7 @@ static void transform_thread_fn(void* arg) {
   sentinel->len = -1;
   sentinel->flow = NULL;
   sentinel->accounted_bytes = 0;
+  sentinel->sequence = 0;
   napi_status enq = napi_call_threadsafe_function(w->write_tsfn, sentinel, napi_tsfn_blocking);
   if (enq != napi_ok) {
     // See streaming_thread_fn: env tearing down, sentinel dropped, finalize
@@ -2792,9 +2963,10 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
     napi_release_threadsafe_function(w->read_tsfn, napi_tsfn_release);
     napi_release_threadsafe_function(w->write_tsfn, napi_tsfn_release);
 
-    napi_value result;
-    napi_create_string_utf8(env, "{\"success\":false,\"error\":\"Failed to spawn transform worker thread\"}", NAPI_AUTO_LENGTH, &result);
-    napi_resolve_deferred(env, w->deferred, result);
+    settle_output_deferred(
+      env, w->deferred,
+      "{\"success\":false,\"error\":\"Failed to spawn transform worker thread\"}"
+    );
 
     free(w->sentinel);
     free(w->script);
@@ -4169,6 +4341,45 @@ static napi_value napi_test_release_async_op(napi_env env, napi_callback_info in
   return NULL;
 }
 
+typedef struct foreign_wrapped_value {
+  uint64_t marker;
+} foreign_wrapped_value_t;
+
+static void foreign_wrapped_finalize(napi_env env, void* data, void* hint) {
+  (void)env;
+  (void)hint;
+  free(data);
+}
+
+static napi_value napi_test_create_foreign_wrapped_object(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  foreign_wrapped_value_t* value = calloc(1, sizeof(foreign_wrapped_value_t));
+  if (value == NULL) {
+    napi_throw_error(env, NULL, "OOM");
+    return NULL;
+  }
+  value->marker = 424242;
+  napi_value object;
+  if (napi_create_object(env, &object) != napi_ok ||
+      napi_wrap(env, object, value, foreign_wrapped_finalize, NULL, NULL) != napi_ok) {
+    free(value);
+    napi_throw_error(env, NULL, "Failed to create foreign wrapped object");
+    return NULL;
+  }
+  return object;
+}
+
+static napi_value napi_test_fail_next_output_settlement(
+    napi_env env, napi_callback_info info) {
+  (void)env;
+  (void)info;
+  uv_mutex_lock(&g_test_output_mutex);
+  g_test_fail_next_output_settlement = true;
+  uv_mutex_unlock(&g_test_output_mutex);
+  return NULL;
+}
+
 static void set_named_size(napi_env env, napi_value object, const char* name, size_t value) {
   napi_value out;
   napi_create_double(env, (double)value, &out);
@@ -4234,6 +4445,12 @@ static napi_value napi_test_output_operation_id(napi_env env, napi_callback_info
   napi_value argv[1];
   if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 1) {
     napi_throw_type_error(env, NULL, "An output controller is required");
+    return NULL;
+  }
+  bool tagged = false;
+  if (napi_check_object_type_tag(env, argv[0], &OUTPUT_CONTROLLER_TAG, &tagged) != napi_ok ||
+      !tagged) {
+    napi_throw_type_error(env, NULL, "Invalid output controller");
     return NULL;
   }
   output_controller_t* holder = NULL;
@@ -4307,6 +4524,10 @@ static napi_value Init(napi_env env, napi_value exports) {
     napi_set_named_property(env, exports, "__test_outputStats", fn);
     napi_create_function(env, "__test_outputOperationId", NAPI_AUTO_LENGTH, napi_test_output_operation_id, NULL, &fn);
     napi_set_named_property(env, exports, "__test_outputOperationId", fn);
+    napi_create_function(env, "__test_createForeignWrappedObject", NAPI_AUTO_LENGTH, napi_test_create_foreign_wrapped_object, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_createForeignWrappedObject", fn);
+    napi_create_function(env, "__test_failNextOutputSettlement", NAPI_AUTO_LENGTH, napi_test_fail_next_output_settlement, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_failNextOutputSettlement", fn);
   }
 
   return exports;

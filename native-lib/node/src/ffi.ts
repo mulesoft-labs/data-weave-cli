@@ -4,10 +4,12 @@ import type { ModuleResolver } from "./resolver";
 
 export interface NativeStreamingOperation {
   readonly completion: Promise<string>;
-  acknowledge(bytes: number): void;
+  acknowledge(sequence: bigint, bytes: number): void;
   cancel(): void;
   close(): void;
 }
+
+export type NativeChunkCallback = (chunk: Buffer, sequence: bigint) => void;
 
 interface NativeAddon {
   initialize(libPath: string): void;
@@ -19,7 +21,7 @@ interface NativeAddon {
     handle: number,
     script: string,
     inputsJson: string,
-    chunkCb: (chunk: Buffer) => void
+    chunkCb: NativeChunkCallback
   ): NativeStreamingOperation;
   runScriptTransformEngine(
     handle: number,
@@ -29,7 +31,7 @@ interface NativeAddon {
     inputMimeType: string,
     inputCharset: string | null,
     readCb: (bufSize: number) => Buffer | null,
-    writeCb: (chunk: Buffer) => void
+    writeCb: NativeChunkCallback
   ): NativeStreamingOperation;
   cleanup(): Promise<void>;
 }
@@ -84,7 +86,7 @@ export function runScriptStreamingEngine(
   handle: number,
   script: string,
   inputsJson: string,
-  chunkCb: (chunk: Buffer) => void
+  chunkCb: NativeChunkCallback
 ): NativeStreamingOperation {
   return callNative(() =>
     getAddon().runScriptStreamingEngine(handle, script, inputsJson, chunkCb)
@@ -99,7 +101,7 @@ export function runScriptTransformEngine(
   inputMimeType: string,
   inputCharset: string | null,
   readCb: (bufSize: number) => Buffer | null,
-  writeCb: (chunk: Buffer) => void
+  writeCb: NativeChunkCallback
 ): NativeStreamingOperation {
   return callNative(() =>
     getAddon().runScriptTransformEngine(
