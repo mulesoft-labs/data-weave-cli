@@ -40,9 +40,14 @@ type OutputSettlementFault =
   | "initial-create-generic"
   | "initial-pending-exception"
   | "initial-call-generic-after-call"
+  | "initial-call-pending-after-call"
   | "fallback-call-generic"
   | "fallback-pending-exception"
   | "fallback-call-generic-after-call";
+
+type OutputExceptionClearFault =
+  | "is-exception-pending"
+  | "get-and-clear-last-exception";
 
 interface TestAddon {
   initialize(libPath: string): void;
@@ -70,6 +75,7 @@ interface TestAddon {
   __test_outputOperationId(operation: NativeStreamingOperation): number;
   __test_createForeignWrappedObject(): object;
   __test_failNextOutputSettlement(stage: OutputSettlementFault): void;
+  __test_failNextOutputExceptionClear(stage: OutputExceptionClearFault): void;
   __test_holdNextOutputDelivery(): void;
   __test_heldOutputDelivery(): { held: boolean; sequence: bigint; bytes: number };
   __test_releaseOutputDelivery(): void;
@@ -899,6 +905,40 @@ describe.sequential("native Node output flow control", () => {
     expect(child.status === 0 && child.signal === null, child.stderr).toBe(false);
     expect(child.signal).not.toBe("SIGSEGV");
     expect(child.stderr).toContain("Output completion settlement failed after deferred consumption");
+  });
+
+  it.each([
+    { settlement: "initial-pending-exception", point: "before consumption" },
+    { settlement: "initial-call-pending-after-call", point: "after consumption" },
+  ] as const)("fails closed when pending-exception clearing fails $point", ({ settlement }) => {
+    const fixture = join(__dirname, "fixtures", "output-settlement-after-call.cjs");
+    const addonPath = join(__dirname, "..", "..", "build", "Release", "dwlib_addon.node");
+
+    for (const mode of ["streaming", "transform"] as const) {
+      for (const clearFault of [
+        "is-exception-pending",
+        "get-and-clear-last-exception",
+      ] as const) {
+        const child = spawnSync(
+          process.execPath,
+          [fixture, addonPath, LIB_PATH, settlement, mode, clearFault],
+          {
+            cwd: __dirname,
+            encoding: "utf-8",
+            timeout: 30000,
+            env: { ...process.env, DATAWEAVE_TEST_HOOKS: "1" },
+          }
+        );
+
+        expect(child.error, `${mode}/${clearFault}: ${child.error?.message}`).toBeUndefined();
+        expect(
+          child.status === 0 && child.signal === null,
+          `${mode}/${clearFault}: ${child.stderr}`
+        ).toBe(false);
+        expect(child.signal, `${mode}/${clearFault}: ${child.stderr}`).not.toBe("SIGSEGV");
+        expect(child.stderr).toContain("Output completion settlement failed");
+      }
+    }
   });
 });
 

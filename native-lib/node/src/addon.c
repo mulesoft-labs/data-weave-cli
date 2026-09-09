@@ -205,13 +205,22 @@ typedef enum {
   OUTPUT_SETTLEMENT_FAULT_INITIAL_CREATE_GENERIC,
   OUTPUT_SETTLEMENT_FAULT_INITIAL_PENDING_EXCEPTION,
   OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_GENERIC_AFTER_CALL,
+  OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_PENDING_AFTER_CALL,
   OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC,
   OUTPUT_SETTLEMENT_FAULT_FALLBACK_PENDING_EXCEPTION,
   OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC_AFTER_CALL,
 } output_settlement_fault_t;
 
+typedef enum {
+  OUTPUT_EXCEPTION_CLEAR_FAULT_NONE = 0,
+  OUTPUT_EXCEPTION_CLEAR_FAULT_IS_PENDING,
+  OUTPUT_EXCEPTION_CLEAR_FAULT_GET_AND_CLEAR,
+} output_exception_clear_fault_t;
+
 static output_settlement_fault_t g_test_next_output_settlement_fault =
   OUTPUT_SETTLEMENT_FAULT_NONE;
+static output_exception_clear_fault_t g_test_next_output_exception_clear_fault =
+  OUTPUT_EXCEPTION_CLEAR_FAULT_NONE;
 static bool g_test_hold_next_output_delivery = false;
 static bool g_test_output_delivery_held = false;
 static bool g_test_release_output_delivery = false;
@@ -1896,18 +1905,36 @@ static output_settlement_fault_t test_consume_output_settlement_fault(void) {
   return fault;
 }
 
-static bool clear_pending_exception(napi_env env) {
+typedef enum {
+  OUTPUT_EXCEPTION_CLEARED,
+  OUTPUT_EXCEPTION_NOT_PENDING,
+  OUTPUT_EXCEPTION_CLEAR_FAILED,
+} output_exception_clear_result_t;
+
+static output_exception_clear_result_t clear_pending_exception(napi_env env) {
+  output_exception_clear_fault_t fault = OUTPUT_EXCEPTION_CLEAR_FAULT_NONE;
+  if (g_test_hooks) {
+    uv_mutex_lock(&g_test_output_mutex);
+    fault = g_test_next_output_exception_clear_fault;
+    g_test_next_output_exception_clear_fault = OUTPUT_EXCEPTION_CLEAR_FAULT_NONE;
+    uv_mutex_unlock(&g_test_output_mutex);
+  }
   bool pending = false;
-  if (napi_is_exception_pending(env, &pending) != napi_ok || !pending) {
-    return false;
+  if (fault == OUTPUT_EXCEPTION_CLEAR_FAULT_IS_PENDING ||
+      napi_is_exception_pending(env, &pending) != napi_ok) {
+    return OUTPUT_EXCEPTION_CLEAR_FAILED;
+  }
+  if (!pending) {
+    return OUTPUT_EXCEPTION_NOT_PENDING;
   }
   napi_value exception;
-  if (napi_get_and_clear_last_exception(env, &exception) != napi_ok) {
+  if (fault == OUTPUT_EXCEPTION_CLEAR_FAULT_GET_AND_CLEAR ||
+      napi_get_and_clear_last_exception(env, &exception) != napi_ok) {
     fprintf(stderr,
             "[DataWeave Node addon] Failed to clear an output settlement exception.\n");
-    return false;
+    return OUTPUT_EXCEPTION_CLEAR_FAILED;
   }
-  return true;
+  return OUTPUT_EXCEPTION_CLEARED;
 }
 
 static napi_status settle_output_fallback(
@@ -1969,12 +1996,22 @@ static napi_status settle_output_deferred(
       if (status == napi_ok &&
           fault == OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_GENERIC_AFTER_CALL) {
         status = napi_generic_failure;
+      } else if (status == napi_ok &&
+                 fault == OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_PENDING_AFTER_CALL) {
+        napi_throw_error(env, NULL, "Injected consumed output settlement exception");
+        status = napi_pending_exception;
       }
       if (status != napi_ok) {
-        if (status == napi_pending_exception &&
-            !clear_pending_exception(env)) {
-          output_flow_release_settlement_ref(flow, env);
-          return status;
+        if (status == napi_pending_exception) {
+          output_exception_clear_result_t clear_result =
+            clear_pending_exception(env);
+          if (clear_result == OUTPUT_EXCEPTION_CLEAR_FAILED) {
+            output_settlement_fail_closed(status);
+          }
+          if (clear_result == OUTPUT_EXCEPTION_NOT_PENDING) {
+            output_flow_release_settlement_ref(flow, env);
+            return status;
+          }
         }
         output_settlement_fail_closed(status);
       }
@@ -1982,9 +2019,15 @@ static napi_status settle_output_deferred(
       return napi_ok;
     }
   }
-  if (status == napi_pending_exception && !clear_pending_exception(env)) {
-    output_flow_release_settlement_ref(flow, env);
-    return status;
+  if (status == napi_pending_exception) {
+    output_exception_clear_result_t clear_result = clear_pending_exception(env);
+    if (clear_result == OUTPUT_EXCEPTION_CLEAR_FAILED) {
+      output_settlement_fail_closed(status);
+    }
+    if (clear_result == OUTPUT_EXCEPTION_NOT_PENDING) {
+      output_flow_release_settlement_ref(flow, env);
+      return status;
+    }
   }
 
   bool conclude_called = false;
@@ -2006,9 +2049,15 @@ static napi_status settle_output_deferred(
     output_flow_release_settlement_ref(flow, env);
     return napi_ok;
   }
-  if (status == napi_pending_exception && !clear_pending_exception(env)) {
-    output_flow_release_settlement_ref(flow, env);
-    return status;
+  if (status == napi_pending_exception) {
+    output_exception_clear_result_t clear_result = clear_pending_exception(env);
+    if (clear_result == OUTPUT_EXCEPTION_CLEAR_FAILED) {
+      output_settlement_fail_closed(status);
+    }
+    if (clear_result == OUTPUT_EXCEPTION_NOT_PENDING) {
+      output_flow_release_settlement_ref(flow, env);
+      return status;
+    }
   }
   if (conclude_called) output_settlement_fail_closed(status);
 
@@ -2016,8 +2065,12 @@ static napi_status settle_output_deferred(
     env, deferred, flow->settlement_fallback_ref, &conclude_called
   );
   if (status != napi_ok) {
-    if (status == napi_pending_exception && !conclude_called) {
-      if (!clear_pending_exception(env)) {
+    if (status == napi_pending_exception) {
+      output_exception_clear_result_t clear_result = clear_pending_exception(env);
+      if (clear_result == OUTPUT_EXCEPTION_CLEAR_FAILED) {
+        output_settlement_fail_closed(status);
+      }
+      if (clear_result == OUTPUT_EXCEPTION_NOT_PENDING) {
         output_flow_release_settlement_ref(flow, env);
         return status;
       }
@@ -4615,6 +4668,8 @@ static napi_value napi_test_fail_next_output_settlement(
     fault = OUTPUT_SETTLEMENT_FAULT_INITIAL_PENDING_EXCEPTION;
   } else if (strcmp(stage, "initial-call-generic-after-call") == 0) {
     fault = OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_GENERIC_AFTER_CALL;
+  } else if (strcmp(stage, "initial-call-pending-after-call") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_PENDING_AFTER_CALL;
   } else if (strcmp(stage, "fallback-call-generic") == 0) {
     fault = OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC;
   } else if (strcmp(stage, "fallback-pending-exception") == 0) {
@@ -4632,6 +4687,38 @@ static napi_value napi_test_fail_next_output_settlement(
     return NULL;
   }
   g_test_next_output_settlement_fault = fault;
+  uv_mutex_unlock(&g_test_output_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_fail_next_output_exception_clear(
+    napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  size_t length;
+  char stage[64];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 1 ||
+      napi_get_value_string_utf8(env, argv[0], stage, sizeof(stage), &length) != napi_ok) {
+    napi_throw_type_error(env, NULL, "An exception clear fault stage is required");
+    return NULL;
+  }
+  output_exception_clear_fault_t fault = OUTPUT_EXCEPTION_CLEAR_FAULT_NONE;
+  if (strcmp(stage, "is-exception-pending") == 0) {
+    fault = OUTPUT_EXCEPTION_CLEAR_FAULT_IS_PENDING;
+  } else if (strcmp(stage, "get-and-clear-last-exception") == 0) {
+    fault = OUTPUT_EXCEPTION_CLEAR_FAULT_GET_AND_CLEAR;
+  } else {
+    napi_throw_range_error(env, NULL, "Unknown exception clear fault stage");
+    return NULL;
+  }
+  uv_mutex_lock(&g_test_output_mutex);
+  if (g_test_next_output_exception_clear_fault !=
+      OUTPUT_EXCEPTION_CLEAR_FAULT_NONE) {
+    uv_mutex_unlock(&g_test_output_mutex);
+    napi_throw_error(env, NULL, "An output exception clear fault is already armed");
+    return NULL;
+  }
+  g_test_next_output_exception_clear_fault = fault;
   uv_mutex_unlock(&g_test_output_mutex);
   return NULL;
 }
@@ -4835,6 +4922,8 @@ static napi_value Init(napi_env env, napi_value exports) {
     napi_set_named_property(env, exports, "__test_createForeignWrappedObject", fn);
     napi_create_function(env, "__test_failNextOutputSettlement", NAPI_AUTO_LENGTH, napi_test_fail_next_output_settlement, NULL, &fn);
     napi_set_named_property(env, exports, "__test_failNextOutputSettlement", fn);
+    napi_create_function(env, "__test_failNextOutputExceptionClear", NAPI_AUTO_LENGTH, napi_test_fail_next_output_exception_clear, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_failNextOutputExceptionClear", fn);
     napi_create_function(env, "__test_holdNextOutputDelivery", NAPI_AUTO_LENGTH, napi_test_hold_next_output_delivery, NULL, &fn);
     napi_set_named_property(env, exports, "__test_holdNextOutputDelivery", fn);
     napi_create_function(env, "__test_heldOutputDelivery", NAPI_AUTO_LENGTH, napi_test_held_output_delivery, NULL, &fn);
