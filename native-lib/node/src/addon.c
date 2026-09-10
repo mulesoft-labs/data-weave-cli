@@ -49,6 +49,8 @@ static int g_native_callback_depth_status;
 static uv_once_t g_mutex_once = UV_ONCE_INIT;
 
 #define CALLBACK_REENTRANCY_CODE "ERR_DATAWEAVE_CALLBACK_REENTRANCY"
+#define ISOLATE_POISONED_MESSAGE \
+    "DataWeave isolate is unavailable after a thread detach failure; clean up and initialize again."
 
 static unsigned native_callback_depth(void) {
     return (unsigned)(uintptr_t)uv_key_get(&g_native_callback_depth);
@@ -227,6 +229,26 @@ static bool g_test_release_output_delivery = false;
 static uint64_t g_test_held_output_sequence = 0;
 static size_t g_test_held_output_bytes = 0;
 
+typedef enum {
+  DETACH_SITE_NONE = 0,
+  DETACH_SITE_BRIDGE_FINALIZE,
+  DETACH_SITE_STREAM_WORKER,
+  DETACH_SITE_TRANSFORM_WORKER,
+  DETACH_SITE_CREATE_ENGINE,
+  DETACH_SITE_CREATE_ROLLBACK,
+  DETACH_SITE_RESOLVER_CREATE,
+  DETACH_SITE_UNKNOWN_DESTROY,
+  DETACH_SITE_SYNCHRONOUS_RUN,
+} detach_site_t;
+
+// Process-lifetime test statistics and the one-shot detach fault arm. Every
+// read/write is under g_mutex; only the N-API accessors are test-only exports.
+static detach_site_t g_test_detach_failure_site = DETACH_SITE_NONE;
+static uint64_t g_test_forced_detach_failures = 0;
+static uint64_t g_test_isolate_creations = 0;
+static uint64_t g_test_teardown_calls = 0;
+static uint64_t g_test_abandoned_isolates = 0;
+
 // One record per napi_env that has ever taken an init reference (via
 // initialize()). init_refs is that env's net initialize()-minus-cleanup()
 // balance. Created lazily on the env's first initialize(); registers exactly
@@ -294,6 +316,10 @@ typedef enum {
   CLEANUP_RETAIN,
   CLEANUP_UNRECOVERABLE,
 } cleanup_result_t;
+typedef struct cleanup_thread_result {
+  cleanup_result_t outcome;
+  bool teardown_callable;
+} cleanup_thread_result_t;
 static teardown_state_t g_teardown_state = TEARDOWN_NONE;
 // Set by an adopting initialize() to tell the waiter thread to abort its
 // queued teardown and leave the live isolate intact. Read/reset by the waiter.
@@ -354,6 +380,7 @@ static void test_hold_async_op_if_armed(void) {
 // leak is observable. Mirrors Python native.py's leak-and-continue
 // (_release_isolate / _retry_pending_teardown_locked). Caller holds g_mutex.
 static void abandon_unrecoverable_isolate_locked(void) {
+  if (g_test_hooks && g_isolate != NULL) g_test_abandoned_isolates++;
   g_thread = NULL;
   g_isolate = NULL;
   g_initialized = 0;
@@ -386,11 +413,23 @@ static void poison_isolate_detach_failure_locked(int detach_rc) {
   g_isolate_poisoned = true;
 }
 
-// Lock-taking wrapper for call sites that are NOT already holding g_mutex.
-static void poison_isolate_detach_failure(int detach_rc) {
+// Centralized policy for every ordinary operation detach. The real Graal
+// detach always runs first. Test injection may turn only a successful detach
+// at the selected site into one synthetic failure; real failures never consume
+// the arm. Any nonzero result poisons this published isolate before later work
+// can be admitted.
+static int detach_thread_checked(detach_site_t site, void* thread) {
+  int detach_rc = fn_detach_thread(thread);
+  if (detach_rc == 0 && !g_test_hooks) return 0;
   uv_mutex_lock(&g_mutex);
-  poison_isolate_detach_failure_locked(detach_rc);
+  if (detach_rc == 0 && g_test_hooks && g_test_detach_failure_site == site) {
+    g_test_detach_failure_site = DETACH_SITE_NONE;
+    g_test_forced_detach_failures++;
+    detach_rc = -1;
+  }
+  if (detach_rc != 0) poison_isolate_detach_failure_locked(detach_rc);
   uv_mutex_unlock(&g_mutex);
+  return detach_rc;
 }
 
 // One node per cleanup() call that arrived while a teardown was already
@@ -583,8 +622,7 @@ static bool bridge_finalize_registry(engine_bridge_t* b) {
     bool destroyed = false;
     if (fn_attach_thread(g_isolate, &thread) == 0 && thread != NULL) {
         fn_destroy_engine(thread, b->handle);
-        int detach_rc = fn_detach_thread(thread);
-        if (detach_rc != 0) poison_isolate_detach_failure(detach_rc);
+        detach_thread_checked(DETACH_SITE_BRIDGE_FINALIZE, thread);
         destroyed = true;  // registry entry removed -> resolver ctx is now dead
     }
     // else: attach failed while the isolate is STILL LIVE -- destroy was skipped,
@@ -908,6 +946,8 @@ static void init_thread_fn(void* arg) {
     return;
   }
 
+  if (g_test_hooks) g_test_isolate_creations++;
+
   // review #21 #1: a brand-new isolate starts un-poisoned. Any poison flag left
   // over from a previously abandoned/leaked isolate must not carry onto this
   // fresh one. Runs under the init caller's g_mutex (see the g_mutex discipline
@@ -932,7 +972,11 @@ static void init_thread_fn(void* arg) {
   // the caller's `args->result != 0` path (addon.c ~955) sees the recoverable
   // "no isolate" state, exactly like every other init failure path.
   if (fn_detach_thread && fn_detach_thread(boot_thread) != 0) {
-    int td_rc = fn_tear_down_isolate ? fn_tear_down_isolate(boot_thread) : -1;
+    int td_rc = -1;
+    if (fn_tear_down_isolate) {
+      if (g_test_hooks) g_test_teardown_calls++;
+      td_rc = fn_tear_down_isolate(boot_thread);
+    }
     if (td_rc != 0) {
       fprintf(stderr,
               "[DataWeave Node addon] bootstrap thread detach AND isolate "
@@ -1027,6 +1071,14 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
     return NULL;
   }
 
+  uv_mutex_lock(&g_mutex);
+  bool poisoned_before_drain = g_isolate_poisoned;
+  uv_mutex_unlock(&g_mutex);
+  if (poisoned_before_drain) {
+    napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+    return NULL;
+  }
+
   // Round-15 (svacas P1): retry any bridge whose engine destroy was skipped on a
   // transient attach failure (g_stranded_bridges). Drain before taking g_mutex
   // (drain_stranded_bridges locks internally). If a live isolate survives from a
@@ -1036,6 +1088,14 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
   drain_stranded_bridges();
 
   uv_mutex_lock(&g_mutex);
+
+  // A detach failure is terminal for the currently published isolate. It may
+  // not be adopted or reused; explicit cleanup must abandon it first.
+  if (g_isolate_poisoned) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+    return NULL;
+  }
 
   // A prior last-release could not tear the isolate down and armed the retry
   // signal (review #6 #3/#4). Because retries otherwise fire only at op
@@ -1084,6 +1144,11 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
       // cancel the queued teardown, take a fresh ref, and wake the waiter so it
       // aborts without tearing down. g_initialized is already 1, so fall through
       // to the ref-count path below is unnecessary -- return directly.
+      if (g_isolate_poisoned) {
+        uv_mutex_unlock(&g_mutex);
+        napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+        return NULL;
+      }
       if (!env_init_acquire_and_hook(env)) {
         uv_mutex_unlock(&g_mutex);
         napi_throw_error(env, NULL, "Failed to allocate/register env init record");
@@ -1105,6 +1170,11 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
   }
 
   if (g_initialized) {
+    if (g_isolate_poisoned) {
+      uv_mutex_unlock(&g_mutex);
+      napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+      return NULL;
+    }
     if (!env_init_acquire_and_hook(env)) {
       uv_mutex_unlock(&g_mutex);
       napi_throw_error(env, NULL, "Failed to allocate/register env init record");
@@ -1162,18 +1232,19 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
     uv_thread_options_t cleanup_opts;
     cleanup_opts.flags = UV_THREAD_HAS_STACK_SIZE;
     cleanup_opts.stack_size = 2 * 1024 * 1024;
-    cleanup_result_t result = CLEANUP_RETAIN;
+    cleanup_thread_result_t result = {CLEANUP_RETAIN, false};
     int cleanup_spawn_rc = uv_thread_create_ex(&cleanup_tid, &cleanup_opts, cleanup_thread_fn, &result);
     if (cleanup_spawn_rc == 0) {
       uv_thread_join(&cleanup_tid);
     }
-    if (result == CLEANUP_TORN_DOWN) {
+    if (g_test_hooks && result.teardown_callable) g_test_teardown_calls++;
+    if (result.outcome == CLEANUP_TORN_DOWN) {
       // Teardown ran (or there was nothing to tear down) -- clear the globals
       // so the next initialize() sees a clean slate. g_ref_count is already 0.
       g_thread = NULL;
       g_isolate = NULL;
       g_initialized = 0;
-    } else if (result == CLEANUP_UNRECOVERABLE) {
+    } else if (result.outcome == CLEANUP_UNRECOVERABLE) {
       // teardown+detach double failure (review #17 #1): abandon the isolate and
       // reset published state so this same initialize() failure path throws
       // below and a LATER initialize() builds a fresh isolate. Does NOT arm the
@@ -2281,7 +2352,6 @@ static void streaming_thread_fn(void* arg) {
   // back to the OOM_JSON static (which must never be freed; see the guarded
   // frees below and in call_js_write).
   char* meta_result = NULL;
-  int detach_rc = 0;
   if (rc != 0) {
     char err[256];
     snprintf(err, sizeof(err), "{\"success\":false,\"error\":\"Failed to attach thread (code %d)\"}", rc);
@@ -2299,7 +2369,7 @@ static void streaming_thread_fn(void* arg) {
       meta_result = strdup("{\"success\":false,\"error\":\"Empty response\"}");
       if (meta_result == NULL) meta_result = (char*)OOM_JSON;
     }
-    detach_rc = fn_detach_thread(worker_thread);
+    detach_thread_checked(DETACH_SITE_STREAM_WORKER, worker_thread);
   }
 
   // Decrement here, once this thread has fully detached from the isolate --
@@ -2310,7 +2380,6 @@ static void streaming_thread_fn(void* arg) {
   // here ties g_active_ops to the actual invariant isolate teardown needs
   // (no GraalVM-attached thread remains), independent of the event loop.
   uv_mutex_lock(&g_mutex);
-  if (detach_rc != 0) poison_isolate_detach_failure_locked(detach_rc);
   g_active_ops--;
   uv_cond_broadcast(&g_teardown_cond);
   // Round-14 (#2/#3): if a prior last-release could not tear the isolate down
@@ -2421,6 +2490,11 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
   // genuine (non-cancelled) PENDING_WAIT or a committed TEARING_DOWN still
   // rejects.
   uv_mutex_lock(&g_mutex);
+  if (g_isolate_poisoned) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+    return NULL;
+  }
   if (!g_initialized || (g_teardown_state != TEARDOWN_NONE && !g_teardown_cancelled)) {
     uv_mutex_unlock(&g_mutex);
     napi_throw_error(env, NULL, "Not initialized. Call initialize() first.");
@@ -2899,7 +2973,6 @@ static void transform_thread_fn(void* arg) {
   // so the sentinel below still delivers a terminal result. Mirrors
   // streaming_thread_fn.
   char* meta_result = NULL;
-  int detach_rc = 0;
   if (rc != 0) {
     char err[256];
     snprintf(err, sizeof(err), "{\"success\":false,\"error\":\"Failed to attach thread (code %d)\"}", rc);
@@ -2920,14 +2993,13 @@ static void transform_thread_fn(void* arg) {
       meta_result = strdup("{\"success\":false,\"error\":\"Empty response\"}");
       if (meta_result == NULL) meta_result = (char*)OOM_JSON;
     }
-    detach_rc = fn_detach_thread(worker_thread);
+    detach_thread_checked(DETACH_SITE_TRANSFORM_WORKER, worker_thread);
   }
 
   // See streaming_thread_fn's comment: decrement here (after detach), not in
   // call_js_transform_write's completion branch, to avoid the same
   // circular-wait deadlock against napi_initialize's pending-teardown wait.
   uv_mutex_lock(&g_mutex);
-  if (detach_rc != 0) poison_isolate_detach_failure_locked(detach_rc);
   g_active_ops--;
   uv_cond_broadcast(&g_teardown_cond);
   // Round-14 (#2/#3): retry a stranded teardown now that this op has drained.
@@ -3036,6 +3108,11 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
   // post-adoption op throws "Not initialized". A genuine (non-cancelled)
   // PENDING_WAIT or a committed TEARING_DOWN still rejects.
   uv_mutex_lock(&g_mutex);
+  if (g_isolate_poisoned) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+    return NULL;
+  }
   if (!g_initialized || (g_teardown_state != TEARDOWN_NONE && !g_teardown_cancelled)) {
     uv_mutex_unlock(&g_mutex);
     napi_throw_error(env, NULL, "Not initialized. Call initialize() first.");
@@ -3422,6 +3499,11 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
     // teardown transition and the g_active_ops==0 fast path also hold g_mutex.
     uv_mutex_lock(&g_mutex);
     env_init_rec_t* self = env_init_rec_find_locked(env);
+    if (g_isolate_poisoned) {
+        uv_mutex_unlock(&g_mutex);
+        napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+        return NULL;
+    }
     if (!g_initialized || g_isolate == NULL ||
         g_teardown_state == TEARDOWN_TEARING_DOWN ||
         self == NULL || self->init_refs == 0) {
@@ -3438,8 +3520,7 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
         napi_throw_error(env, NULL, "Failed to attach thread"); return NULL;
     }
     long long handle = fn_create_engine(thread);
-    int detach_rc = fn_detach_thread(thread);
-    if (detach_rc != 0) poison_isolate_detach_failure(detach_rc);
+    detach_thread_checked(DETACH_SITE_CREATE_ENGINE, thread);
     // The Java @CEntryPoint exception handler explicitly returns 0 as its ABI
     // exception sentinel when engine construction throws. The real handle
     // registry only ever hands out handles >= 1, so any handle <= 0 means
@@ -3467,17 +3548,18 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
     if (rec == NULL) {
         // Roll back the engine we just created so we don't leak a registered but
         // unrecorded handle. fn_destroy_engine attaches its own thread.
-        int detach_rc = 0;
         if (fn_destroy_engine) {
             void* t2 = NULL;
-            if (fn_attach_thread(g_isolate, &t2) == 0) { fn_destroy_engine(t2, handle); detach_rc = fn_detach_thread(t2); }
+            if (fn_attach_thread(g_isolate, &t2) == 0) {
+                fn_destroy_engine(t2, handle);
+                detach_thread_checked(DETACH_SITE_CREATE_ROLLBACK, t2);
+            }
         }
         // review #21 #1 (final-review completeness): this OOM-rollback detach is an
         // ordinary detach too -- a failure here strands a phantom thread and would
         // wedge a later teardown, so poison in the same critical section as the
         // g_active_ops-- (before the decrement/broadcast), matching the other sites.
         uv_mutex_lock(&g_mutex);
-        if (detach_rc != 0) poison_isolate_detach_failure_locked(detach_rc);
         g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
         napi_throw_error(env, NULL, "Failed to allocate engine record");
         return NULL;
@@ -3559,6 +3641,12 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
     // must not decrement a reservation not yet held) and BEFORE fn_attach_thread.
     uv_mutex_lock(&g_mutex);
     env_init_rec_t* self = env_init_rec_find_locked(env);
+    if (g_isolate_poisoned) {
+        uv_mutex_unlock(&g_mutex);
+        napi_delete_reference(env, bridge->resolver_js); free(bridge);
+        napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+        return NULL;
+    }
     if (!g_initialized || g_isolate == NULL ||
         g_teardown_state == TEARDOWN_TEARING_DOWN ||
         self == NULL || self->init_refs == 0) {
@@ -3577,8 +3665,7 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
         napi_throw_error(env, NULL, "Failed to attach thread"); return NULL;
     }
     long long handle = fn_create_engine_with_resolver(thread, resolve_module_callback, (void*)bridge);
-    int detach_rc = fn_detach_thread(thread);
-    if (detach_rc != 0) poison_isolate_detach_failure(detach_rc);
+    detach_thread_checked(DETACH_SITE_RESOLVER_CREATE, thread);
 
     // Same invalid-handle guard as napi_create_engine: the Java @CEntryPoint
     // exception handler explicitly returns handle == 0 as its ABI sentinel,
@@ -3767,14 +3854,12 @@ static napi_value napi_destroy_engine(napi_env env, napi_callback_info info) {
                 g_active_ops++;  // pins the live isolate against teardown for this attach
                 uv_mutex_unlock(&g_mutex);
                 void* thread = NULL;
-                int detach_rc = 0;
                 if (fn_attach_thread(g_isolate, &thread) == 0 && thread != NULL) {
                     fn_destroy_engine(thread, handle);
-                    detach_rc = fn_detach_thread(thread);
+                    detach_thread_checked(DETACH_SITE_UNKNOWN_DESTROY, thread);
                 }
                 // Verbatim g_active_ops release pattern.
                 uv_mutex_lock(&g_mutex);
-                if (detach_rc != 0) poison_isolate_detach_failure_locked(detach_rc);
                 g_active_ops--;
                 uv_cond_broadcast(&g_teardown_cond);
                 uv_mutex_unlock(&g_mutex);
@@ -3836,6 +3921,12 @@ static napi_value napi_run_script_engine(napi_env env, napi_callback_info info) 
     // post-adoption op throws "Not initialized". A genuine (non-cancelled)
     // PENDING_WAIT or a committed TEARING_DOWN still rejects.
     uv_mutex_lock(&g_mutex);
+    if (g_isolate_poisoned) {
+      uv_mutex_unlock(&g_mutex);
+      free(script); free(inputs);
+      napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+      return NULL;
+    }
     if (!g_initialized || (g_teardown_state != TEARDOWN_NONE && !g_teardown_cancelled)) {
       uv_mutex_unlock(&g_mutex);
       free(script); free(inputs);
@@ -3870,8 +3961,7 @@ static napi_value napi_run_script_engine(napi_env env, napi_callback_info info) 
 
     char* result_copy = result ? strdup(result) : NULL;
     if (result != NULL) fn_free_cstring(thread, result);
-    int detach_rc = fn_detach_thread(thread);
-    if (detach_rc != 0) poison_isolate_detach_failure(detach_rc);
+    detach_thread_checked(DETACH_SITE_SYNCHRONOUS_RUN, thread);
     free(script); free(inputs);
 
     // Round-11 (#3): release the per-engine pin (may finalize a destroy that a
@@ -3926,7 +4016,7 @@ static void call_js_teardown_done(napi_env env, napi_value js_callback, void* co
   free(waiter);
 }
 
-// `arg` is a cleanup_result_t* out-param: the caller must set it to
+// `arg` is a cleanup_thread_result_t* out-param: the caller must initialize its
 // CLEANUP_RETAIN before spawning this thread (so a spawn that never runs, or the
 // attach-failure early return, leaves the live isolate retained) and read it
 // after uv_thread_join returns. Mirrors teardown_waiter_thread_fn's outcome
@@ -3934,8 +4024,10 @@ static void call_js_teardown_done(napi_env env, napi_value js_callback, void* co
 // down" (clear g_thread/g_isolate/g_initialized/g_ref_count) from "attach or
 // teardown failed but the isolate is still reachable" (retain + arm retry) from
 // "teardown AND detach both failed" (unrecoverable -- leak the isolate).
+// Follow-up detaches remain direct: they classify that teardown double failure,
+// rather than poisoning an otherwise completed ordinary operation.
 static void cleanup_thread_fn(void* arg) {
-  cleanup_result_t* out_result = (cleanup_result_t*)arg;
+  cleanup_thread_result_t* result = (cleanup_thread_result_t*)arg;
   // graal_tear_down_isolate() must be passed the IsolateThread belonging to the
   // *calling* OS thread. g_thread was created by graal_create_isolate() on the
   // (now-exited, already-joined) init thread, so it is invalid here — passing it
@@ -3944,7 +4036,7 @@ static void cleanup_thread_fn(void* arg) {
   // to obtain a valid local IsolateThread, then tear down with that.
   if (!fn_tear_down_isolate || !fn_attach_thread || !g_isolate) {
     // Nothing to tear down (no isolate / FFI unavailable) -- safe to clear.
-    *out_result = CLEANUP_TORN_DOWN;
+    result->outcome = CLEANUP_TORN_DOWN;
     return;
   }
   if (g_isolate_poisoned) {
@@ -3953,7 +4045,7 @@ static void cleanup_thread_fn(void* arg) {
     // NOT attempt teardown -- signal leak-and-continue (the caller runs
     // abandon_unrecoverable_isolate_locked()). Reading g_isolate_poisoned unlocked
     // is safe: the caller spawns+joins this thread while holding g_mutex.
-    *out_result = CLEANUP_UNRECOVERABLE;
+    result->outcome = CLEANUP_UNRECOVERABLE;
     return;
   }
   void* local_thread = NULL;
@@ -3963,22 +4055,26 @@ static void cleanup_thread_fn(void* arg) {
     // (or it becomes unreachable and can never be torn down) and arms the retry.
     return;
   }
+  // The attached worker is about to invoke teardown. The caller increments the
+  // counter after join, avoiding a second g_mutex lock while synchronous callers
+  // deliberately hold it across this worker.
+  result->teardown_callable = true;
   // Check the teardown return code (0 == success). On nonzero the isolate is
   // still live and this thread is still attached to it -- detach before exiting
   // or the live isolate keeps a phantom attached thread that can block/fail a
   // later retry teardown (review #7 #1). On success the isolate is gone: do NOT
   // detach (would be a UAF).
   if (fn_tear_down_isolate(local_thread) == 0) {
-    *out_result = CLEANUP_TORN_DOWN;
+    result->outcome = CLEANUP_TORN_DOWN;
   } else if (fn_detach_thread(local_thread) == 0) {
     // Teardown failed but the worker detached cleanly: the isolate is live and
     // reachable -- retain it and (per the caller's own logic) arm the retry
     // (review #6 #3).
-    *out_result = CLEANUP_RETAIN;
+    result->outcome = CLEANUP_RETAIN;
   } else {
     // Teardown AND detach both failed (review #17 #1): the worker is stuck
     // attached, so this isolate can never be torn down. Signal leak-and-continue.
-    *out_result = CLEANUP_UNRECOVERABLE;
+    result->outcome = CLEANUP_UNRECOVERABLE;
   }
 }
 
@@ -3987,6 +4083,8 @@ static void cleanup_thread_fn(void* arg) {
 // op has drained, performs isolate teardown exactly like cleanup_thread_fn
 // does on the unchanged fast path, then resolves every caller who is waiting
 // on this same teardown (there may be more than one -- see g_teardown_waiters).
+// Its teardown-failure follow-up detach is direct for the same double-failure
+// classification documented on cleanup_thread_fn.
 static void teardown_waiter_thread_fn(void* arg) {
   (void)arg;
 
@@ -4017,6 +4115,11 @@ static void teardown_waiter_thread_fn(void* arg) {
   } else if (!cancelled && fn_tear_down_isolate && fn_attach_thread && g_isolate) {
     void* local_thread = NULL;
     if (fn_attach_thread(g_isolate, &local_thread) == 0 && local_thread != NULL) {
+      if (g_test_hooks) {
+        uv_mutex_lock(&g_mutex);
+        g_test_teardown_calls++;
+        uv_mutex_unlock(&g_mutex);
+      }
       if (fn_tear_down_isolate(local_thread) == 0) {
         result = CLEANUP_TORN_DOWN;
       } else if (fn_detach_thread(local_thread) == 0) {
@@ -4173,8 +4276,8 @@ static napi_value already_resolved_promise(napi_env env) {
 // failure it leaves g_teardown_needed set to retry on the next drain. Spawns+joins
 // cleanup_thread_fn while holding g_mutex, exactly as the Case-4 /
 // isolate_ref_release_n_locked g_active_ops==0 branch does; cleanup_thread_fn
-// takes no lock and makes no napi call, so this is deadlock-free and thread-safe
-// from any drain site.
+// makes no N-API calls and writes only its caller-owned result struct, so this
+// is deadlock-free and thread-safe from any drain site.
 static void retry_stranded_teardown_locked(void) {
   if (!g_teardown_needed) return;
   if (g_ref_count > 0) { g_teardown_needed = false; return; }  // adopted -> keep
@@ -4185,16 +4288,17 @@ static void retry_stranded_teardown_locked(void) {
   uv_thread_options_t opts;
   opts.flags = UV_THREAD_HAS_STACK_SIZE;
   opts.stack_size = 2 * 1024 * 1024;
-  cleanup_result_t result = CLEANUP_RETAIN;
+  cleanup_thread_result_t result = {CLEANUP_RETAIN, false};
   int spawn_rc = uv_thread_create_ex(&tid, &opts, cleanup_thread_fn, &result);
   if (spawn_rc == 0) uv_thread_join(&tid);
-  if (result == CLEANUP_TORN_DOWN) {
+  if (g_test_hooks && result.teardown_callable) g_test_teardown_calls++;
+  if (result.outcome == CLEANUP_TORN_DOWN) {
     g_thread = NULL;
     g_isolate = NULL;
     g_initialized = 0;
     g_ref_count = 0;
     g_teardown_needed = false;
-  } else if (result == CLEANUP_UNRECOVERABLE) {
+  } else if (result.outcome == CLEANUP_UNRECOVERABLE) {
     // teardown+detach double failure (review #17 #1): abandon + leak; the helper
     // also clears g_teardown_needed so this stranded-teardown retry stops.
     abandon_unrecoverable_isolate_locked();
@@ -4214,17 +4318,18 @@ static void isolate_ref_release_n_locked(int n) {
     uv_thread_options_t opts;
     opts.flags = UV_THREAD_HAS_STACK_SIZE;
     opts.stack_size = 2 * 1024 * 1024;
-    cleanup_result_t result = CLEANUP_RETAIN;
+    cleanup_thread_result_t result = {CLEANUP_RETAIN, false};
     int spawn_rc = uv_thread_create_ex(&tid, &opts, cleanup_thread_fn, &result);
     if (spawn_rc == 0) {
       uv_thread_join(&tid);
     }
-    if (result == CLEANUP_TORN_DOWN) {
+    if (g_test_hooks && result.teardown_callable) g_test_teardown_calls++;
+    if (result.outcome == CLEANUP_TORN_DOWN) {
       g_thread = NULL;
       g_isolate = NULL;
       g_initialized = 0;
       g_ref_count = 0;
-    } else if (result == CLEANUP_UNRECOVERABLE) {
+    } else if (result.outcome == CLEANUP_UNRECOVERABLE) {
       // teardown+detach double failure (review #17 #1): abandon + leak the
       // isolate; do NOT arm the retry. Mirrors Python native.py leak-and-continue.
       abandon_unrecoverable_isolate_locked();
@@ -4400,7 +4505,7 @@ static napi_value release_isolate_ref_locked(napi_env env) {
     // never touches it), leaves the live isolate retained + the retry armed.
     // uv_thread_join is synchronous, so when spawn_rc == 0 this stack variable safely
     // outlives the thread's write to it.
-    cleanup_result_t result = CLEANUP_RETAIN;
+    cleanup_thread_result_t result = {CLEANUP_RETAIN, false};
     int spawn_rc = uv_thread_create_ex(&tid, &opts, cleanup_thread_fn, &result);
     if (spawn_rc == 0) {
       uv_thread_join(&tid);
@@ -4416,12 +4521,13 @@ static napi_value release_isolate_ref_locked(napi_env env) {
     // initialize() correctly ref-counts the surviving isolate instead of
     // building a second one (identical semantics to teardown_waiter_thread_fn's
     // attach-failure path).
-    if (result == CLEANUP_TORN_DOWN) {
+    if (g_test_hooks && result.teardown_callable) g_test_teardown_calls++;
+    if (result.outcome == CLEANUP_TORN_DOWN) {
       g_thread = NULL;
       g_isolate = NULL;
       g_initialized = 0;
       g_ref_count = 0;
-    } else if (result == CLEANUP_UNRECOVERABLE) {
+    } else if (result.outcome == CLEANUP_UNRECOVERABLE) {
       // teardown+detach double failure (review #17 #1): abandon + leak the
       // isolate; the promise below still RESOLVES (deliberate, per the note that
       // follows). The helper emits its own stderr diagnostic. Mirrors Python
@@ -4585,6 +4691,97 @@ static napi_value napi_test_resolver_ref_delete_count(napi_env env, napi_callbac
     uv_mutex_unlock(&g_mutex);
     napi_value out; napi_create_int64(env, (int64_t)n, &out);
     return out;
+}
+
+static detach_site_t detach_site_from_name(const char* name) {
+  if (strcmp(name, "bridge-finalize") == 0) return DETACH_SITE_BRIDGE_FINALIZE;
+  if (strcmp(name, "stream-worker") == 0) return DETACH_SITE_STREAM_WORKER;
+  if (strcmp(name, "transform-worker") == 0) return DETACH_SITE_TRANSFORM_WORKER;
+  if (strcmp(name, "create-engine") == 0) return DETACH_SITE_CREATE_ENGINE;
+  if (strcmp(name, "create-rollback") == 0) return DETACH_SITE_CREATE_ROLLBACK;
+  if (strcmp(name, "resolver-create") == 0) return DETACH_SITE_RESOLVER_CREATE;
+  if (strcmp(name, "unknown-destroy") == 0) return DETACH_SITE_UNKNOWN_DESTROY;
+  if (strcmp(name, "synchronous-run") == 0) return DETACH_SITE_SYNCHRONOUS_RUN;
+  return DETACH_SITE_NONE;
+}
+
+static napi_value napi_test_force_detach_failure_once(
+    napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_valuetype type;
+  char site_name[64];
+  size_t length;
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 1 ||
+      napi_typeof(env, argv[0], &type) != napi_ok || type != napi_string ||
+      napi_get_value_string_utf8(
+        env, argv[0], site_name, sizeof(site_name), &length) != napi_ok) {
+    napi_throw_type_error(env, NULL, "A detach site string is required");
+    return NULL;
+  }
+  detach_site_t site = detach_site_from_name(site_name);
+  if (site == DETACH_SITE_NONE) {
+    napi_throw_range_error(env, NULL, "Unknown detach site");
+    return NULL;
+  }
+  uv_mutex_lock(&g_mutex);
+  if (g_test_detach_failure_site != DETACH_SITE_NONE) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "A detach failure is already armed");
+    return NULL;
+  }
+  g_test_detach_failure_site = site;
+  uv_mutex_unlock(&g_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_isolate_poisoned(napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  bool poisoned = g_isolate_poisoned;
+  uv_mutex_unlock(&g_mutex);
+  napi_value out;
+  napi_get_boolean(env, poisoned, &out);
+  return out;
+}
+
+static napi_value test_uint64_counter(napi_env env, uint64_t value) {
+  napi_value out;
+  napi_create_bigint_uint64(env, value, &out);
+  return out;
+}
+
+static napi_value napi_test_isolate_creation_count(napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t value = g_test_isolate_creations;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, value);
+}
+
+static napi_value napi_test_teardown_call_count(napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t value = g_test_teardown_calls;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, value);
+}
+
+static napi_value napi_test_abandoned_isolate_count(napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t value = g_test_abandoned_isolates;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, value);
+}
+
+static napi_value napi_test_forced_detach_failure_count(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t value = g_test_forced_detach_failures;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, value);
 }
 
 static napi_value napi_test_hold_next_async_op(napi_env env, napi_callback_info info) {
@@ -4908,6 +5105,18 @@ static napi_value Init(napi_env env, napi_value exports) {
     napi_set_named_property(env, exports, "__test_strandedCount", fn);
     napi_create_function(env, "__test_resolverRefDeleteCount", NAPI_AUTO_LENGTH, napi_test_resolver_ref_delete_count, NULL, &fn);
     napi_set_named_property(env, exports, "__test_resolverRefDeleteCount", fn);
+    napi_create_function(env, "__test_forceDetachFailureOnce", NAPI_AUTO_LENGTH, napi_test_force_detach_failure_once, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_forceDetachFailureOnce", fn);
+    napi_create_function(env, "__test_isolatePoisoned", NAPI_AUTO_LENGTH, napi_test_isolate_poisoned, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_isolatePoisoned", fn);
+    napi_create_function(env, "__test_isolateCreationCount", NAPI_AUTO_LENGTH, napi_test_isolate_creation_count, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_isolateCreationCount", fn);
+    napi_create_function(env, "__test_teardownCallCount", NAPI_AUTO_LENGTH, napi_test_teardown_call_count, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_teardownCallCount", fn);
+    napi_create_function(env, "__test_abandonedIsolateCount", NAPI_AUTO_LENGTH, napi_test_abandoned_isolate_count, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_abandonedIsolateCount", fn);
+    napi_create_function(env, "__test_forcedDetachFailureCount", NAPI_AUTO_LENGTH, napi_test_forced_detach_failure_count, NULL, &fn);
+    napi_set_named_property(env, exports, "__test_forcedDetachFailureCount", fn);
     napi_create_function(env, "__test_holdNextAsyncOp", NAPI_AUTO_LENGTH, napi_test_hold_next_async_op, NULL, &fn);
     napi_set_named_property(env, exports, "__test_holdNextAsyncOp", fn);
     napi_create_function(env, "__test_asyncOpHeld", NAPI_AUTO_LENGTH, napi_test_async_op_held, NULL, &fn);

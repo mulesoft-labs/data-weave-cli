@@ -26,8 +26,9 @@ export default defineConfig({
           testTimeout: 30000,
           // Opt the integration lane into the addon's test-only entrypoints
           // (__test_forceStrandOnce / __test_strandedCount /
-          // __test_resolverRefDeleteCount). Set before any integration worker
-          // loads the addon, so its Init() getenv() sees it and registers them;
+          // __test_resolverRefDeleteCount and detach-poison fault/counter hooks,
+          // including __test_forcedDetachFailureCount). Set before any
+          // integration worker loads the addon, so its Init() getenv() sees it;
           // inert in every other lane and in production. Workers spawned by a
           // test inherit this env, so the addon Init() in a worker sees it too.
           env: { DATAWEAVE_TEST_HOOKS: "1" },
