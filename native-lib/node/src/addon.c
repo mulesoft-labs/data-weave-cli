@@ -228,6 +228,7 @@ static bool g_test_detach_publication_held = false;
 static bool g_test_release_detach_publication = false;
 static unsigned g_detach_publication_waiters = 0;
 static uint64_t g_test_live_resolver_refs = 0;
+static uint64_t g_test_bridge_frees = 0;
 
 static void bridge_env_cleanup(void* arg);
 static void bridge_finalize_free(engine_bridge_t* b, bool env_still_alive);
@@ -553,10 +554,13 @@ static void resolver_results_free_all(engine_bridge_t* b) {
     b->results = NULL;
 }
 
+// Caller holds g_mutex. A call that can satisfy all three free predicates must
+// be the caller's final operation through b.
 static void bridge_release_if_unowned_locked(engine_bridge_t* b) {
     if (b == NULL || b->native_alive || b->owner_alive ||
         b->owner_cleanup_tsfn != NULL) return;
     resolver_results_free_all(b);
+    if (g_test_hooks) g_test_bridge_frees++;
     free(b);
 }
 
@@ -855,19 +859,31 @@ static void bridge_finalize_free(engine_bridge_t* b, bool env_still_alive) {
             uv_mutex_unlock(&g_mutex);
         }
     }
+    napi_threadsafe_function owner_cleanup_tsfn = NULL;
     uv_mutex_lock(&g_mutex);
     if (env_still_alive || b->env == NULL || !b->owner_alive) {
         b->resolver_js = NULL;
         b->owner_alive = false;
     }
-    b->native_alive = false;
-    bridge_release_if_unowned_locked(b);
-    uv_mutex_unlock(&g_mutex);
     if (env_still_alive && b->owner_cleanup_tsfn != NULL &&
         !b->owner_cleanup_released) {
         b->owner_cleanup_released = true;
+        owner_cleanup_tsfn = b->owner_cleanup_tsfn;
+    }
+    b->native_alive = false;
+    uv_mutex_unlock(&g_mutex);
+
+    // Releasing the TSFN lets its finalizer clear owner_cleanup_tsfn and perform
+    // the final bridge free. If no TSFN exists (resolver-less), the ownership
+    // drop below frees directly. In both cases the finalization action is the
+    // final bridge operation: never dereference b afterward.
+    if (owner_cleanup_tsfn != NULL) {
         napi_release_threadsafe_function(
-            b->owner_cleanup_tsfn, napi_tsfn_release);
+            owner_cleanup_tsfn, napi_tsfn_release);
+    } else {
+        uv_mutex_lock(&g_mutex);
+        bridge_release_if_unowned_locked(b);
+        uv_mutex_unlock(&g_mutex);
     }
 }
 
@@ -5248,6 +5264,15 @@ static napi_value napi_test_live_stranded_resolver_ref_count(
   return test_uint64_counter(env, count);
 }
 
+static napi_value napi_test_bridge_free_count(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t count = g_test_bridge_frees;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, count);
+}
+
 static napi_value napi_test_fail_next_engine_record_allocation(
     napi_env env, napi_callback_info info) {
   (void)info;
@@ -5630,6 +5655,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         !export_function(env, exports, "__test_detachPublicationWaiters", napi_test_detach_publication_waiters) ||
         !export_function(env, exports, "__test_releaseDetachPublication", napi_test_release_detach_publication) ||
         !export_function(env, exports, "__test_liveStrandedResolverRefCount", napi_test_live_stranded_resolver_ref_count) ||
+        !export_function(env, exports, "__test_bridgeFreeCount", napi_test_bridge_free_count) ||
         !export_function(env, exports, "__test_outputStats", napi_test_output_stats) ||
         !export_function(env, exports, "__test_outputOperationId", napi_test_output_operation_id) ||
         !export_function(env, exports, "__test_createForeignWrappedObject", napi_test_create_foreign_wrapped_object) ||

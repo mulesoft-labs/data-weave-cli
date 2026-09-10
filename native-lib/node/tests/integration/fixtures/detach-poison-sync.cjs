@@ -30,6 +30,7 @@ const TEST_HOOKS = [
   "__test_detachPublicationWaiters",
   "__test_releaseDetachPublication",
   "__test_liveStrandedResolverRefCount",
+  "__test_bridgeFreeCount",
 ];
 const MAX_SAFE_HANDLE = Number.MAX_SAFE_INTEGER;
 const UINT64_MAX = 18_446_744_073_709_551_615n;
@@ -568,6 +569,35 @@ async function handleExhaustionOwnerCleanup() {
   };
 }
 
+async function resolverlessFinalization() {
+  const iterations = 100;
+  const freesBefore = count("__test_bridgeFreeCount");
+  addon.initialize(libPath);
+  for (let i = 0; i < iterations; i++) {
+    const handle = addon.createEngine();
+    addon.destroyEngine(handle);
+  }
+
+  const worker = new Worker(`
+    "use strict";
+    const { parentPort, workerData } = require("node:worker_threads");
+    const addon = require(workerData.addonPath);
+    addon.initialize(workerData.libPath);
+    for (let i = 0; i < workerData.iterations; i++) addon.createEngine();
+    parentPort.postMessage("created");
+  `, { eval: true, workerData: { addonPath, libPath, iterations } });
+  const [message] = await withTimeout(once(worker, "message"), "resolver-less worker creation");
+  assert(message === "created", "resolver-less worker did not create engines");
+  const [exitCode] = await withTimeout(once(worker, "exit"), "resolver-less worker finalization");
+  assert(exitCode === 0, `resolver-less worker exited with ${exitCode}`);
+
+  await withTimeout(addon.cleanup(), "resolver-less finalization cleanup");
+  return {
+    expectedFrees: iterations * 2,
+    actualFrees: Number(count("__test_bridgeFreeCount") - freesBefore),
+  };
+}
+
 async function oneShotSite() {
   addon.initialize(libPath);
   const first = addon.createEngine();
@@ -665,6 +695,7 @@ async function main() {
   else if (mode === "handle-exhaustion-rollback-strand") result = await handleExhaustionRollbackStrand();
   else if (mode === "detach-publication-race") result = await detachPublicationRace(process.argv[5]);
   else if (mode === "handle-exhaustion-owner-cleanup") result = await handleExhaustionOwnerCleanup();
+  else if (mode === "resolverless-finalization") result = await resolverlessFinalization();
   else if (mode === "hooks-absent") result = hooksAbsent();
   else throw new Error(`unknown fixture mode: ${mode}`);
   process.stdout.write(`${JSON.stringify(result)}\n`);

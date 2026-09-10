@@ -206,6 +206,13 @@ describe("detach failure poisoning and recovery", () => {
     });
   });
 
+  it("frees resolver-less bridges exactly once through explicit destroy and env finalization", () => {
+    expect(runFixture(SYNC_FIXTURE, ["resolverless-finalization"])).toEqual({
+      expectedFrees: 200,
+      actualFrees: 200,
+    });
+  });
+
   it("rejects invalid sites and refuses to silently replace an armed failure", () => {
     expect(runFixture(SYNC_FIXTURE, ["invalid-arguments"])).toEqual({
       invalidArguments: 6,
