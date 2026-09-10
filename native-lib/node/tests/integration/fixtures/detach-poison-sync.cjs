@@ -31,6 +31,7 @@ const TEST_HOOKS = [
   "__test_releaseDetachPublication",
   "__test_liveStrandedResolverRefCount",
   "__test_bridgeFreeCount",
+  "__test_postReclamationActionCount",
 ];
 const MAX_SAFE_HANDLE = Number.MAX_SAFE_INTEGER;
 const UINT64_MAX = 18_446_744_073_709_551_615n;
@@ -572,6 +573,7 @@ async function handleExhaustionOwnerCleanup() {
 async function resolverlessFinalization() {
   const iterations = 100;
   const freesBefore = count("__test_bridgeFreeCount");
+  const actionsBefore = count("__test_postReclamationActionCount");
   addon.initialize(libPath);
   for (let i = 0; i < iterations; i++) {
     const handle = addon.createEngine();
@@ -595,6 +597,7 @@ async function resolverlessFinalization() {
   return {
     expectedFrees: iterations * 2,
     actualFrees: Number(count("__test_bridgeFreeCount") - freesBefore),
+    postReclamationActions: Number(count("__test_postReclamationActionCount") - actionsBefore),
   };
 }
 

@@ -210,6 +210,7 @@ describe("detach failure poisoning and recovery", () => {
     expect(runFixture(SYNC_FIXTURE, ["resolverless-finalization"])).toEqual({
       expectedFrees: 200,
       actualFrees: 200,
+      postReclamationActions: 0,
     });
   });
 
