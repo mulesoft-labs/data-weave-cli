@@ -25,6 +25,11 @@ const TEST_HOOKS = [
   "__test_setNextEngineHandle",
   "__test_setIsolateGeneration",
   "__test_isolateGeneration",
+  "__test_holdDetachPublication",
+  "__test_detachPublicationHeld",
+  "__test_detachPublicationWaiters",
+  "__test_releaseDetachPublication",
+  "__test_liveStrandedResolverRefCount",
 ];
 const MAX_SAFE_HANDLE = Number.MAX_SAFE_INTEGER;
 const UINT64_MAX = 18_446_744_073_709_551_615n;
@@ -442,6 +447,127 @@ async function handleExhaustionRollbackStrand() {
   return { exhaustionRejected, strandedDelta };
 }
 
+async function detachPublicationRace(site) {
+  addon.initialize(libPath);
+  const handle = addon.createEngine();
+  const forcedBefore = count("__test_forcedDetachFailureCount");
+  const abandonedBefore = count("__test_abandonedIsolateCount");
+  addon.__test_forceDetachFailureOnce(site);
+  addon.__test_holdDetachPublication();
+
+  const trigger = new Worker(`
+    "use strict";
+    const { parentPort, workerData } = require("node:worker_threads");
+    const addon = require(workerData.addonPath);
+    (async () => {
+      addon.initialize(workerData.libPath);
+      if (workerData.site === "synchronous-run") {
+        addon.runScriptEngine(workerData.handle, "output application/json --- 6 * 7", "{}");
+      } else {
+        const operation = addon.runScriptStreamingEngine(
+          workerData.handle,
+          "output application/json --- []",
+          "{}",
+          (chunk, sequence) => operation.acknowledge(sequence, chunk.length)
+        );
+        await operation.completion;
+      }
+      parentPort.postMessage("trigger-returned");
+    })().catch((error) => parentPort.postMessage({ error: error.stack || String(error) }));
+  `, { eval: true, workerData: { addonPath, libPath, site, handle } });
+  const triggerMessagePromise = once(trigger, "message");
+  const triggerExitPromise = once(trigger, "exit");
+
+  while (!addon.__test_detachPublicationHeld()) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  const admission = new Worker(`
+    "use strict";
+    const { parentPort, workerData } = require("node:worker_threads");
+    const addon = require(workerData.addonPath);
+    (async () => {
+      parentPort.postMessage({ ready: true });
+      await new Promise((resolve) => parentPort.once("message", resolve));
+      addon.initialize(workerData.libPath);
+      const handle = addon.createEngine();
+      parentPort.postMessage({ admitted: true, handle });
+    })().catch((error) => {
+      parentPort.postMessage({ admitted: false, message: error && error.message });
+    });
+  `, { eval: true, workerData: { addonPath, libPath } });
+  const admissionExitPromise = once(admission, "exit");
+
+  const [ready] = await withTimeout(once(admission, "message"), "detach publication admission ready");
+  assert(ready.ready === true, "admission worker did not become ready");
+  const admissionResult = new Promise((resolve, reject) => {
+    admission.once("message", resolve);
+    admission.once("error", reject);
+  });
+  admission.postMessage("admit");
+  while (addon.__test_detachPublicationWaiters() === 0n) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  const admittedBeforeRelease = await Promise.race([
+    admissionResult.then(() => true),
+    new Promise((resolve) => setImmediate(() => resolve(false))),
+  ]);
+  addon.__test_releaseDetachPublication();
+  const admissionMessage = await withTimeout(admissionResult, "detach publication admission");
+  const admissionRejectedPoison =
+    admissionMessage.admitted === false && admissionMessage.message === POISONED_MESSAGE;
+  const [triggerMessage] = await withTimeout(triggerMessagePromise, "detach publication trigger");
+  assert(triggerMessage.error === undefined, triggerMessage.error ?? "trigger worker failed");
+  await withTimeout(Promise.all([triggerExitPromise, admissionExitPromise]), "detach publication workers");
+
+  addon.destroyEngine(handle);
+  await withTimeout(addon.cleanup(), "detach publication cleanup");
+  addon.initialize(libPath);
+  const fresh = addon.createEngine();
+  const freshResult = successfulResult(
+    addon.runScriptEngine(fresh, "output application/json --- 6 * 7", "{}")
+  );
+  addon.destroyEngine(fresh);
+  await withTimeout(addon.cleanup(), "detach publication fresh cleanup");
+  return {
+    admittedBeforeRelease,
+    admissionRejectedPoison,
+    forcedFailures: Number(count("__test_forcedDetachFailureCount") - forcedBefore),
+    abandoned: Number(count("__test_abandonedIsolateCount") - abandonedBefore),
+    freshResult,
+  };
+}
+
+async function handleExhaustionOwnerCleanup() {
+  addon.initialize(libPath);
+  addon.__test_setNextEngineHandle(MAX_SAFE_HANDLE);
+  const finalHandle = addon.createEngine();
+  addon.destroyEngine(finalHandle);
+  const deletesBefore = addon.__test_resolverRefDeleteCount();
+  addon.__test_forceStrandOnce();
+  let exhaustionRejected = false;
+  try {
+    addon.createEngineWithResolver(() => null);
+  } catch (error) {
+    exhaustionRejected = error instanceof Error && error.message === "Engine handle space exhausted";
+  }
+  const strandedBeforeCleanup = addon.__test_strandedCount();
+  await withTimeout(addon.cleanup(), "owner cleanup old isolate");
+  addon.initialize(libPath);
+  await new Promise((resolve) => setImmediate(resolve));
+  const strandedAfterHandoff = addon.__test_strandedCount();
+  const resolverDeletes = addon.__test_resolverRefDeleteCount() - deletesBefore;
+  const liveStrandedResolverRefs = Number(addon.__test_liveStrandedResolverRefCount());
+  await withTimeout(addon.cleanup(), "owner cleanup fresh isolate");
+  return {
+    exhaustionRejected,
+    strandedBeforeCleanup,
+    strandedAfterHandoff,
+    resolverDeletes,
+    liveStrandedResolverRefs,
+  };
+}
+
 async function oneShotSite() {
   addon.initialize(libPath);
   const first = addon.createEngine();
@@ -537,6 +663,8 @@ async function main() {
   else if (mode === "generation-exhaustion") result = await generationExhaustion();
   else if (mode === "identity-hook-validation") result = await identityHookValidation();
   else if (mode === "handle-exhaustion-rollback-strand") result = await handleExhaustionRollbackStrand();
+  else if (mode === "detach-publication-race") result = await detachPublicationRace(process.argv[5]);
+  else if (mode === "handle-exhaustion-owner-cleanup") result = await handleExhaustionOwnerCleanup();
   else if (mode === "hooks-absent") result = hooksAbsent();
   else throw new Error(`unknown fixture mode: ${mode}`);
   process.stdout.write(`${JSON.stringify(result)}\n`);

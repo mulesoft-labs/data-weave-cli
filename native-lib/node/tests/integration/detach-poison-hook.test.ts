@@ -176,6 +176,36 @@ describe("detach failure poisoning and recovery", () => {
     });
   });
 
+  it("blocks cross-worker admission until synchronous detach failure is published", () => {
+    expect(runFixture(SYNC_FIXTURE, ["detach-publication-race", "synchronous-run"])).toEqual({
+      admittedBeforeRelease: false,
+      admissionRejectedPoison: true,
+      forcedFailures: 1,
+      abandoned: 1,
+      freshResult: "42",
+    });
+  });
+
+  it("blocks cross-worker admission until stream-worker detach failure is published", () => {
+    expect(runFixture(SYNC_FIXTURE, ["detach-publication-race", "stream-worker"])).toEqual({
+      admittedBeforeRelease: false,
+      admissionRejectedPoison: true,
+      forcedFailures: 1,
+      abandoned: 1,
+      freshResult: "42",
+    });
+  });
+
+  it("deletes a stranded rollback resolver reference on its live owner env", () => {
+    expect(runFixture(SYNC_FIXTURE, ["handle-exhaustion-owner-cleanup"])).toEqual({
+      exhaustionRejected: true,
+      strandedBeforeCleanup: 1,
+      strandedAfterHandoff: 0,
+      resolverDeletes: 1,
+      liveStrandedResolverRefs: 0,
+    });
+  });
+
   it("rejects invalid sites and refuses to silently replace an armed failure", () => {
     expect(runFixture(SYNC_FIXTURE, ["invalid-arguments"])).toEqual({
       invalidArguments: 6,

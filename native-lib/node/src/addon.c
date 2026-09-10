@@ -166,6 +166,18 @@ typedef struct engine_bridge {
     // owner thread (creation, destroyEngine, bridge_env_cleanup) under the usual
     // owner-thread-serialization contract.
     bool hook_registered;
+    // Resolver refs and bridge memory have two independent owners once native
+    // registry removal strands: the Java callback ctx and the owner Node env.
+    // The env hook drops owner_alive/resolver_js; the native drain drops
+    // native_alive. The bridge is freed only after both have released it.
+    bool native_alive;
+    bool owner_alive;
+    // Every resolver bridge owns an unreferenced TSFN. A native-side drain can
+    // queue its callback onto the owner env to delete resolver_js legally; the
+    // TSFN finalizer drops owner ownership when that env dies instead.
+    napi_threadsafe_function owner_cleanup_tsfn;
+    bool owner_cleanup_queued;
+    bool owner_cleanup_released;
     struct engine_bridge* next;
 } engine_bridge_t;
 static engine_bridge_t* g_bridges = NULL;  // linked list, guarded by g_mutex
@@ -209,6 +221,16 @@ static bool g_test_hold_next_async_op = false;
 static bool g_test_async_op_held = false;
 static bool g_test_release_async_op = false;
 static uint64_t g_test_engine_record_allocation_failure_generation = 0;
+static uint64_t g_detach_in_progress_generation = 0;
+static unsigned g_detach_in_progress = 0;
+static bool g_test_hold_next_detach_publication = false;
+static bool g_test_detach_publication_held = false;
+static bool g_test_release_detach_publication = false;
+static unsigned g_detach_publication_waiters = 0;
+static uint64_t g_test_live_resolver_refs = 0;
+
+static void bridge_env_cleanup(void* arg);
+static void bridge_finalize_free(engine_bridge_t* b, bool env_still_alive);
 
 typedef enum {
   OUTPUT_SETTLEMENT_FAULT_NONE = 0,
@@ -398,6 +420,8 @@ static void abandon_unrecoverable_isolate_locked(void) {
   g_ref_count = 0;
   g_teardown_needed = false;
   g_isolate_poisoned = false;
+  g_detach_in_progress = 0;
+  g_detach_in_progress_generation = 0;
   fprintf(stderr,
           "[DataWeave Node addon] GraalVM isolate teardown AND worker detach both "
           "failed; the isolate can never be torn down and is being leaked for the "
@@ -424,21 +448,68 @@ static void poison_isolate_detach_failure_locked(int detach_rc) {
   g_isolate_poisoned = true;
 }
 
+// Wait while this generation has an ordinary detach whose result has not yet
+// been published. Callers hold g_mutex. Each detach is covered by an active-op
+// reservation, so waiting cannot let teardown overtake the detaching thread.
+static void wait_for_detach_publication_locked(void) {
+  bool counted = false;
+  while (g_detach_in_progress > 0 &&
+         g_detach_in_progress_generation == g_isolate_generation) {
+    if (g_test_hooks && !counted) {
+      g_detach_publication_waiters++;
+      counted = true;
+      uv_cond_broadcast(&g_teardown_cond);
+    }
+    uv_cond_wait(&g_teardown_cond, &g_mutex);
+  }
+  if (counted) {
+    g_detach_publication_waiters--;
+    uv_cond_broadcast(&g_teardown_cond);
+  }
+}
+
 // Centralized policy for every ordinary operation detach. The real Graal
 // detach always runs first. Test injection may turn only a successful detach
 // at the selected site into one synthetic failure; real failures never consume
 // the arm. Any nonzero result poisons this published isolate before later work
 // can be admitted.
 static int detach_thread_checked(detach_site_t site, void* thread) {
-  int detach_rc = fn_detach_thread(thread);
-  if (detach_rc == 0 && !g_test_hooks) return 0;
   uv_mutex_lock(&g_mutex);
-  if (detach_rc == 0 && g_test_hooks && g_test_detach_failure_site == site) {
+  uint64_t generation = g_isolate_generation;
+  if (g_detach_in_progress == 0) {
+    g_detach_in_progress_generation = generation;
+  }
+  g_detach_in_progress++;
+  uv_mutex_unlock(&g_mutex);
+
+  int detach_rc = fn_detach_thread(thread);
+  uv_mutex_lock(&g_mutex);
+  bool current_generation = generation == g_isolate_generation;
+  if (detach_rc == 0 && current_generation && g_test_hooks &&
+      g_test_detach_failure_site == site) {
     g_test_detach_failure_site = DETACH_SITE_NONE;
     g_test_forced_detach_failures++;
     detach_rc = -1;
   }
-  if (detach_rc != 0) poison_isolate_detach_failure_locked(detach_rc);
+  if (current_generation && g_test_hooks &&
+      g_test_hold_next_detach_publication) {
+    g_test_hold_next_detach_publication = false;
+    g_test_detach_publication_held = true;
+    uv_cond_broadcast(&g_teardown_cond);
+    while (!g_test_release_detach_publication) {
+      uv_cond_wait(&g_teardown_cond, &g_mutex);
+    }
+    g_test_release_detach_publication = false;
+    g_test_detach_publication_held = false;
+  }
+  if (detach_rc != 0 && current_generation) {
+    poison_isolate_detach_failure_locked(detach_rc);
+  }
+  if (generation == g_detach_in_progress_generation && g_detach_in_progress > 0) {
+    g_detach_in_progress--;
+    if (g_detach_in_progress == 0) g_detach_in_progress_generation = 0;
+  }
+  uv_cond_broadcast(&g_teardown_cond);
   uv_mutex_unlock(&g_mutex);
   return detach_rc;
 }
@@ -480,6 +551,85 @@ static void resolver_results_free_all(engine_bridge_t* b) {
         node = next;
     }
     b->results = NULL;
+}
+
+static void bridge_release_if_unowned_locked(engine_bridge_t* b) {
+    if (b == NULL || b->native_alive || b->owner_alive ||
+        b->owner_cleanup_tsfn != NULL) return;
+    resolver_results_free_all(b);
+    free(b);
+}
+
+static void bridge_owner_cleanup_finalize(
+    napi_env env, void* finalize_data, void* finalize_hint) {
+    (void)env;
+    (void)finalize_hint;
+    engine_bridge_t* b = (engine_bridge_t*)finalize_data;
+    if (b == NULL) return;
+    uv_mutex_lock(&g_mutex);
+    b->owner_cleanup_tsfn = NULL;
+    if (b->owner_alive && b->resolver_js != NULL && g_test_hooks &&
+        g_test_live_resolver_refs > 0) {
+        g_test_live_resolver_refs--;
+    }
+    b->owner_alive = false;
+    b->resolver_js = NULL;
+    bridge_release_if_unowned_locked(b);
+    uv_mutex_unlock(&g_mutex);
+}
+
+static void call_js_bridge_owner_cleanup(
+    napi_env env, napi_value js_callback, void* context, void* data) {
+    (void)js_callback;
+    (void)data;
+    engine_bridge_t* b = (engine_bridge_t*)context;
+    if (b == NULL || env == NULL) return;
+    if (b->hook_registered) {
+        napi_remove_env_cleanup_hook(env, bridge_env_cleanup, b);
+        b->hook_registered = false;
+    }
+    bridge_finalize_free(b, /*env_still_alive=*/true);
+}
+
+// Called on the bridge owner thread after its resolver reference is created.
+// The unreferenced TSFN is an owner-env cleanup handoff: native drains may queue
+// its JS callback from any thread, while env teardown invokes its finalizer.
+static bool bridge_register_owner_cleanup(engine_bridge_t* b) {
+    if (b == NULL || b->resolver_js == NULL || b->env == NULL) return true;
+    napi_value resource_name;
+    if (napi_create_string_utf8(
+            b->env, "dwResolverOwnerCleanup", NAPI_AUTO_LENGTH, &resource_name) != napi_ok ||
+        napi_create_threadsafe_function(
+            b->env, NULL, NULL, resource_name, 0, 1, b,
+            bridge_owner_cleanup_finalize, b, call_js_bridge_owner_cleanup,
+            &b->owner_cleanup_tsfn) != napi_ok) {
+        return false;
+    }
+    if (napi_unref_threadsafe_function(b->env, b->owner_cleanup_tsfn) != napi_ok) {
+        napi_release_threadsafe_function(
+            b->owner_cleanup_tsfn, napi_tsfn_abort);
+        b->owner_cleanup_released = true;
+        return false;
+    }
+    return true;
+}
+
+static void bridge_release_native_and_handoff(engine_bridge_t* b) {
+    if (b == NULL) return;
+    uv_mutex_lock(&g_mutex);
+    if (b->owner_alive && b->resolver_js != NULL &&
+        b->owner_cleanup_tsfn != NULL && !b->owner_cleanup_queued) {
+        b->owner_cleanup_queued = true;
+        // Queueing is thread-safe and never invokes the JS callback inline. Keep
+        // native ownership until the enqueue returns, so an env finalizer cannot
+        // free b between the ownership transition and this handoff.
+        napi_status status = napi_call_threadsafe_function(
+            b->owner_cleanup_tsfn, b, napi_tsfn_nonblocking);
+        if (status != napi_ok) b->owner_cleanup_queued = false;
+    }
+    b->native_alive = false;
+    bridge_release_if_unowned_locked(b);
+    uv_mutex_unlock(&g_mutex);
 }
 
 // Call under g_mutex. Stale bridges stay owned by their env cleanup hooks, but
@@ -646,6 +796,7 @@ static bool bridge_finalize_registry_at_site(engine_bridge_t* b, detach_site_t d
         uv_mutex_unlock(&g_mutex);
     }
     uv_mutex_lock(&g_mutex);
+    wait_for_detach_publication_locked();
     // If the waiter already committed to physical teardown (TEARING_DOWN) or the
     // isolate is already gone, the Java registry died/dies with it -- nothing to
     // remove, and attaching would race graal_tear_down_isolate. Skip, but report
@@ -686,11 +837,6 @@ static bool bridge_finalize_registry(engine_bridge_t* b) {
     return bridge_finalize_registry_at_site(b, DETACH_SITE_BRIDGE_FINALIZE);
 }
 
-// Forward declaration: the env cleanup hook. bridge_finalize re-registers/keeps
-// it on an owner-thread live-isolate strand (may_rehook) and removes it on the
-// owner-thread free path; the definition is below (after drain_stranded_bridges).
-static void bridge_env_cleanup(void* arg);
-
 // The non-isolate finalize phase: delete the resolver napi_ref (owner JS thread
 // only, and only while its env is alive -- resolver-gated), free tracked result
 // buffers, free the record. Touches no GraalVM isolate state, so it is safe to
@@ -705,11 +851,24 @@ static void bridge_finalize_free(engine_bridge_t* b, bool env_still_alive) {
         if (g_test_hooks) {
             uv_mutex_lock(&g_mutex);
             g_test_resolver_ref_deletes++;
+            if (g_test_live_resolver_refs > 0) g_test_live_resolver_refs--;
             uv_mutex_unlock(&g_mutex);
         }
     }
-    resolver_results_free_all(b);
-    free(b);
+    uv_mutex_lock(&g_mutex);
+    if (env_still_alive || b->env == NULL || !b->owner_alive) {
+        b->resolver_js = NULL;
+        b->owner_alive = false;
+    }
+    b->native_alive = false;
+    bridge_release_if_unowned_locked(b);
+    uv_mutex_unlock(&g_mutex);
+    if (env_still_alive && b->owner_cleanup_tsfn != NULL &&
+        !b->owner_cleanup_released) {
+        b->owner_cleanup_released = true;
+        napi_release_threadsafe_function(
+            b->owner_cleanup_tsfn, napi_tsfn_release);
+    }
 }
 
 // Thin wrapper preserving the original signature and every call site. Registry
@@ -785,10 +944,10 @@ static void drain_stranded_bridges(void) {
         list = list->next;  // snapshot the link before b is freed or re-retained
         b->next = NULL;
         if (bridge_finalize_registry(b)) {
-            // Registry entry removed (or isolate gone): the resolver ctx is dead,
-            // so freeing is safe. Skip the napi_ref delete (env_still_alive=false)
-            // -- we may not be on the owner thread.
-            bridge_finalize_free(b, /*env_still_alive=*/false);
+            // Registry entry removed (or isolate gone): release native ownership.
+            // The owner env hook remains responsible for deleting resolver_js and
+            // releasing owner ownership on its Node thread.
+            bridge_release_native_and_handoff(b);
         } else {
             // Still could not attach (isolate live, transient failure): keep the
             // ctx valid and retry at the next drain.
@@ -820,6 +979,15 @@ static void bridge_env_cleanup(void* arg) {
     while (*pp != NULL) {
         if (*pp == b) { *pp = b->next; break; }
         pp = &(*pp)->next;
+    }
+    engine_bridge_t** stranded_pp = &g_stranded_bridges;
+    while (*stranded_pp != NULL) {
+        if (*stranded_pp == b) {
+            *stranded_pp = b->next;
+            b->next = NULL;
+            break;
+        }
+        stranded_pp = &(*stranded_pp)->next;
     }
     // An in-flight streaming/transform op holds a live threadsafe function that
     // keeps this env's event loop alive, so the env should never tear down while
@@ -861,7 +1029,31 @@ static void bridge_env_cleanup(void* arg) {
     // may_rehook=false: the env is tearing down, so do NOT re-register the hook on
     // a strand -- a strand here falls back to g_stranded_bridges (Node reclaims the
     // ref at env teardown; the off-thread drain frees the record later).
-    bridge_finalize(b, /*env_still_alive=*/true, /*do_registry_remove=*/true, /*may_rehook=*/false);
+    if (b->resolver_js != NULL && b->env != NULL) {
+        napi_delete_reference(b->env, b->resolver_js);
+        b->resolver_js = NULL;
+        if (g_test_hooks) {
+            uv_mutex_lock(&g_mutex);
+            g_test_resolver_ref_deletes++;
+            if (g_test_live_resolver_refs > 0) g_test_live_resolver_refs--;
+            uv_mutex_unlock(&g_mutex);
+        }
+    }
+    b->owner_alive = false;
+    if (b->native_alive) {
+        if (bridge_finalize_registry(b)) {
+            uv_mutex_lock(&g_mutex);
+            b->native_alive = false;
+            bridge_release_if_unowned_locked(b);
+            uv_mutex_unlock(&g_mutex);
+        } else {
+            bridge_retain_stranded(b);
+        }
+    } else {
+        uv_mutex_lock(&g_mutex);
+        bridge_release_if_unowned_locked(b);
+        uv_mutex_unlock(&g_mutex);
+    }
 }
 
 // Increment this engine's in_flight while g_mutex is ALREADY held. Used by the
@@ -1140,6 +1332,7 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
   }
 
   uv_mutex_lock(&g_mutex);
+  wait_for_detach_publication_locked();
   bool poisoned_before_drain = g_isolate_poisoned;
   uv_mutex_unlock(&g_mutex);
   if (poisoned_before_drain) {
@@ -1156,6 +1349,7 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
   drain_stranded_bridges();
 
   uv_mutex_lock(&g_mutex);
+  wait_for_detach_publication_locked();
 
   // A detach failure is terminal for the currently published isolate. It may
   // not be adopted or reused; explicit cleanup must abandon it first.
@@ -2561,6 +2755,7 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
   // genuine (non-cancelled) PENDING_WAIT or a committed TEARING_DOWN still
   // rejects.
   uv_mutex_lock(&g_mutex);
+  wait_for_detach_publication_locked();
   if (g_isolate_poisoned) {
     uv_mutex_unlock(&g_mutex);
     napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
@@ -3179,6 +3374,7 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
   // post-adoption op throws "Not initialized". A genuine (non-cancelled)
   // PENDING_WAIT or a committed TEARING_DOWN still rejects.
   uv_mutex_lock(&g_mutex);
+  wait_for_detach_publication_locked();
   if (g_isolate_poisoned) {
     uv_mutex_unlock(&g_mutex);
     napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
@@ -3569,6 +3765,7 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
     // check and the g_active_ops++ cannot be split by a teardown because every
     // teardown transition and the g_active_ops==0 fast path also hold g_mutex.
     uv_mutex_lock(&g_mutex);
+    wait_for_detach_publication_locked();
     env_init_rec_t* self = env_init_rec_find_locked(env);
     if (g_isolate_poisoned) {
         uv_mutex_unlock(&g_mutex);
@@ -3648,6 +3845,8 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
         return NULL;
     }
     rec->native_handle = handle;
+    rec->native_alive = true;
+    rec->owner_alive = true;
     rec->owner = uv_thread_self();
     rec->env = env;
     uv_mutex_lock(&g_mutex);
@@ -3738,16 +3937,28 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
     if (napi_create_reference(env, argv[0], 1, &bridge->resolver_js) != napi_ok) {
         free(bridge); napi_throw_error(env, NULL, "Failed to reference resolver callback"); return NULL;
     }
+    if (g_test_hooks) {
+        uv_mutex_lock(&g_mutex);
+        g_test_live_resolver_refs++;
+        uv_mutex_unlock(&g_mutex);
+    }
     bridge->env = env; bridge->owner = uv_thread_self(); bridge->results = NULL;
+    bridge->owner_alive = true;
+    if (!bridge_register_owner_cleanup(bridge)) {
+        bridge_finalize_free(bridge, /*env_still_alive=*/true);
+        napi_throw_error(env, NULL, "Failed to register resolver owner cleanup");
+        return NULL;
+    }
 
     // Round-14 (#1): same admission block as napi_create_engine. Taken AFTER the
     // bridge/resolver-ref allocation (those failures touch no isolate state and
     // must not decrement a reservation not yet held) and BEFORE fn_attach_thread.
     uv_mutex_lock(&g_mutex);
+    wait_for_detach_publication_locked();
     env_init_rec_t* self = env_init_rec_find_locked(env);
     if (g_isolate_poisoned) {
         uv_mutex_unlock(&g_mutex);
-        napi_delete_reference(env, bridge->resolver_js); free(bridge);
+        bridge_finalize_free(bridge, /*env_still_alive=*/true);
         napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
         return NULL;
     }
@@ -3755,7 +3966,7 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
         g_teardown_state == TEARDOWN_TEARING_DOWN ||
         self == NULL || self->init_refs == 0) {
         uv_mutex_unlock(&g_mutex);
-        napi_delete_reference(env, bridge->resolver_js); free(bridge);
+        bridge_finalize_free(bridge, /*env_still_alive=*/true);
         napi_throw_error(env, NULL, "Not initialized. Call initialize() first.");
         return NULL;
     }
@@ -3765,7 +3976,7 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
     void* thread = NULL;
     if (fn_attach_thread(g_isolate, &thread) != 0) {
         uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
-        napi_delete_reference(env, bridge->resolver_js); free(bridge);
+        bridge_finalize_free(bridge, /*env_still_alive=*/true);
         napi_throw_error(env, NULL, "Failed to attach thread"); return NULL;
     }
     long long handle = fn_create_engine_with_resolver(thread, resolve_module_callback, (void*)bridge);
@@ -3792,6 +4003,7 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
     }
 
     bridge->native_handle = handle;
+    bridge->native_alive = true;
     uv_mutex_lock(&g_mutex);
     bridge->handle = next_engine_handle_locked();
     bridge->isolate_generation = g_isolate_generation;
@@ -3969,6 +4181,7 @@ static napi_value napi_destroy_engine(napi_env env, napi_callback_info info) {
         // window; only the g_mutex-guarded read here does.
         if (fn_destroy_engine && fn_attach_thread) {
             uv_mutex_lock(&g_mutex);
+            wait_for_detach_publication_locked();
             if (g_teardown_state == TEARDOWN_TEARING_DOWN || g_isolate == NULL) {
                 uv_mutex_unlock(&g_mutex);  // isolate gone/tearing down -> nothing to remove
             } else {
@@ -4045,8 +4258,9 @@ static napi_value napi_run_script_engine(napi_env env, napi_callback_info info) 
     // merely-cancelled teardown must not reject here -- otherwise a valid
     // post-adoption op throws "Not initialized". A genuine (non-cancelled)
     // PENDING_WAIT or a committed TEARING_DOWN still rejects.
-    uv_mutex_lock(&g_mutex);
-    if (g_isolate_poisoned) {
+  uv_mutex_lock(&g_mutex);
+  wait_for_detach_publication_locked();
+  if (g_isolate_poisoned) {
       uv_mutex_unlock(&g_mutex);
       free(script); free(inputs);
       napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
@@ -4215,7 +4429,10 @@ static void teardown_waiter_thread_fn(void* arg) {
   (void)arg;
 
   uv_mutex_lock(&g_mutex);
-  while (g_active_ops > 0 && !g_teardown_cancelled) {
+  while ((g_active_ops > 0 ||
+          (g_detach_in_progress > 0 &&
+           g_detach_in_progress_generation == g_isolate_generation)) &&
+         !g_teardown_cancelled) {
     uv_cond_wait(&g_teardown_cond, &g_mutex);
   }
   bool cancelled = g_teardown_cancelled;
@@ -4412,6 +4629,8 @@ static void retry_stranded_teardown_locked(void) {
   if (g_ref_count > 0) { g_teardown_needed = false; return; }  // adopted -> keep
   if (g_teardown_state != TEARDOWN_NONE) return;               // a teardown drives
   if (g_active_ops > 0) return;                                // wait for drain
+  if (g_detach_in_progress > 0 &&
+      g_detach_in_progress_generation == g_isolate_generation) return;
   if (g_isolate == NULL) { g_teardown_needed = false; return; } // nothing to do
   uv_thread_t tid;
   uv_thread_options_t opts;
@@ -4445,7 +4664,9 @@ static void isolate_ref_release_n_locked(int n) {
   if (g_ref_count > 0) return;              // other envs still hold references
   if (g_teardown_state != TEARDOWN_NONE) return;  // a teardown already drives
 
-  if (g_active_ops == 0) {
+  if (g_active_ops == 0 &&
+      !(g_detach_in_progress > 0 &&
+        g_detach_in_progress_generation == g_isolate_generation)) {
     uv_thread_t tid;
     uv_thread_options_t opts;
     opts.flags = UV_THREAD_HAS_STACK_SIZE;
@@ -4629,7 +4850,9 @@ static napi_value release_isolate_ref_locked(napi_env env) {
 
   // Case 4: last release, no teardown pending, and nothing active -- the
   // original, unchanged synchronous fast path.
-  if (g_active_ops == 0) {
+  if (g_active_ops == 0 &&
+      !(g_detach_in_progress > 0 &&
+        g_detach_in_progress_generation == g_isolate_generation)) {
     uv_thread_t tid;
     uv_thread_options_t opts;
     opts.flags = UV_THREAD_HAS_STACK_SIZE;
@@ -4968,6 +5191,61 @@ static napi_value napi_test_release_async_op(napi_env env, napi_callback_info in
   uv_cond_broadcast(&g_teardown_cond);
   uv_mutex_unlock(&g_mutex);
   return NULL;
+}
+
+static napi_value napi_test_hold_detach_publication(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  if (g_test_hold_next_detach_publication || g_test_detach_publication_held) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "A detach publication gate is already armed");
+    return NULL;
+  }
+  g_test_hold_next_detach_publication = true;
+  g_test_release_detach_publication = false;
+  uv_mutex_unlock(&g_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_detach_publication_held(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  bool held = g_test_detach_publication_held;
+  uv_mutex_unlock(&g_mutex);
+  napi_value out;
+  napi_get_boolean(env, held, &out);
+  return out;
+}
+
+static napi_value napi_test_detach_publication_waiters(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t waiters = g_detach_publication_waiters;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, waiters);
+}
+
+static napi_value napi_test_release_detach_publication(
+    napi_env env, napi_callback_info info) {
+  (void)env;
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  g_test_release_detach_publication = true;
+  uv_cond_broadcast(&g_teardown_cond);
+  uv_mutex_unlock(&g_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_live_stranded_resolver_ref_count(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t count = g_test_live_resolver_refs;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, count);
 }
 
 static napi_value napi_test_fail_next_engine_record_allocation(
@@ -5347,6 +5625,11 @@ static napi_value Init(napi_env env, napi_value exports) {
         !export_function(env, exports, "__test_holdNextAsyncOp", napi_test_hold_next_async_op) ||
         !export_function(env, exports, "__test_asyncOpHeld", napi_test_async_op_held) ||
         !export_function(env, exports, "__test_releaseAsyncOp", napi_test_release_async_op) ||
+        !export_function(env, exports, "__test_holdDetachPublication", napi_test_hold_detach_publication) ||
+        !export_function(env, exports, "__test_detachPublicationHeld", napi_test_detach_publication_held) ||
+        !export_function(env, exports, "__test_detachPublicationWaiters", napi_test_detach_publication_waiters) ||
+        !export_function(env, exports, "__test_releaseDetachPublication", napi_test_release_detach_publication) ||
+        !export_function(env, exports, "__test_liveStrandedResolverRefCount", napi_test_live_stranded_resolver_ref_count) ||
         !export_function(env, exports, "__test_outputStats", napi_test_output_stats) ||
         !export_function(env, exports, "__test_outputOperationId", napi_test_output_operation_id) ||
         !export_function(env, exports, "__test_createForeignWrappedObject", napi_test_create_foreign_wrapped_object) ||
