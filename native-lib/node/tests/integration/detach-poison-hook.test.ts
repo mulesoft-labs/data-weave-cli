@@ -121,6 +121,61 @@ describe("detach failure poisoning and recovery", () => {
     });
   });
 
+  it("allocates the final two exact JS handles and rolls back the next native engine", () => {
+    expect(runFixture(SYNC_FIXTURE, ["handle-exhaustion"])).toEqual({
+      firstHandle: Number.MAX_SAFE_INTEGER - 1,
+      secondHandle: Number.MAX_SAFE_INTEGER,
+      firstResult: "42",
+      secondResult: "42",
+      exhaustionRejected: true,
+      forcedRollbackDetach: 1,
+      isolatePoisoned: true,
+      abandoned: 1,
+    });
+  });
+
+  it("clears an armed record-allocation fault after normal generation teardown", () => {
+    expect(runFixture(SYNC_FIXTURE, ["allocation-fault-normal-reset"])).toEqual({
+      freshResult: "42",
+      freshCreateFailed: false,
+    });
+  });
+
+  it("clears an armed record-allocation fault after poisoned generation abandonment", () => {
+    expect(runFixture(SYNC_FIXTURE, ["allocation-fault-poison-reset"])).toEqual({
+      freshResult: "42",
+      freshCreateFailed: false,
+    });
+  });
+
+  it("tears down an unpublishable isolate rather than wrapping generation identity", () => {
+    expect(runFixture(SYNC_FIXTURE, ["generation-exhaustion"])).toEqual({
+      exhaustionRejected: true,
+      creationDelta: 1,
+      teardownDelta: 2,
+      generation: "18446744073709551615",
+    });
+  });
+
+  it("rejects identity and allocation fault hooks outside their safe mutation states", () => {
+    expect(runFixture(SYNC_FIXTURE, ["identity-hook-validation"])).toEqual({
+      fractionalHandleRejected: true,
+      nanHandleRejected: true,
+      armBeforeInitializeRejected: true,
+      duplicateArmRejected: true,
+      handleMutationWithBridgeRejected: true,
+      generationMutationWithBridgeRejected: true,
+      armAfterPoisonRejected: true,
+    });
+  });
+
+  it("retains a resolver bridge when handle-exhaustion rollback cannot attach", () => {
+    expect(runFixture(SYNC_FIXTURE, ["handle-exhaustion-rollback-strand"])).toEqual({
+      exhaustionRejected: true,
+      strandedDelta: 1,
+    });
+  });
+
   it("rejects invalid sites and refuses to silently replace an armed failure", () => {
     expect(runFixture(SYNC_FIXTURE, ["invalid-arguments"])).toEqual({
       invalidArguments: 6,

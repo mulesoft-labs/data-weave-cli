@@ -19,7 +19,15 @@ const DETACH_HOOKS = [
   "__test_abandonedIsolateCount",
   "__test_forcedDetachFailureCount",
 ];
-const TEST_HOOKS = [...DETACH_HOOKS, "__test_failNextEngineRecordAllocation"];
+const TEST_HOOKS = [
+  ...DETACH_HOOKS,
+  "__test_failNextEngineRecordAllocation",
+  "__test_setNextEngineHandle",
+  "__test_setIsolateGeneration",
+  "__test_isolateGeneration",
+];
+const MAX_SAFE_HANDLE = Number.MAX_SAFE_INTEGER;
+const UINT64_MAX = 18_446_744_073_709_551_615n;
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -255,6 +263,185 @@ async function exerciseCreateRollback() {
   };
 }
 
+async function handleExhaustion() {
+  assert(typeof addon.__test_setNextEngineHandle === "function", "handle setter is undefined");
+  addon.initialize(libPath);
+  addon.__test_setNextEngineHandle(MAX_SAFE_HANDLE - 1);
+  const firstHandle = addon.createEngine();
+  const secondHandle = addon.createEngineWithResolver(() => null);
+  assert(firstHandle === MAX_SAFE_HANDLE - 1, `unexpected first handle: ${firstHandle}`);
+  assert(secondHandle === MAX_SAFE_HANDLE, `unexpected second handle: ${secondHandle}`);
+  assert(Number.isSafeInteger(firstHandle), "first handle is not a safe integer");
+  assert(Number.isSafeInteger(secondHandle), "second handle is not a safe integer");
+  const firstResult = successfulResult(
+    addon.runScriptEngine(firstHandle, "output application/json --- 6 * 7", "{}")
+  );
+  const secondResult = successfulResult(
+    addon.runScriptEngine(secondHandle, "output application/json --- 6 * 7", "{}")
+  );
+  addon.destroyEngine(firstHandle);
+  addon.destroyEngine(secondHandle);
+
+  const forcedBefore = count("__test_forcedDetachFailureCount");
+  const abandonedBefore = count("__test_abandonedIsolateCount");
+  addon.__test_forceDetachFailureOnce("create-rollback");
+  let exhaustionRejected = false;
+  try {
+    addon.createEngine();
+  } catch (error) {
+    exhaustionRejected = error instanceof Error && error.message === "Engine handle space exhausted";
+  }
+  assert(exhaustionRejected, "handle exhaustion was not rejected");
+  const forcedRollbackDetach = Number(count("__test_forcedDetachFailureCount") - forcedBefore);
+  const isolatePoisoned = addon.__test_isolatePoisoned();
+  await withTimeout(addon.cleanup(), "handle exhaustion cleanup");
+  const abandoned = Number(count("__test_abandonedIsolateCount") - abandonedBefore);
+  return {
+    firstHandle,
+    secondHandle,
+    firstResult,
+    secondResult,
+    exhaustionRejected,
+    forcedRollbackDetach,
+    isolatePoisoned,
+    abandoned,
+  };
+}
+
+async function allocationFaultReset(poison) {
+  addon.initialize(libPath);
+  addon.__test_failNextEngineRecordAllocation();
+  if (poison) {
+    const handle = addon.createEngineWithResolver(() => null);
+    addon.__test_forceDetachFailureOnce("synchronous-run");
+    successfulResult(addon.runScriptEngine(handle, "output application/json --- 6 * 7", "{}"));
+  }
+  await withTimeout(addon.cleanup(), poison ? "poisoned fault reset" : "normal fault reset");
+
+  addon.initialize(libPath);
+  let freshCreateFailed = false;
+  let fresh;
+  try {
+    fresh = addon.createEngine();
+  } catch (error) {
+    freshCreateFailed = error instanceof Error && error.message === "Failed to allocate engine record";
+    if (!freshCreateFailed) throw error;
+  }
+  assert(!freshCreateFailed, "fresh generation consumed the stale allocation fault");
+  const freshResult = successfulResult(
+    addon.runScriptEngine(fresh, "output application/json --- 6 * 7", "{}")
+  );
+  addon.destroyEngine(fresh);
+  await withTimeout(addon.cleanup(), "fresh allocation fault reset cleanup");
+  return { freshResult, freshCreateFailed };
+}
+
+async function generationExhaustion() {
+  assert(typeof addon.__test_setIsolateGeneration === "function", "generation setter is undefined");
+  assert(typeof addon.__test_isolateGeneration === "function", "generation counter is undefined");
+  addon.initialize(libPath);
+  const creationBefore = count("__test_isolateCreationCount");
+  const teardownBefore = count("__test_teardownCallCount");
+  addon.__test_setIsolateGeneration(UINT64_MAX);
+  await withTimeout(addon.cleanup(), "generation max cleanup");
+
+  let exhaustionRejected = false;
+  try {
+    addon.initialize(libPath);
+  } catch (error) {
+    exhaustionRejected = error instanceof Error && error.message === "DataWeave isolate generation space exhausted";
+  }
+  assert(exhaustionRejected, "generation exhaustion was not rejected");
+  return {
+    exhaustionRejected,
+    creationDelta: Number(count("__test_isolateCreationCount") - creationBefore),
+    teardownDelta: Number(count("__test_teardownCallCount") - teardownBefore),
+    generation: addon.__test_isolateGeneration().toString(),
+  };
+}
+
+async function identityHookValidation() {
+  let fractionalHandleRejected = false;
+  try {
+    addon.__test_setNextEngineHandle(1.5);
+  } catch (error) {
+    fractionalHandleRejected = error instanceof Error;
+  }
+  let nanHandleRejected = false;
+  try {
+    addon.__test_setNextEngineHandle(Number.NaN);
+  } catch (error) {
+    nanHandleRejected = error instanceof Error;
+  }
+  let armBeforeInitializeRejected = false;
+  try {
+    addon.__test_failNextEngineRecordAllocation();
+  } catch (error) {
+    armBeforeInitializeRejected = error instanceof Error;
+  }
+  addon.initialize(libPath);
+  addon.__test_failNextEngineRecordAllocation();
+  let duplicateArmRejected = false;
+  try {
+    addon.__test_failNextEngineRecordAllocation();
+  } catch (error) {
+    duplicateArmRejected = error instanceof Error;
+  }
+  expectThrow(() => addon.createEngine(), "Failed to allocate engine record");
+
+  const handle = addon.createEngine();
+  let handleMutationWithBridgeRejected = false;
+  try {
+    addon.__test_setNextEngineHandle(MAX_SAFE_HANDLE - 1);
+  } catch (error) {
+    handleMutationWithBridgeRejected = error instanceof Error;
+  }
+  let generationMutationWithBridgeRejected = false;
+  try {
+    addon.__test_setIsolateGeneration(UINT64_MAX);
+  } catch (error) {
+    generationMutationWithBridgeRejected = error instanceof Error;
+  }
+  addon.__test_forceDetachFailureOnce("synchronous-run");
+  successfulResult(addon.runScriptEngine(handle, "output application/json --- 6 * 7", "{}"));
+  let armAfterPoisonRejected = false;
+  try {
+    addon.__test_failNextEngineRecordAllocation();
+  } catch (error) {
+    armAfterPoisonRejected = error instanceof Error;
+  }
+  await withTimeout(addon.cleanup(), "identity hook validation cleanup");
+  return {
+    fractionalHandleRejected,
+    nanHandleRejected,
+    armBeforeInitializeRejected,
+    duplicateArmRejected,
+    handleMutationWithBridgeRejected,
+    generationMutationWithBridgeRejected,
+    armAfterPoisonRejected,
+  };
+}
+
+async function handleExhaustionRollbackStrand() {
+  addon.initialize(libPath);
+  addon.__test_setNextEngineHandle(MAX_SAFE_HANDLE);
+  const finalHandle = addon.createEngine();
+  addon.destroyEngine(finalHandle);
+
+  const strandedBefore = addon.__test_strandedCount();
+  addon.__test_forceStrandOnce();
+  let exhaustionRejected = false;
+  try {
+    addon.createEngineWithResolver(() => null);
+  } catch (error) {
+    exhaustionRejected = error instanceof Error && error.message === "Engine handle space exhausted";
+  }
+  assert(exhaustionRejected, "handle exhaustion was not rejected");
+  const strandedDelta = addon.__test_strandedCount() - strandedBefore;
+  await withTimeout(addon.cleanup(), "handle exhaustion rollback strand cleanup");
+  return { exhaustionRejected, strandedDelta };
+}
+
 async function oneShotSite() {
   addon.initialize(libPath);
   const first = addon.createEngine();
@@ -344,6 +531,12 @@ async function main() {
   else if (mode === "one-shot-site") result = await oneShotSite();
   else if (mode === "exercise-site") result = await exerciseSite(process.argv[5]);
   else if (mode === "exercise-create-rollback") result = await exerciseCreateRollback();
+  else if (mode === "handle-exhaustion") result = await handleExhaustion();
+  else if (mode === "allocation-fault-normal-reset") result = await allocationFaultReset(false);
+  else if (mode === "allocation-fault-poison-reset") result = await allocationFaultReset(true);
+  else if (mode === "generation-exhaustion") result = await generationExhaustion();
+  else if (mode === "identity-hook-validation") result = await identityHookValidation();
+  else if (mode === "handle-exhaustion-rollback-strand") result = await handleExhaustionRollbackStrand();
   else if (mode === "hooks-absent") result = hooksAbsent();
   else throw new Error(`unknown fixture mode: ${mode}`);
   process.stdout.write(`${JSON.stringify(result)}\n`);
