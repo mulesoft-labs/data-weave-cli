@@ -1,6 +1,8 @@
 "use strict";
 
 const path = require("node:path");
+const { once } = require("node:events");
+const { Worker } = require("node:worker_threads");
 
 const addonPath = path.resolve(process.cwd(), process.argv[2]);
 const libPath = process.argv[3];
@@ -17,6 +19,7 @@ const DETACH_HOOKS = [
   "__test_abandonedIsolateCount",
   "__test_forcedDetachFailureCount",
 ];
+const TEST_HOOKS = [...DETACH_HOOKS, "__test_failNextEngineRecordAllocation"];
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -102,8 +105,8 @@ async function recovery() {
   reject(() => addon.initialize(libPath));
   assert(addon.__test_outputStats().liveFlows === liveFlowsBefore, "rejected async work allocated an output flow");
 
-  // A poisoned generation is abandoned as a unit. destroyEngine is safe but
-  // intentionally performs no further Graal attachment on it.
+  // Engine destruction remains permitted after poison. Final cleanup abandons
+  // the generation without attempting isolate teardown.
   addon.destroyEngine(otherHandle);
   addon.destroyEngine(firstHandle);
   await withTimeout(addon.cleanup(), "poisoned isolate cleanup");
@@ -132,6 +135,63 @@ async function recovery() {
   };
 }
 
+async function staleHandle() {
+  addon.initialize(libPath);
+  const oldHandle = addon.createEngine();
+  addon.__test_forceDetachFailureOnce("synchronous-run");
+  successfulResult(addon.runScriptEngine(oldHandle, "output application/json --- 6 * 7", "{}"));
+  await withTimeout(addon.cleanup(), "old isolate cleanup");
+
+  addon.initialize(libPath);
+  const freshHandle = addon.createEngine();
+  addon.destroyEngine(oldHandle);
+  const freshResult = successfulResult(
+    addon.runScriptEngine(freshHandle, "output application/json --- 6 * 7", "{}")
+  );
+  addon.destroyEngine(freshHandle);
+  await withTimeout(addon.cleanup(), "fresh isolate cleanup");
+  return { handlesDiffer: oldHandle !== freshHandle, freshResult };
+}
+
+async function staleFinalizer() {
+  const worker = new Worker(`
+    "use strict";
+    const { parentPort, workerData } = require("node:worker_threads");
+    const addon = require(workerData.addonPath);
+    function successful(raw) {
+      const result = JSON.parse(raw);
+      if (result.success !== true) throw new Error(\`worker run failed: \${raw}\`);
+    }
+    (async () => {
+      addon.initialize(workerData.libPath);
+      const handle = addon.createEngine();
+      addon.__test_forceDetachFailureOnce("synchronous-run");
+      successful(addon.runScriptEngine(handle, "output application/json --- 6 * 7", "{}"));
+      await addon.cleanup();
+      parentPort.postMessage({ handle });
+      parentPort.once("message", () => parentPort.close());
+    })().catch((error) => {
+      parentPort.postMessage({ error: error.stack || String(error) });
+    });
+  `, { eval: true, workerData: { addonPath, libPath } });
+
+  const [message] = await once(worker, "message");
+  assert(message.error === undefined, message.error ?? "worker failed");
+  addon.initialize(libPath);
+  const freshHandle = addon.createEngine();
+  const exit = once(worker, "exit");
+  worker.postMessage("exit");
+  const [exitCode] = await exit;
+  assert(exitCode === 0, `worker exited with ${exitCode}`);
+
+  const freshResult = successfulResult(
+    addon.runScriptEngine(freshHandle, "output application/json --- 6 * 7", "{}")
+  );
+  addon.destroyEngine(freshHandle);
+  await withTimeout(addon.cleanup(), "fresh isolate cleanup after stale finalizer");
+  return { handlesDiffer: message.handle !== freshHandle, freshResult };
+}
+
 function validateSite(site) {
   assert(typeof addon.__test_forceDetachFailureOnce === "function", "detach failure hook is undefined");
   addon.__test_forceDetachFailureOnce(site);
@@ -140,7 +200,14 @@ function validateSite(site) {
 
 function invalidArguments() {
   let invalidArguments = 0;
-  for (const value of [undefined, null, 42, "not-a-detach-site"]) {
+  for (const value of [
+    undefined,
+    null,
+    42,
+    "not-a-detach-site",
+    "synchronous-run\0unknown",
+    "x".repeat(64),
+  ]) {
     try {
       if (value === undefined) addon.__test_forceDetachFailureOnce();
       else addon.__test_forceDetachFailureOnce(value);
@@ -158,6 +225,34 @@ function invalidArguments() {
   }
   assert(duplicateArmRejected, "a second arm silently replaced the first");
   return { invalidArguments, duplicateArmRejected };
+}
+
+async function exerciseCreateRollback() {
+  assert(
+    typeof addon.__test_failNextEngineRecordAllocation === "function",
+    "engine record allocation hook is undefined"
+  );
+  addon.initialize(libPath);
+  const forcedBefore = count("__test_forcedDetachFailureCount");
+  const abandonedBefore = count("__test_abandonedIsolateCount");
+  addon.__test_forceDetachFailureOnce("create-rollback");
+  addon.__test_failNextEngineRecordAllocation();
+  expectThrow(() => addon.createEngine(), "Failed to allocate engine record");
+  assert(addon.__test_isolatePoisoned() === true, "create rollback did not poison isolate");
+  await withTimeout(addon.cleanup(), "create rollback cleanup");
+
+  addon.initialize(libPath);
+  const fresh = addon.createEngine();
+  const freshResult = successfulResult(
+    addon.runScriptEngine(fresh, "output application/json --- 6 * 7", "{}")
+  );
+  addon.destroyEngine(fresh);
+  await withTimeout(addon.cleanup(), "create rollback fresh cleanup");
+  return {
+    forcedFailures: Number(count("__test_forcedDetachFailureCount") - forcedBefore),
+    abandoned: Number(count("__test_abandonedIsolateCount") - abandonedBefore),
+    freshResult,
+  };
 }
 
 async function oneShotSite() {
@@ -236,16 +331,19 @@ async function exerciseSite(site) {
 }
 
 function hooksAbsent() {
-  return { hooksAbsent: DETACH_HOOKS.every((hook) => addon[hook] === undefined) };
+  return { hooksAbsent: TEST_HOOKS.every((hook) => addon[hook] === undefined) };
 }
 
 async function main() {
   let result;
   if (mode === "recovery") result = await recovery();
+  else if (mode === "stale-handle") result = await staleHandle();
+  else if (mode === "stale-finalizer") result = await staleFinalizer();
   else if (mode === "validate-site") result = validateSite(process.argv[5]);
   else if (mode === "invalid-arguments") result = invalidArguments();
   else if (mode === "one-shot-site") result = await oneShotSite();
   else if (mode === "exercise-site") result = await exerciseSite(process.argv[5]);
+  else if (mode === "exercise-create-rollback") result = await exerciseCreateRollback();
   else if (mode === "hooks-absent") result = hooksAbsent();
   else throw new Error(`unknown fixture mode: ${mode}`);
   process.stdout.write(`${JSON.stringify(result)}\n`);

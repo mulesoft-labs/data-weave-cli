@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <limits.h>
 #ifndef _WIN32
 #include <pthread.h>
 #endif
@@ -132,7 +133,11 @@ typedef struct resolver_result_node {
 // streamed/transform custom-module lookup arriving on the background uv_thread
 // — and fail closed (return "not found") instead of crashing.
 typedef struct engine_bridge {
+    // Public handles stay unique for the process lifetime. native_handle is
+    // isolate-local and may be reused after an abandoned isolate is replaced.
     long long handle;
+    long long native_handle;
+    uint64_t isolate_generation;
     napi_env env;
     napi_ref resolver_js;             // NULL => resolver-less engine (no bridge created)
     uv_thread_t owner;                // JS thread that created and must run this engine
@@ -164,6 +169,8 @@ typedef struct engine_bridge {
     struct engine_bridge* next;
 } engine_bridge_t;
 static engine_bridge_t* g_bridges = NULL;  // linked list, guarded by g_mutex
+static uint64_t g_isolate_generation = 0;  // incremented for each fresh isolate
+static long long g_next_engine_handle = 1; // process-unique public handle
 
 // Round-15 (svacas P1): bridges whose engine destroy was SKIPPED because
 // fn_attach_thread failed while the isolate was STILL LIVE. Such a bridge must
@@ -201,6 +208,7 @@ static long long g_test_resolver_ref_deletes = 0;
 static bool g_test_hold_next_async_op = false;
 static bool g_test_async_op_held = false;
 static bool g_test_release_async_op = false;
+static bool g_test_fail_next_engine_record_allocation = false;
 
 typedef enum {
   OUTPUT_SETTLEMENT_FAULT_NONE = 0,
@@ -471,12 +479,31 @@ static void resolver_results_free_all(engine_bridge_t* b) {
     b->results = NULL;
 }
 
-// Call under g_mutex.
-static engine_bridge_t* bridge_find(long long handle) {
+// Call under g_mutex. Stale bridges stay owned by their env cleanup hooks, but
+// only records from the currently published isolate may admit operations.
+static engine_bridge_t* bridge_find_current(long long handle) {
+    for (engine_bridge_t* b = g_bridges; b != NULL; b = b->next) {
+        if (b->handle == handle && b->isolate_generation == g_isolate_generation) return b;
+    }
+    return NULL;
+}
+
+// Destruction may reclaim a stale bridge, provided finalization does not touch
+// the replacement isolate. Call under g_mutex.
+static engine_bridge_t* bridge_find_any(long long handle) {
     for (engine_bridge_t* b = g_bridges; b != NULL; b = b->next) {
         if (b->handle == handle) return b;
     }
     return NULL;
+}
+
+// Allocate the public handle while g_mutex is held. A zero result means the
+// signed handle space is exhausted.
+static long long next_engine_handle_locked(void) {
+    if (g_next_engine_handle <= 0) return 0;
+    long long handle = g_next_engine_handle;
+    g_next_engine_handle = handle == LLONG_MAX ? 0 : handle + 1;
+    return handle;
 }
 
 // Round-15 (svacas P1): retain a bridge whose engine destroy was skipped while
@@ -493,7 +520,7 @@ static engine_bridge_t* bridge_find(long long handle) {
 // both of those already require in_flight == 0 to have run at all (see the
 // deferred-destroy comment above bridge_finalize_registry) -- so in_flight is
 // already drained to zero by construction before a bridge is ever stranded, and
-// bridge_find() can no longer look it up by handle (it's unlinked from
+// bridge_find_current() can no longer look it up by handle (it's unlinked from
 // g_bridges), so no new op can be admitted against it. The only way a
 // drained-then-freed stranded bridge could still be dereferenced is unsupported
 // cross-Worker handle sharing or other API misuse that starts a background
@@ -589,6 +616,15 @@ static int env_init_refs_total_locked(void) {
 // the bridge (bridge_retain_stranded) and retry later (round-15, svacas P1).
 static bool bridge_finalize_registry(engine_bridge_t* b) {
     if (b == NULL || fn_destroy_engine == NULL) return true;
+    uv_mutex_lock(&g_mutex);
+    bool stale_generation = g_isolate == NULL ||
+        b->isolate_generation != g_isolate_generation;
+    uv_mutex_unlock(&g_mutex);
+    if (stale_generation) {
+        // The bridge's Java registry died with its old isolate. Never attach to
+        // a replacement isolate, where native_handle may identify a new engine.
+        return true;
+    }
     // Test-only: force ONE live-isolate strand (simulate fn_attach_thread failing
     // while the isolate is live -> destroy SKIPPED). Inert unless a test both
     // enabled the hooks (DATAWEAVE_TEST_HOOKS) and armed it via
@@ -611,7 +647,8 @@ static bool bridge_finalize_registry(engine_bridge_t* b) {
     // publishes TEARING_DOWN (and Case 4 holds g_mutex across its g_active_ops==0
     // check + teardown) under this same lock, this check plus the increment below
     // cannot be split by a teardown.
-    if (g_teardown_state == TEARDOWN_TEARING_DOWN || g_isolate == NULL) {
+    if (g_teardown_state == TEARDOWN_TEARING_DOWN || g_isolate == NULL ||
+        b->isolate_generation != g_isolate_generation) {
         uv_mutex_unlock(&g_mutex);
         return true;
     }
@@ -621,7 +658,7 @@ static bool bridge_finalize_registry(engine_bridge_t* b) {
     void* thread = NULL;
     bool destroyed = false;
     if (fn_attach_thread(g_isolate, &thread) == 0 && thread != NULL) {
-        fn_destroy_engine(thread, b->handle);
+        fn_destroy_engine(thread, b->native_handle);
         detach_thread_checked(DETACH_SITE_BRIDGE_FINALIZE, thread);
         destroyed = true;  // registry entry removed -> resolver ctx is now dead
     }
@@ -824,7 +861,7 @@ static void bridge_env_cleanup(void* arg) {
 // record, or NULL for an unknown handle (nothing to pin; the worker/native call
 // surfaces "Unknown engine handle"). Caller MUST hold g_mutex.
 static engine_bridge_t* bridge_begin_op_locked(long long handle) {
-    engine_bridge_t* b = bridge_find(handle);
+    engine_bridge_t* b = bridge_find_current(handle);
     if (b != NULL) b->in_flight++;
     return b;
 }
@@ -946,6 +983,7 @@ static void init_thread_fn(void* arg) {
     return;
   }
 
+  g_isolate_generation++;
   if (g_test_hooks) g_test_isolate_creations++;
 
   // review #21 #1: a brand-new isolate starts un-poisoned. Any poison flag left
@@ -2537,7 +2575,7 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
     napi_throw_error(env, NULL, "OOM");
     return NULL;
   }
-  w->handle = (long long)handle64;
+  w->handle = pinned != NULL ? pinned->native_handle : 0;
   w->script = malloc(script_len + 1);
   w->inputs_json = malloc(inputs_len + 1);
   if (w->script == NULL || w->inputs_json == NULL) {
@@ -3144,7 +3182,7 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
     return NULL;
   }
   size_t len;
-  w->handle = (long long)handle64;
+  w->handle = pinned != NULL ? pinned->native_handle : 0;
 
   #define TRANSFORM_FAIL(msg) do { \
       bridge_end_op(pinned, /*env_still_alive=*/true); \
@@ -3544,7 +3582,16 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
     // owner is recorded for symmetry but is NOT used to restrict destruction based
     // on resolver state (see the owner guard in napi_destroy_engine, which now
     // fires for any record).
-    engine_bridge_t* rec = (engine_bridge_t*)calloc(1, sizeof(engine_bridge_t));
+    bool fail_record_allocation = false;
+    if (g_test_hooks) {
+        uv_mutex_lock(&g_mutex);
+        fail_record_allocation = g_test_fail_next_engine_record_allocation;
+        g_test_fail_next_engine_record_allocation = false;
+        uv_mutex_unlock(&g_mutex);
+    }
+    engine_bridge_t* rec = fail_record_allocation
+        ? NULL
+        : (engine_bridge_t*)calloc(1, sizeof(engine_bridge_t));
     if (rec == NULL) {
         // Roll back the engine we just created so we don't leak a registered but
         // unrecorded handle. fn_destroy_engine attaches its own thread.
@@ -3564,10 +3611,23 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
         napi_throw_error(env, NULL, "Failed to allocate engine record");
         return NULL;
     }
-    rec->handle = handle;
+    rec->native_handle = handle;
     rec->owner = uv_thread_self();
     rec->env = env;
-    uv_mutex_lock(&g_mutex); rec->next = g_bridges; g_bridges = rec; uv_mutex_unlock(&g_mutex);
+    uv_mutex_lock(&g_mutex);
+    rec->handle = next_engine_handle_locked();
+    rec->isolate_generation = g_isolate_generation;
+    if (rec->handle > 0) {
+        rec->next = g_bridges;
+        g_bridges = rec;
+    }
+    uv_mutex_unlock(&g_mutex);
+    if (rec->handle <= 0) {
+        bridge_finalize(rec, /*env_still_alive=*/true, /*do_registry_remove=*/true, /*may_rehook=*/false);
+        uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
+        napi_throw_error(env, NULL, "Engine handle space exhausted");
+        return NULL;
+    }
     // Round-11 (#1): register an env cleanup hook for EVERY engine, not just
     // resolver-backed ones. Without it, a Worker that creates a resolver-less
     // engine and exits without destroyEngine() would strand this record, the Java
@@ -3616,7 +3676,7 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
         return NULL;
     }
 
-    napi_value out; napi_create_int64(env, (int64_t)handle, &out);
+    napi_value out; napi_create_int64(env, (int64_t)rec->handle, &out);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
     return out;
 }
@@ -3687,8 +3747,21 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
         return NULL;
     }
 
-    bridge->handle = handle;
-    uv_mutex_lock(&g_mutex); bridge->next = g_bridges; g_bridges = bridge; uv_mutex_unlock(&g_mutex);
+    bridge->native_handle = handle;
+    uv_mutex_lock(&g_mutex);
+    bridge->handle = next_engine_handle_locked();
+    bridge->isolate_generation = g_isolate_generation;
+    if (bridge->handle > 0) {
+        bridge->next = g_bridges;
+        g_bridges = bridge;
+    }
+    uv_mutex_unlock(&g_mutex);
+    if (bridge->handle <= 0) {
+        bridge_finalize(bridge, /*env_still_alive=*/true, /*do_registry_remove=*/true, /*may_rehook=*/false);
+        uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
+        napi_throw_error(env, NULL, "Engine handle space exhausted");
+        return NULL;
+    }
     // Register a per-env cleanup hook so THIS Worker/main thread disposes this
     // bridge's napi_ref on its own thread when its env tears down (F2). napi_cleanup
     // no longer touches bridge refs. destroyEngine removes this hook before an
@@ -3728,7 +3801,7 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
         napi_throw_error(env, NULL, "Failed to register engine cleanup hook");
         return NULL;
     }
-    napi_value out; napi_create_int64(env, (int64_t)handle, &out);
+    napi_value out; napi_create_int64(env, (int64_t)bridge->handle, &out);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
     return out;
 }
@@ -3764,7 +3837,7 @@ static napi_value napi_destroy_engine(napi_env env, napi_callback_info info) {
     // ones. bridge_finalize's napi_ref deletion stays resolver-gated
     // (resolver_js != NULL && env != NULL) -- that part is unchanged.
     uv_mutex_lock(&g_mutex);
-    engine_bridge_t* owned = bridge_find(handle);
+    engine_bridge_t* owned = bridge_find_any(handle);
     if (owned != NULL) {
         uv_thread_t self = uv_thread_self();
         if (!uv_thread_equal(&self, &owned->owner)) {
@@ -3855,7 +3928,11 @@ static napi_value napi_destroy_engine(napi_env env, napi_callback_info info) {
                 uv_mutex_unlock(&g_mutex);
                 void* thread = NULL;
                 if (fn_attach_thread(g_isolate, &thread) == 0 && thread != NULL) {
-                    fn_destroy_engine(thread, handle);
+                    // Public handles are addon-local and cannot be passed to
+                    // the isolate registry when no current bridge maps them.
+                    // Preserve the native unknown-destroy call with the ABI's
+                    // guaranteed-invalid zero handle.
+                    fn_destroy_engine(thread, 0);
                     detach_thread_checked(DETACH_SITE_UNKNOWN_DESTROY, thread);
                 }
                 // Verbatim g_active_ops release pattern.
@@ -3952,7 +4029,8 @@ static napi_value napi_run_script_engine(napi_env env, napi_callback_info info) 
       return NULL;
     }
 
-    char* result = (char*)fn_run_script_engine(thread, handle, script, inputs);
+    long long native_handle = bridge != NULL ? bridge->native_handle : 0;
+    char* result = (char*)fn_run_script_engine(thread, native_handle, script, inputs);
 
     // The pin taken at admission kept this record alive across the run, so no
     // second lookup is needed. resolver_results_free_all is a no-op for a
@@ -4693,15 +4771,18 @@ static napi_value napi_test_resolver_ref_delete_count(napi_env env, napi_callbac
     return out;
 }
 
-static detach_site_t detach_site_from_name(const char* name) {
-  if (strcmp(name, "bridge-finalize") == 0) return DETACH_SITE_BRIDGE_FINALIZE;
-  if (strcmp(name, "stream-worker") == 0) return DETACH_SITE_STREAM_WORKER;
-  if (strcmp(name, "transform-worker") == 0) return DETACH_SITE_TRANSFORM_WORKER;
-  if (strcmp(name, "create-engine") == 0) return DETACH_SITE_CREATE_ENGINE;
-  if (strcmp(name, "create-rollback") == 0) return DETACH_SITE_CREATE_ROLLBACK;
-  if (strcmp(name, "resolver-create") == 0) return DETACH_SITE_RESOLVER_CREATE;
-  if (strcmp(name, "unknown-destroy") == 0) return DETACH_SITE_UNKNOWN_DESTROY;
-  if (strcmp(name, "synchronous-run") == 0) return DETACH_SITE_SYNCHRONOUS_RUN;
+static detach_site_t detach_site_from_name(const char* name, size_t length) {
+  #define DETACH_SITE_MATCH(value, site) \
+    if (length == sizeof(value) - 1 && memcmp(name, value, sizeof(value) - 1) == 0) return site
+  DETACH_SITE_MATCH("bridge-finalize", DETACH_SITE_BRIDGE_FINALIZE);
+  DETACH_SITE_MATCH("stream-worker", DETACH_SITE_STREAM_WORKER);
+  DETACH_SITE_MATCH("transform-worker", DETACH_SITE_TRANSFORM_WORKER);
+  DETACH_SITE_MATCH("create-engine", DETACH_SITE_CREATE_ENGINE);
+  DETACH_SITE_MATCH("create-rollback", DETACH_SITE_CREATE_ROLLBACK);
+  DETACH_SITE_MATCH("resolver-create", DETACH_SITE_RESOLVER_CREATE);
+  DETACH_SITE_MATCH("unknown-destroy", DETACH_SITE_UNKNOWN_DESTROY);
+  DETACH_SITE_MATCH("synchronous-run", DETACH_SITE_SYNCHRONOUS_RUN);
+  #undef DETACH_SITE_MATCH
   return DETACH_SITE_NONE;
 }
 
@@ -4711,15 +4792,23 @@ static napi_value napi_test_force_detach_failure_once(
   napi_value argv[1];
   napi_valuetype type;
   char site_name[64];
-  size_t length;
+  size_t length = 0;
   if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 1 ||
       napi_typeof(env, argv[0], &type) != napi_ok || type != napi_string ||
-      napi_get_value_string_utf8(
-        env, argv[0], site_name, sizeof(site_name), &length) != napi_ok) {
+      napi_get_value_string_utf8(env, argv[0], NULL, 0, &length) != napi_ok ||
+      length >= sizeof(site_name)) {
     napi_throw_type_error(env, NULL, "A detach site string is required");
     return NULL;
   }
-  detach_site_t site = detach_site_from_name(site_name);
+  size_t copied = 0;
+  if (
+      napi_get_value_string_utf8(
+        env, argv[0], site_name, sizeof(site_name), &copied) != napi_ok ||
+      copied != length || memchr(site_name, '\0', length) != NULL) {
+    napi_throw_type_error(env, NULL, "A detach site string is required");
+    return NULL;
+  }
+  detach_site_t site = detach_site_from_name(site_name, length);
   if (site == DETACH_SITE_NONE) {
     napi_throw_range_error(env, NULL, "Unknown detach site");
     return NULL;
@@ -4747,7 +4836,10 @@ static napi_value napi_test_isolate_poisoned(napi_env env, napi_callback_info in
 
 static napi_value test_uint64_counter(napi_env env, uint64_t value) {
   napi_value out;
-  napi_create_bigint_uint64(env, value, &out);
+  if (napi_create_bigint_uint64(env, value, &out) != napi_ok) {
+    napi_throw_error(env, NULL, "Failed to create test counter");
+    return NULL;
+  }
   return out;
 }
 
@@ -4814,6 +4906,20 @@ static napi_value napi_test_release_async_op(napi_env env, napi_callback_info in
   uv_mutex_lock(&g_mutex);
   g_test_release_async_op = true;
   uv_cond_broadcast(&g_teardown_cond);
+  uv_mutex_unlock(&g_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_fail_next_engine_record_allocation(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  if (g_test_fail_next_engine_record_allocation) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "An engine record allocation failure is already armed");
+    return NULL;
+  }
+  g_test_fail_next_engine_record_allocation = true;
   uv_mutex_unlock(&g_mutex);
   return NULL;
 }
@@ -4946,13 +5052,16 @@ static napi_value napi_test_held_output_delivery(
 
   napi_value out;
   napi_value value;
-  napi_create_object(env, &out);
-  napi_get_boolean(env, held, &value);
-  napi_set_named_property(env, out, "held", value);
-  napi_create_bigint_uint64(env, sequence, &value);
-  napi_set_named_property(env, out, "sequence", value);
-  napi_create_double(env, (double)bytes, &value);
-  napi_set_named_property(env, out, "bytes", value);
+  if (napi_create_object(env, &out) != napi_ok ||
+      napi_get_boolean(env, held, &value) != napi_ok ||
+      napi_set_named_property(env, out, "held", value) != napi_ok ||
+      napi_create_bigint_uint64(env, sequence, &value) != napi_ok ||
+      napi_set_named_property(env, out, "sequence", value) != napi_ok ||
+      napi_create_double(env, (double)bytes, &value) != napi_ok ||
+      napi_set_named_property(env, out, "bytes", value) != napi_ok) {
+    napi_throw_error(env, NULL, "Failed to create held output delivery state");
+    return NULL;
+  }
   return out;
 }
 
@@ -5054,6 +5163,14 @@ static napi_value napi_test_output_operation_id(napi_env env, napi_callback_info
   return out;
 }
 
+static bool export_function(napi_env env, napi_value exports, const char* name,
+                            napi_callback callback) {
+  napi_value fn;
+  return napi_create_function(
+           env, name, NAPI_AUTO_LENGTH, callback, NULL, &fn) == napi_ok &&
+         napi_set_named_property(env, exports, name, fn) == napi_ok;
+}
+
 static napi_value Init(napi_env env, napi_value exports) {
   uv_once(&g_mutex_once, init_g_mutex);
 
@@ -5066,31 +5183,17 @@ static napi_value Init(napi_env env, napi_value exports) {
     return NULL;
   }
 
-  napi_value fn;
-
-  napi_create_function(env, "initialize", NAPI_AUTO_LENGTH, napi_initialize, NULL, &fn);
-  napi_set_named_property(env, exports, "initialize", fn);
-
-  napi_create_function(env, "createEngine", NAPI_AUTO_LENGTH, napi_create_engine, NULL, &fn);
-  napi_set_named_property(env, exports, "createEngine", fn);
-
-  napi_create_function(env, "createEngineWithResolver", NAPI_AUTO_LENGTH, napi_create_engine_with_resolver, NULL, &fn);
-  napi_set_named_property(env, exports, "createEngineWithResolver", fn);
-
-  napi_create_function(env, "destroyEngine", NAPI_AUTO_LENGTH, napi_destroy_engine, NULL, &fn);
-  napi_set_named_property(env, exports, "destroyEngine", fn);
-
-  napi_create_function(env, "runScriptEngine", NAPI_AUTO_LENGTH, napi_run_script_engine, NULL, &fn);
-  napi_set_named_property(env, exports, "runScriptEngine", fn);
-
-  napi_create_function(env, "runScriptStreamingEngine", NAPI_AUTO_LENGTH, napi_run_script_streaming_engine, NULL, &fn);
-  napi_set_named_property(env, exports, "runScriptStreamingEngine", fn);
-
-  napi_create_function(env, "runScriptTransformEngine", NAPI_AUTO_LENGTH, napi_run_script_transform_engine, NULL, &fn);
-  napi_set_named_property(env, exports, "runScriptTransformEngine", fn);
-
-  napi_create_function(env, "cleanup", NAPI_AUTO_LENGTH, napi_cleanup, NULL, &fn);
-  napi_set_named_property(env, exports, "cleanup", fn);
+  if (!export_function(env, exports, "initialize", napi_initialize) ||
+      !export_function(env, exports, "createEngine", napi_create_engine) ||
+      !export_function(env, exports, "createEngineWithResolver", napi_create_engine_with_resolver) ||
+      !export_function(env, exports, "destroyEngine", napi_destroy_engine) ||
+      !export_function(env, exports, "runScriptEngine", napi_run_script_engine) ||
+      !export_function(env, exports, "runScriptStreamingEngine", napi_run_script_streaming_engine) ||
+      !export_function(env, exports, "runScriptTransformEngine", napi_run_script_transform_engine) ||
+      !export_function(env, exports, "cleanup", napi_cleanup)) {
+    napi_throw_error(env, NULL, "Failed to register DataWeave native exports");
+    return NULL;
+  }
 
   // Test-only entrypoints, registered only when the process opts in via
   // DATAWEAVE_TEST_HOOKS (non-empty). getenv() is safe here: Init runs once per
@@ -5099,46 +5202,30 @@ static napi_value Init(napi_env env, napi_value exports) {
   const char* test_hooks = getenv("DATAWEAVE_TEST_HOOKS");
   if (test_hooks != NULL && test_hooks[0] != '\0') {
     g_test_hooks = true;
-    napi_create_function(env, "__test_forceStrandOnce", NAPI_AUTO_LENGTH, napi_test_force_strand_once, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_forceStrandOnce", fn);
-    napi_create_function(env, "__test_strandedCount", NAPI_AUTO_LENGTH, napi_test_stranded_count, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_strandedCount", fn);
-    napi_create_function(env, "__test_resolverRefDeleteCount", NAPI_AUTO_LENGTH, napi_test_resolver_ref_delete_count, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_resolverRefDeleteCount", fn);
-    napi_create_function(env, "__test_forceDetachFailureOnce", NAPI_AUTO_LENGTH, napi_test_force_detach_failure_once, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_forceDetachFailureOnce", fn);
-    napi_create_function(env, "__test_isolatePoisoned", NAPI_AUTO_LENGTH, napi_test_isolate_poisoned, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_isolatePoisoned", fn);
-    napi_create_function(env, "__test_isolateCreationCount", NAPI_AUTO_LENGTH, napi_test_isolate_creation_count, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_isolateCreationCount", fn);
-    napi_create_function(env, "__test_teardownCallCount", NAPI_AUTO_LENGTH, napi_test_teardown_call_count, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_teardownCallCount", fn);
-    napi_create_function(env, "__test_abandonedIsolateCount", NAPI_AUTO_LENGTH, napi_test_abandoned_isolate_count, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_abandonedIsolateCount", fn);
-    napi_create_function(env, "__test_forcedDetachFailureCount", NAPI_AUTO_LENGTH, napi_test_forced_detach_failure_count, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_forcedDetachFailureCount", fn);
-    napi_create_function(env, "__test_holdNextAsyncOp", NAPI_AUTO_LENGTH, napi_test_hold_next_async_op, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_holdNextAsyncOp", fn);
-    napi_create_function(env, "__test_asyncOpHeld", NAPI_AUTO_LENGTH, napi_test_async_op_held, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_asyncOpHeld", fn);
-    napi_create_function(env, "__test_releaseAsyncOp", NAPI_AUTO_LENGTH, napi_test_release_async_op, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_releaseAsyncOp", fn);
-    napi_create_function(env, "__test_outputStats", NAPI_AUTO_LENGTH, napi_test_output_stats, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_outputStats", fn);
-    napi_create_function(env, "__test_outputOperationId", NAPI_AUTO_LENGTH, napi_test_output_operation_id, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_outputOperationId", fn);
-    napi_create_function(env, "__test_createForeignWrappedObject", NAPI_AUTO_LENGTH, napi_test_create_foreign_wrapped_object, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_createForeignWrappedObject", fn);
-    napi_create_function(env, "__test_failNextOutputSettlement", NAPI_AUTO_LENGTH, napi_test_fail_next_output_settlement, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_failNextOutputSettlement", fn);
-    napi_create_function(env, "__test_failNextOutputExceptionClear", NAPI_AUTO_LENGTH, napi_test_fail_next_output_exception_clear, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_failNextOutputExceptionClear", fn);
-    napi_create_function(env, "__test_holdNextOutputDelivery", NAPI_AUTO_LENGTH, napi_test_hold_next_output_delivery, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_holdNextOutputDelivery", fn);
-    napi_create_function(env, "__test_heldOutputDelivery", NAPI_AUTO_LENGTH, napi_test_held_output_delivery, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_heldOutputDelivery", fn);
-    napi_create_function(env, "__test_releaseOutputDelivery", NAPI_AUTO_LENGTH, napi_test_release_output_delivery, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_releaseOutputDelivery", fn);
+    if (!export_function(env, exports, "__test_forceStrandOnce", napi_test_force_strand_once) ||
+        !export_function(env, exports, "__test_strandedCount", napi_test_stranded_count) ||
+        !export_function(env, exports, "__test_resolverRefDeleteCount", napi_test_resolver_ref_delete_count) ||
+        !export_function(env, exports, "__test_forceDetachFailureOnce", napi_test_force_detach_failure_once) ||
+        !export_function(env, exports, "__test_isolatePoisoned", napi_test_isolate_poisoned) ||
+        !export_function(env, exports, "__test_isolateCreationCount", napi_test_isolate_creation_count) ||
+        !export_function(env, exports, "__test_teardownCallCount", napi_test_teardown_call_count) ||
+        !export_function(env, exports, "__test_abandonedIsolateCount", napi_test_abandoned_isolate_count) ||
+        !export_function(env, exports, "__test_forcedDetachFailureCount", napi_test_forced_detach_failure_count) ||
+        !export_function(env, exports, "__test_failNextEngineRecordAllocation", napi_test_fail_next_engine_record_allocation) ||
+        !export_function(env, exports, "__test_holdNextAsyncOp", napi_test_hold_next_async_op) ||
+        !export_function(env, exports, "__test_asyncOpHeld", napi_test_async_op_held) ||
+        !export_function(env, exports, "__test_releaseAsyncOp", napi_test_release_async_op) ||
+        !export_function(env, exports, "__test_outputStats", napi_test_output_stats) ||
+        !export_function(env, exports, "__test_outputOperationId", napi_test_output_operation_id) ||
+        !export_function(env, exports, "__test_createForeignWrappedObject", napi_test_create_foreign_wrapped_object) ||
+        !export_function(env, exports, "__test_failNextOutputSettlement", napi_test_fail_next_output_settlement) ||
+        !export_function(env, exports, "__test_failNextOutputExceptionClear", napi_test_fail_next_output_exception_clear) ||
+        !export_function(env, exports, "__test_holdNextOutputDelivery", napi_test_hold_next_output_delivery) ||
+        !export_function(env, exports, "__test_heldOutputDelivery", napi_test_held_output_delivery) ||
+        !export_function(env, exports, "__test_releaseOutputDelivery", napi_test_release_output_delivery)) {
+      napi_throw_error(env, NULL, "Failed to register DataWeave native test exports");
+      return NULL;
+    }
   }
 
   return exports;

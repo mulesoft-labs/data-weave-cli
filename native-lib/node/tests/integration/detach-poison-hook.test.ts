@@ -61,6 +61,20 @@ describe("detach failure poisoning and recovery", () => {
     });
   });
 
+  it("prevents an old-generation handle from destroying a fresh engine with the same native handle", () => {
+    expect(runFixture(SYNC_FIXTURE, ["stale-handle"])).toMatchObject({
+      handlesDiffer: true,
+      freshResult: "42",
+    });
+  });
+
+  it("prevents an old-generation env finalizer from destroying a fresh engine", () => {
+    expect(runFixture(SYNC_FIXTURE, ["stale-finalizer"])).toMatchObject({
+      handlesDiffer: true,
+      freshResult: "42",
+    });
+  });
+
   it("poisons a transform worker during an active final cleanup without hanging or tearing down the old isolate", () => {
     expect(runFixture(TRANSFORM_FIXTURE, [])).toMatchObject({
       transformResult: "detach poison transform",
@@ -99,9 +113,17 @@ describe("detach failure poisoning and recovery", () => {
     });
   });
 
+  it("executes and recovers from the create-rollback detach site", () => {
+    expect(runFixture(SYNC_FIXTURE, ["exercise-create-rollback"])).toMatchObject({
+      forcedFailures: 1,
+      abandoned: 1,
+      freshResult: "42",
+    });
+  });
+
   it("rejects invalid sites and refuses to silently replace an armed failure", () => {
     expect(runFixture(SYNC_FIXTURE, ["invalid-arguments"])).toEqual({
-      invalidArguments: 4,
+      invalidArguments: 6,
       duplicateArmRejected: true,
     });
   });
