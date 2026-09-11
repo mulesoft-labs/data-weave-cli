@@ -3,10 +3,21 @@ import { resolveAddonPath } from "./addon-path";
 import { findLibrary, buildInputsJson } from "./utils";
 import { parseNativeResponse } from "./result";
 import { createChunkReader } from "./reader";
-import { streamFromNative } from "./stream";
+import { interruptNativeStreamIfParked, nativeStreamParked, streamFromNative } from "./stream";
 import { DataWeaveError, DataWeaveScriptError } from "./errors";
+import type { NativeStreamingOperation } from "./ffi";
 import type { ExecutionResult, StreamingResult, Inputs, TransformOptions } from "./types";
 import type { ModuleResolver } from "./resolver";
+
+interface EngineOperationToken {
+  readonly handle: number;
+  readonly generation: number;
+}
+
+interface ActiveStreamState {
+  completionSettled: boolean;
+  closeFinalized: boolean;
+}
 
 /**
  * Constructor options for {@link DataWeave}.
@@ -52,6 +63,9 @@ export class DataWeave {
   private readonly resolveModule?: ModuleResolver;
   private state: "uninitialized" | "ready" | "cleaning-up" = "uninitialized";
   private engineHandle: number | null = null;
+  private engineGeneration = 0;
+  private readonly activeStreams = new Set<NativeStreamingOperation>();
+  private readonly activeStreamStates = new Map<NativeStreamingOperation, ActiveStreamState>();
   private cleanupPromise: Promise<void> | null = null;
 
   /**
@@ -89,9 +103,10 @@ export class DataWeave {
     try {
       ffi.initialize(this.libPath, this.addonPath);
       libRefAcquired = true;
-      this.engineHandle = this.resolveModule
+      const engineHandle = this.resolveModule
         ? ffi.createEngineWithResolver(this.resolveModule)
         : ffi.createEngine();
+      this.engineHandle = engineHandle;
     } catch (e: unknown) {
       // If ffi.initialize() already succeeded but engine creation then threw, we
       // already hold an increment of the native library's ref-counted handle and
@@ -136,6 +151,7 @@ export class DataWeave {
       throw new DataWeaveError(`Failed to initialize: ${e instanceof Error ? e.message : e}`);
     }
     this.state = "ready";
+    this.engineGeneration++;
   }
 
   /**
@@ -170,9 +186,9 @@ export class DataWeave {
     // with an in-flight doCleanup() awaits that SAME promise, so the native
     // teardown (ffi.destroyEngine/ffi.cleanup) still happens exactly once.
     if (this.cleanupPromise) return this.cleanupPromise;
-    // Not coalescing with an in-flight cleanup: nothing to do unless we're
-    // "ready" (covers both never-initialized and already-settled cleanup).
-    if (this.state !== "ready") return;
+    // A lifecycle failure leaves the instance in "cleaning-up" with no live
+    // cleanupPromise so a later call can retry without admitting new work.
+    if (this.state === "uninitialized") return;
     this.cleanupPromise = this.doCleanup();
     try {
       await this.cleanupPromise;
@@ -188,7 +204,40 @@ export class DataWeave {
     // during the async teardown window are rejected deterministically rather
     // than seeing a stale "ready" state with a null engineHandle (round-6 #1/#3).
     this.state = "cleaning-up";
-    let destroyError: unknown;
+    const activeStreams = [...this.activeStreams];
+    let lifecycleError: { readonly hasError: false } | { readonly hasError: true; readonly error: unknown } = {
+      hasError: false,
+    };
+    for (const operation of activeStreams) {
+      try {
+        operation.cancel();
+      } catch (error) {
+        if (!lifecycleError.hasError) lifecycleError = { hasError: true, error };
+      }
+    }
+    // A failed synchronous cancellation cannot guarantee that completion will
+    // ever settle. Abort before waiting or destroying the engine and keep the
+    // instance in cleaning-up state so a later cleanup() can retry.
+    if (lifecycleError.hasError) throw lifecycleError.error;
+
+    if (activeStreams.length > 0) {
+      await Promise.allSettled(activeStreams.map((operation) => operation.completion));
+    }
+
+    for (const operation of activeStreams) {
+      const streamState = this.activeStreamStates.get(operation);
+      if (!streamState || streamState.closeFinalized) continue;
+      try {
+        operation.close();
+      } catch (error) {
+        if (!lifecycleError.hasError) lifecycleError = { hasError: true, error };
+      }
+    }
+    if (lifecycleError.hasError) throw lifecycleError.error;
+
+    let destroyError: { readonly hasError: false } | { readonly hasError: true; readonly error: unknown } = {
+      hasError: false,
+    };
     try {
       if (this.engineHandle !== null) {
         try {
@@ -199,7 +248,7 @@ export class DataWeave {
           // env's native init reference and block isolate teardown. Capture the
           // primary error, clear the handle so a retry does not double-destroy,
           // and fall through to release the reference below.
-          destroyError = e;
+          destroyError = { hasError: true, error: e };
         } finally {
           this.engineHandle = null;
         }
@@ -212,7 +261,7 @@ export class DataWeave {
     // ffi.cleanup() itself rejected, its error already propagated from the await
     // (the more actionable reference-release failure wins; the destroy error is
     // then suppressed).
-    if (destroyError !== undefined) throw destroyError;
+    if (destroyError.hasError) throw destroyError.error;
   }
 
   /**
@@ -251,11 +300,25 @@ export class DataWeave {
    * @returns An async generator of output chunks, returning the streaming metadata.
    * @throws DataWeaveError if the runtime is not initialized.
    */
-  async *runStreaming(script: string, inputs?: Inputs): AsyncGenerator<Buffer, StreamingResult, undefined> {
-    this.ensureReady();
-    const inputsJson = buildInputsJson(inputs ?? {});
-    return yield* streamFromNative((chunkCb) =>
-      ffi.runScriptStreamingEngine(this.engineHandle!, script, inputsJson, chunkCb)
+  runStreaming(script: string, inputs?: Inputs): AsyncGenerator<Buffer, StreamingResult, undefined> {
+    const token = this.captureOperationToken();
+    return this.runStreamingInternal(token, script, inputs);
+  }
+
+  private runStreamingInternal(
+    token: EngineOperationToken,
+    script: string,
+    inputs?: Inputs
+  ): AsyncGenerator<Buffer, StreamingResult, undefined> {
+    return streamFromNative(
+      (chunkCb) => {
+        this.assertCurrentOperation(token);
+        const inputsJson = buildInputsJson(inputs ?? {});
+        this.assertCurrentOperation(token);
+        return ffi.runScriptStreamingEngine(token.handle, script, inputsJson, chunkCb);
+      },
+      (operation) => { this.registerActiveStream(operation); },
+      (operation) => { this.markActiveStreamClosed(operation); }
     );
   }
 
@@ -275,41 +338,246 @@ export class DataWeave {
    * @returns An async generator of output chunks, returning the streaming metadata.
    * @throws DataWeaveError if the runtime is not initialized.
    */
-  async *runTransform(
+  runTransform(
     script: string,
     input: AsyncIterable<Buffer | Uint8Array> | Iterable<Buffer | Uint8Array>,
     opts?: TransformOptions
   ): AsyncGenerator<Buffer, StreamingResult, undefined> {
-    this.ensureReady();
+    const token = this.captureOperationToken();
+    return this.runTransformInternal(token, script, input, opts);
+  }
 
-    const inputName = opts?.inputName ?? "payload";
-    const inputMimeType = opts?.mimeType ?? "application/json";
-    const inputCharset = opts?.charset ?? null;
-    const extraInputs = opts?.inputs ?? {};
-    const inputsJson = Object.keys(extraInputs).length > 0 ? buildInputsJson(extraInputs) : "{}";
+  private runTransformInternal(
+    token: EngineOperationToken,
+    script: string,
+    input: AsyncIterable<Buffer | Uint8Array> | Iterable<Buffer | Uint8Array>,
+    opts?: TransformOptions
+  ): AsyncGenerator<Buffer, StreamingResult, undefined> {
+    type QueuedRequest<T> = {
+      readonly kind: "next" | "control";
+      readonly run: (onParked: () => void) => Promise<T>;
+      readonly resolve: (result: T) => void;
+      readonly reject: (error: unknown) => void;
+    };
 
-    const readCb = await createChunkReader(input);
+    let closed = false;
+    let controlPending = false;
+    let stream: AsyncGenerator<Buffer, StreamingResult, undefined> | null = null;
+    let setupPromise: Promise<AsyncGenerator<Buffer, StreamingResult, undefined> | null>;
+    let admissionState: "pending" | "abandoned" | "admitted" = "pending";
+    let abandonSetup = () => { admissionState = "abandoned"; };
+    const requestQueue: Array<QueuedRequest<unknown>> = [];
+    let requestRunning = false;
 
-    // The instance may have been cleaned up while an async input pre-buffered
-    // (createChunkReader can await arbitrarily long). Re-check readiness so a
-    // caller that raced cleanup() gets a synchronous DataWeaveError rather than
-    // a resolved "Unknown engine handle" envelope. The C admission pin is the
-    // authoritative memory-safety guard (round 11 #2/#3); this only improves the
-    // failure ergonomics for a misused instance. (round 12 #4)
-    this.ensureReady();
+    const enqueue = <T>(
+      kind: QueuedRequest<T>["kind"],
+      request: QueuedRequest<T>["run"]
+    ): Promise<T> => {
+      const result = new Promise<T>((resolve, reject) => {
+        requestQueue.push({ kind, run: request, resolve, reject } as QueuedRequest<unknown>);
+      });
+      drainRequests();
+      return result;
+    };
 
-    return yield* streamFromNative((writeCb) =>
-      ffi.runScriptTransformEngine(
-        this.engineHandle!,
-        script,
-        inputsJson,
-        inputName,
-        inputMimeType,
-        inputCharset,
-        readCb,
-        writeCb
-      )
+    function drainRequests(): void {
+      if (requestRunning) return;
+      const request = requestQueue.shift();
+      if (!request) return;
+      requestRunning = true;
+      let result: Promise<unknown>;
+      try {
+        result = request.run(() => {
+          if (controlPending) interruptForControl();
+        });
+      } catch (error) {
+        result = Promise.reject(error);
+      }
+      result.then(request.resolve, request.reject).finally(() => {
+        requestRunning = false;
+        drainRequests();
+      });
+    }
+
+    function interruptAdmittedPullForControl(): void {
+      const controlIndex = requestQueue.findIndex((request) => request.kind === "control");
+      if (controlIndex > 0 && requestQueue.slice(0, controlIndex).some((request) => request.kind === "next")) return;
+      if (stream) interruptNativeStreamIfParked(stream);
+    }
+
+    function interruptForControl(): void {
+      // Setup has no native pull to preserve: settle every queued pre-control
+      // next() as done immediately. Admitted streams instead retain FIFO until
+      // the last earlier pull is genuinely parked.
+      if (admissionState !== "admitted") {
+        abandonSetup();
+        return;
+      }
+      interruptAdmittedPullForControl();
+    }
+
+    const setup = (): Promise<AsyncGenerator<Buffer, StreamingResult, undefined> | null> =>
+      setupPromise ??= new Promise((resolve, reject) => {
+        abandonSetup = () => {
+          admissionState = "abandoned";
+          resolve(null);
+        };
+        try {
+          if (controlPending) {
+            abandonSetup();
+            return;
+          }
+          this.assertCurrentOperation(token);
+
+          const inputName = opts?.inputName ?? "payload";
+          const inputMimeType = opts?.mimeType ?? "application/json";
+          const inputCharset = opts?.charset ?? null;
+          const extraInputs = opts?.inputs ?? {};
+          const inputsJson = Object.keys(extraInputs).length > 0 ? buildInputsJson(extraInputs) : "{}";
+          createChunkReader(input).then(
+            (readCb) => {
+              if (admissionState === "abandoned" || controlPending) return;
+              try {
+                this.assertCurrentOperation(token);
+                stream = streamFromNative(
+                  (writeCb) => {
+                    this.assertCurrentOperation(token);
+                    return ffi.runScriptTransformEngine(
+                      token.handle,
+                      script,
+                      inputsJson,
+                      inputName,
+                      inputMimeType,
+                      inputCharset,
+                      readCb,
+                      writeCb
+                    );
+                  },
+                  (operation) => {
+                    admissionState = "admitted";
+                    this.registerActiveStream(operation);
+                  },
+                  (operation) => { this.markActiveStreamClosed(operation); }
+                );
+                resolve(stream);
+              } catch (error) {
+                reject(error);
+              }
+            },
+            (error) => {
+              if (admissionState !== "abandoned") reject(error);
+            }
+          );
+        } catch (error) {
+          reject(error);
+        }
+      });
+
+    return {
+      next: (...args: [] | [undefined]) => enqueue("next", async (onParked) => {
+        if (closed) {
+          return { done: true, value: undefined } as unknown as IteratorReturnResult<StreamingResult>;
+        }
+        let activeStream: AsyncGenerator<Buffer, StreamingResult, undefined> | null;
+        try {
+          activeStream = await setup();
+        } catch (error) {
+          closed = true;
+          throw error;
+        }
+        if (!activeStream || admissionState === "abandoned") {
+          return { done: true, value: undefined } as unknown as IteratorReturnResult<StreamingResult>;
+        }
+        const nextPromise = activeStream.next(...args);
+        nativeStreamParked(activeStream).then((parked) => {
+          if (parked) onParked();
+        });
+        const result = await nextPromise;
+        if (result.done) closed = true;
+        return result;
+      }),
+      return: (value) => {
+        const isPrimaryControl = !closed && !controlPending;
+        if (isPrimaryControl) controlPending = true;
+        const result = enqueue("control", async (_onParked) => {
+          try {
+            if (stream && !closed) return await stream.return(value);
+            return {
+              done: true,
+              value: await value,
+            } as IteratorReturnResult<StreamingResult>;
+          } finally {
+            closed = true;
+          }
+        });
+        if (isPrimaryControl) interruptForControl();
+        return result;
+      },
+      throw: (error?: unknown) => {
+        const isPrimaryControl = !closed && !controlPending;
+        if (isPrimaryControl) controlPending = true;
+        const result = enqueue("control", async (_onParked) => {
+          try {
+            if (stream && !closed) return await stream.throw(error);
+            throw error;
+          } finally {
+            closed = true;
+          }
+        });
+        if (isPrimaryControl) interruptForControl();
+        return result;
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    };
+  }
+
+  private registerActiveStream(operation: NativeStreamingOperation): void {
+    const state: ActiveStreamState = { completionSettled: false, closeFinalized: false };
+    this.activeStreams.add(operation);
+    this.activeStreamStates.set(operation, state);
+    operation.completion.then(
+      () => {
+        state.completionSettled = true;
+        this.releaseActiveStream(operation, state);
+      },
+      () => {
+        state.completionSettled = true;
+        this.releaseActiveStream(operation, state);
+      }
     );
+  }
+
+  private markActiveStreamClosed(operation: NativeStreamingOperation): void {
+    const state = this.activeStreamStates.get(operation);
+    if (!state) return;
+    state.closeFinalized = true;
+    this.releaseActiveStream(operation, state);
+  }
+
+  private releaseActiveStream(
+    operation: NativeStreamingOperation,
+    state: ActiveStreamState
+  ): void {
+    if (!state.completionSettled || !state.closeFinalized) return;
+    this.activeStreams.delete(operation);
+    this.activeStreamStates.delete(operation);
+  }
+
+  private captureOperationToken(): EngineOperationToken {
+    this.ensureReady();
+    return { handle: this.engineHandle!, generation: this.engineGeneration };
+  }
+
+  private assertCurrentOperation(token: EngineOperationToken): void {
+    if (
+      this.state !== "ready" ||
+      this.engineHandle !== token.handle ||
+      this.engineGeneration !== token.generation
+    ) {
+      throw new DataWeaveError("DataWeave operation belongs to a stale engine generation.");
+    }
   }
 
   private ensureReady(): void {

@@ -36,7 +36,8 @@ public class NativeLib {
      * @param thread the isolate thread (automatically provided by GraalVM)
      * @param pointer the pointer to the unmanaged C string to free; if null, this is a no-op
      */
-    @CEntryPoint(name = "free_cstring")
+    @CEntryPoint(name = "free_cstring",
+            exceptionHandler = CEntryPointExceptionHandlers.ReturnVoid.class)
     public static void freeCString(IsolateThread thread, CCharPointer pointer) {
         if (pointer.isNull()) {
             return;
@@ -537,7 +538,8 @@ public class NativeLib {
      * @param thread the isolate thread
      * @return a non-zero handle identifying the new engine
      */
-    @CEntryPoint(name = "create_engine")
+    @CEntryPoint(name = "create_engine",
+            exceptionHandler = CEntryPointExceptionHandlers.ReturnZero.class)
     public static long createEngine(IsolateThread thread) {
         return ScriptRuntime.register(new ScriptRuntime());
     }
@@ -551,11 +553,15 @@ public class NativeLib {
      * @param ctx              opaque context pointer forwarded to every resolver invocation
      * @return a non-zero handle identifying the new engine
      */
-    @CEntryPoint(name = "create_engine_with_resolver")
+    @CEntryPoint(name = "create_engine_with_resolver",
+            exceptionHandler = CEntryPointExceptionHandlers.ReturnZero.class)
     public static long createEngineWithResolver(
             IsolateThread thread,
             NativeCallbacks.ResolveModuleCallback resolverCallback,
             PointerBase ctx) {
+        if (resolverCallback.isNull()) {
+            return 0L;
+        }
         CallbackWeaveResourceResolver resolver =
                 new CallbackWeaveResourceResolver(resolverCallback, ctx);
         return ScriptRuntime.register(new ScriptRuntime(resolver));
@@ -568,7 +574,8 @@ public class NativeLib {
      * @param thread the isolate thread
      * @param handle the engine handle to remove
      */
-    @CEntryPoint(name = "destroy_engine")
+    @CEntryPoint(name = "destroy_engine",
+            exceptionHandler = CEntryPointExceptionHandlers.ReturnVoid.class)
     public static void destroyEngine(IsolateThread thread, long handle) {
         ScriptRuntime.destroy(handle);
     }
@@ -585,16 +592,21 @@ public class NativeLib {
      * @param inputsJson JSON-encoded inputs map (C string), may be null
      * @return the script execution result (unmanaged C string, must be freed)
      */
-    @CEntryPoint(name = "run_script_engine")
+    @CEntryPoint(name = "run_script_engine",
+            exceptionHandler = CEntryPointExceptionHandlers.ReturnNullPointer.class)
     public static CCharPointer runScriptEngine(
             IsolateThread thread, long handle, CCharPointer script, CCharPointer inputsJson) {
-        ScriptRuntime runtime = ScriptRuntime.get(handle);
-        if (runtime == null) {
-            return toUnmanagedCString(UNKNOWN_ENGINE_HANDLE_JSON);
+        try (ScriptRuntime.EngineLease lease = ScriptRuntime.acquire(handle)) {
+            if (lease == null) {
+                return toUnmanagedCString(UNKNOWN_ENGINE_HANDLE_JSON);
+            }
+            if (script.isNull()) {
+                return toUnmanagedCString("{\"success\":false,\"error\":\"Script cannot be null\"}");
+            }
+            String dwScript = CTypeConversion.toJavaString(script);
+            String inputs = inputsJson.isNull() ? null : CTypeConversion.toJavaString(inputsJson);
+            return toUnmanagedCString(lease.runtime().run(dwScript, inputs));
         }
-        String dwScript = CTypeConversion.toJavaString(script);
-        String inputs = inputsJson.isNull() ? null : CTypeConversion.toJavaString(inputsJson);
-        return toUnmanagedCString(runtime.run(dwScript, inputs));
     }
 
     /**
@@ -612,17 +624,25 @@ public class NativeLib {
      * @param ctx           opaque context pointer forwarded to every callback invocation
      * @return an unmanaged C string with JSON metadata/error
      */
-    @CEntryPoint(name = "run_script_callback_engine")
+    @CEntryPoint(name = "run_script_callback_engine",
+            exceptionHandler = CEntryPointExceptionHandlers.ReturnNullPointer.class)
     public static CCharPointer runScriptCallbackEngine(
             IsolateThread thread, long handle, CCharPointer script, CCharPointer inputsJson,
             NativeCallbacks.WriteCallback writeCallback, PointerBase ctx) {
-        ScriptRuntime runtime = ScriptRuntime.get(handle);
-        if (runtime == null) {
-            return toUnmanagedCString(UNKNOWN_ENGINE_HANDLE_JSON);
+        try (ScriptRuntime.EngineLease lease = ScriptRuntime.acquire(handle)) {
+            if (lease == null) {
+                return toUnmanagedCString(UNKNOWN_ENGINE_HANDLE_JSON);
+            }
+            if (script.isNull()) {
+                return toUnmanagedCString("{\"success\":false,\"error\":\"Script cannot be null\"}");
+            }
+            if (writeCallback.isNull()) {
+                return toUnmanagedCString("{\"success\":false,\"error\":\"Write callback cannot be null\"}");
+            }
+            String dwScript = CTypeConversion.toJavaString(script);
+            String inputs = inputsJson.isNull() ? null : CTypeConversion.toJavaString(inputsJson);
+            return streamToWriteCallback(lease.runtime(), dwScript, inputs, writeCallback, ctx);
         }
-        String dwScript = CTypeConversion.toJavaString(script);
-        String inputs = inputsJson.isNull() ? null : CTypeConversion.toJavaString(inputsJson);
-        return streamToWriteCallback(runtime, dwScript, inputs, writeCallback, ctx);
     }
 
     /**
@@ -645,23 +665,40 @@ public class NativeLib {
      * @param ctx           opaque context pointer forwarded to every callback invocation
      * @return an unmanaged C string with JSON metadata/error
      */
-    @CEntryPoint(name = "run_script_input_output_callback_engine")
+    @CEntryPoint(name = "run_script_input_output_callback_engine",
+            exceptionHandler = CEntryPointExceptionHandlers.ReturnNullPointer.class)
     public static CCharPointer runScriptInputOutputCallbackEngine(
             IsolateThread thread, long handle, CCharPointer script, CCharPointer inputsJson,
             CCharPointer inputName, CCharPointer inputMimeType, CCharPointer inputCharset,
             NativeCallbacks.ReadCallback readCallback, NativeCallbacks.WriteCallback writeCallback,
             PointerBase ctx) {
-        ScriptRuntime runtime = ScriptRuntime.get(handle);
-        if (runtime == null) {
-            return toUnmanagedCString(UNKNOWN_ENGINE_HANDLE_JSON);
+        try (ScriptRuntime.EngineLease lease = ScriptRuntime.acquire(handle)) {
+            if (lease == null) {
+                return toUnmanagedCString(UNKNOWN_ENGINE_HANDLE_JSON);
+            }
+            if (script.isNull()) {
+                return toUnmanagedCString("{\"success\":false,\"error\":\"Script cannot be null\"}");
+            }
+            if (inputName.isNull()) {
+                return toUnmanagedCString("{\"success\":false,\"error\":\"Input name cannot be null\"}");
+            }
+            if (inputMimeType.isNull()) {
+                return toUnmanagedCString("{\"success\":false,\"error\":\"Input MIME type cannot be null\"}");
+            }
+            if (readCallback.isNull()) {
+                return toUnmanagedCString("{\"success\":false,\"error\":\"Read callback cannot be null\"}");
+            }
+            if (writeCallback.isNull()) {
+                return toUnmanagedCString("{\"success\":false,\"error\":\"Write callback cannot be null\"}");
+            }
+            String dwScript = CTypeConversion.toJavaString(script);
+            String inputs = inputsJson.isNull() ? null : CTypeConversion.toJavaString(inputsJson);
+            String inName = CTypeConversion.toJavaString(inputName);
+            String inMime = CTypeConversion.toJavaString(inputMimeType);
+            String inCharset = inputCharset.isNull() ? null : CTypeConversion.toJavaString(inputCharset);
+            return transformViaCallbacks(lease.runtime(), dwScript, inputs, inName, inMime, inCharset,
+                    readCallback, writeCallback, ctx);
         }
-        String dwScript = CTypeConversion.toJavaString(script);
-        String inputs = inputsJson.isNull() ? null : CTypeConversion.toJavaString(inputsJson);
-        String inName = CTypeConversion.toJavaString(inputName);
-        String inMime = CTypeConversion.toJavaString(inputMimeType);
-        String inCharset = inputCharset.isNull() ? null : CTypeConversion.toJavaString(inputCharset);
-        return transformViaCallbacks(runtime, dwScript, inputs, inName, inMime, inCharset,
-                readCallback, writeCallback, ctx);
     }
 
 }

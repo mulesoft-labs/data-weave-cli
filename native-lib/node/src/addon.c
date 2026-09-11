@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdint.h>
 #ifndef _WIN32
 #include <pthread.h>
 #endif
@@ -36,6 +37,9 @@ static void* g_thread = NULL;
 static int g_initialized = 0;
 static int g_ref_count = 0;
 static uv_mutex_t g_mutex;
+static uv_mutex_t g_test_output_mutex;
+static uv_key_t g_native_callback_depth;
+static int g_native_callback_depth_status;
 // Guards initialization of the process-global g_mutex. Init() runs once per
 // Worker environment that loads this addon, but g_mutex is process-global —
 // re-running uv_mutex_init() on an already-initialized mutex from a second
@@ -43,6 +47,49 @@ static uv_mutex_t g_mutex;
 // every other thread already relying on it). uv_once ensures the real init
 // body runs exactly once per process regardless of how many Workers load us.
 static uv_once_t g_mutex_once = UV_ONCE_INIT;
+
+#define CALLBACK_REENTRANCY_CODE "ERR_DATAWEAVE_CALLBACK_REENTRANCY"
+#define ISOLATE_POISONED_MESSAGE \
+    "DataWeave isolate is unavailable after a thread detach failure; clean up and initialize again."
+#define MAX_SAFE_ENGINE_HANDLE 9007199254740991LL
+
+static unsigned native_callback_depth(void) {
+    return (unsigned)(uintptr_t)uv_key_get(&g_native_callback_depth);
+}
+
+static void native_callback_enter(void) {
+    uv_key_set(&g_native_callback_depth,
+               (void*)(uintptr_t)(native_callback_depth() + 1));
+}
+
+static void native_callback_exit(void) {
+    unsigned depth = native_callback_depth();
+    uv_key_set(&g_native_callback_depth,
+               depth > 1 ? (void*)(uintptr_t)(depth - 1) : NULL);
+}
+
+static bool native_callback_active(void) {
+    return native_callback_depth() != 0;
+}
+
+static napi_value throw_callback_reentrancy(napi_env env) {
+    napi_value message;
+    napi_value error;
+    napi_value code;
+    if (napi_create_string_utf8(
+            env,
+            "DataWeave native methods cannot be called from a native callback",
+            NAPI_AUTO_LENGTH,
+            &message) != napi_ok ||
+        napi_create_error(env, NULL, message, &error) != napi_ok ||
+        napi_create_string_utf8(env, CALLBACK_REENTRANCY_CODE, NAPI_AUTO_LENGTH, &code) != napi_ok ||
+        napi_set_named_property(env, error, "code", code) != napi_ok ||
+        napi_throw(env, error) != napi_ok) {
+        napi_throw_error(env, CALLBACK_REENTRANCY_CODE,
+                         "DataWeave native methods cannot be called from a native callback");
+    }
+    return NULL;
+}
 
 static graal_create_isolate_fn fn_create_isolate = NULL;
 static graal_attach_thread_fn fn_attach_thread = NULL;
@@ -86,7 +133,11 @@ typedef struct resolver_result_node {
 // streamed/transform custom-module lookup arriving on the background uv_thread
 // — and fail closed (return "not found") instead of crashing.
 typedef struct engine_bridge {
+    // Public handles stay unique for the process lifetime. native_handle is
+    // isolate-local and may be reused after an abandoned isolate is replaced.
     long long handle;
+    long long native_handle;
+    uint64_t isolate_generation;
     napi_env env;
     napi_ref resolver_js;             // NULL => resolver-less engine (no bridge created)
     uv_thread_t owner;                // JS thread that created and must run this engine
@@ -115,9 +166,23 @@ typedef struct engine_bridge {
     // owner thread (creation, destroyEngine, bridge_env_cleanup) under the usual
     // owner-thread-serialization contract.
     bool hook_registered;
+    // Resolver refs and bridge memory have two independent owners once native
+    // registry removal strands: the Java callback ctx and the owner Node env.
+    // The env hook drops owner_alive/resolver_js; the native drain drops
+    // native_alive. The bridge is freed only after both have released it.
+    bool native_alive;
+    bool owner_alive;
+    // Every resolver bridge owns an unreferenced TSFN. A native-side drain can
+    // queue its callback onto the owner env to delete resolver_js legally; the
+    // TSFN finalizer drops owner ownership when that env dies instead.
+    napi_threadsafe_function owner_cleanup_tsfn;
+    bool owner_cleanup_queued;
+    bool owner_cleanup_released;
     struct engine_bridge* next;
 } engine_bridge_t;
 static engine_bridge_t* g_bridges = NULL;  // linked list, guarded by g_mutex
+static uint64_t g_isolate_generation = 0;  // incremented for each fresh isolate
+static long long g_next_engine_handle = 1; // process-unique public handle
 
 // Round-15 (svacas P1): bridges whose engine destroy was SKIPPED because
 // fn_attach_thread failed while the isolate was STILL LIVE. Such a bridge must
@@ -148,10 +213,73 @@ static engine_bridge_t* g_stranded_bridges = NULL;  // linked list, guarded by g
 // post-fix it is kept by its owner-env cleanup hook and the ref is deleted on the
 // owner thread at env teardown (g_test_resolver_ref_deletes counts those deletes).
 // g_test_hooks is written once in Init before any reader runs; g_test_force_strand_once
-// and g_test_resolver_ref_deletes are accessed only under g_mutex.
+// and the remaining test state are accessed only under g_mutex.
 static bool g_test_hooks = false;
 static bool g_test_force_strand_once = false;
 static long long g_test_resolver_ref_deletes = 0;
+static bool g_test_hold_next_async_op = false;
+static bool g_test_async_op_held = false;
+static bool g_test_release_async_op = false;
+static uint64_t g_test_engine_record_allocation_failure_generation = 0;
+static uint64_t g_detach_in_progress_generation = 0;
+static unsigned g_detach_in_progress = 0;
+static bool g_test_hold_next_detach_publication = false;
+static bool g_test_detach_publication_held = false;
+static bool g_test_release_detach_publication = false;
+static unsigned g_detach_publication_waiters = 0;
+static uint64_t g_test_live_resolver_refs = 0;
+static uint64_t g_test_bridge_frees = 0;
+static uint64_t g_test_post_reclamation_actions = 0;
+
+static void bridge_env_cleanup(void* arg);
+static void bridge_finalize_free(engine_bridge_t* b, bool env_still_alive);
+
+typedef enum {
+  OUTPUT_SETTLEMENT_FAULT_NONE = 0,
+  OUTPUT_SETTLEMENT_FAULT_INITIAL_CREATE_GENERIC,
+  OUTPUT_SETTLEMENT_FAULT_INITIAL_PENDING_EXCEPTION,
+  OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_GENERIC_AFTER_CALL,
+  OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_PENDING_AFTER_CALL,
+  OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC,
+  OUTPUT_SETTLEMENT_FAULT_FALLBACK_PENDING_EXCEPTION,
+  OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC_AFTER_CALL,
+} output_settlement_fault_t;
+
+typedef enum {
+  OUTPUT_EXCEPTION_CLEAR_FAULT_NONE = 0,
+  OUTPUT_EXCEPTION_CLEAR_FAULT_IS_PENDING,
+  OUTPUT_EXCEPTION_CLEAR_FAULT_GET_AND_CLEAR,
+} output_exception_clear_fault_t;
+
+static output_settlement_fault_t g_test_next_output_settlement_fault =
+  OUTPUT_SETTLEMENT_FAULT_NONE;
+static output_exception_clear_fault_t g_test_next_output_exception_clear_fault =
+  OUTPUT_EXCEPTION_CLEAR_FAULT_NONE;
+static bool g_test_hold_next_output_delivery = false;
+static bool g_test_output_delivery_held = false;
+static bool g_test_release_output_delivery = false;
+static uint64_t g_test_held_output_sequence = 0;
+static size_t g_test_held_output_bytes = 0;
+
+typedef enum {
+  DETACH_SITE_NONE = 0,
+  DETACH_SITE_BRIDGE_FINALIZE,
+  DETACH_SITE_STREAM_WORKER,
+  DETACH_SITE_TRANSFORM_WORKER,
+  DETACH_SITE_CREATE_ENGINE,
+  DETACH_SITE_CREATE_ROLLBACK,
+  DETACH_SITE_RESOLVER_CREATE,
+  DETACH_SITE_UNKNOWN_DESTROY,
+  DETACH_SITE_SYNCHRONOUS_RUN,
+} detach_site_t;
+
+// Process-lifetime test statistics and the one-shot detach fault arm. Every
+// read/write is under g_mutex; only the N-API accessors are test-only exports.
+static detach_site_t g_test_detach_failure_site = DETACH_SITE_NONE;
+static uint64_t g_test_forced_detach_failures = 0;
+static uint64_t g_test_isolate_creations = 0;
+static uint64_t g_test_teardown_calls = 0;
+static uint64_t g_test_abandoned_isolates = 0;
 
 // One record per napi_env that has ever taken an init reference (via
 // initialize()). init_refs is that env's net initialize()-minus-cleanup()
@@ -220,6 +348,10 @@ typedef enum {
   CLEANUP_RETAIN,
   CLEANUP_UNRECOVERABLE,
 } cleanup_result_t;
+typedef struct cleanup_thread_result {
+  cleanup_result_t outcome;
+  bool teardown_callable;
+} cleanup_thread_result_t;
 static teardown_state_t g_teardown_state = TEARDOWN_NONE;
 // Set by an adopting initialize() to tell the waiter thread to abort its
 // queued teardown and leave the live isolate intact. Read/reset by the waiter.
@@ -247,6 +379,28 @@ static bool g_teardown_needed = false;
 static bool g_isolate_poisoned = false;
 static uv_cond_t g_teardown_cond;
 
+// Test-only one-shot gate for a real streaming/transform worker. Admission has
+// already reserved g_active_ops before the worker reaches this point, so holding
+// it here lets tests drive cleanup() into TEARDOWN_PENDING_WAIT without entering
+// through a native JS callback. Inert unless DATAWEAVE_TEST_HOOKS is enabled and
+// __test_holdNextAsyncOp() armed the gate.
+static void test_hold_async_op_if_armed(void) {
+  if (!g_test_hooks) return;
+  uv_mutex_lock(&g_mutex);
+  if (g_test_hold_next_async_op) {
+    g_test_hold_next_async_op = false;
+    g_test_async_op_held = true;
+    uv_cond_broadcast(&g_teardown_cond);
+    while (!g_test_release_async_op) {
+      uv_cond_wait(&g_teardown_cond, &g_mutex);
+    }
+    g_test_release_async_op = false;
+    g_test_async_op_held = false;
+    uv_cond_broadcast(&g_teardown_cond);
+  }
+  uv_mutex_unlock(&g_mutex);
+}
+
 // teardown+detach double failure (review #17 #1): an exiting worker is stuck
 // attached to this isolate, so graal_tear_down_isolate can never again get the
 // sole-attached, current-OS-thread IsolateThread it requires -- retrying is
@@ -258,12 +412,18 @@ static uv_cond_t g_teardown_cond;
 // leak is observable. Mirrors Python native.py's leak-and-continue
 // (_release_isolate / _retry_pending_teardown_locked). Caller holds g_mutex.
 static void abandon_unrecoverable_isolate_locked(void) {
+  if (g_test_hooks && g_isolate != NULL) g_test_abandoned_isolates++;
+  if (g_test_engine_record_allocation_failure_generation == g_isolate_generation) {
+    g_test_engine_record_allocation_failure_generation = 0;
+  }
   g_thread = NULL;
   g_isolate = NULL;
   g_initialized = 0;
   g_ref_count = 0;
   g_teardown_needed = false;
   g_isolate_poisoned = false;
+  g_detach_in_progress = 0;
+  g_detach_in_progress_generation = 0;
   fprintf(stderr,
           "[DataWeave Node addon] GraalVM isolate teardown AND worker detach both "
           "failed; the isolate can never be torn down and is being leaked for the "
@@ -290,11 +450,70 @@ static void poison_isolate_detach_failure_locked(int detach_rc) {
   g_isolate_poisoned = true;
 }
 
-// Lock-taking wrapper for call sites that are NOT already holding g_mutex.
-static void poison_isolate_detach_failure(int detach_rc) {
+// Wait while this generation has an ordinary detach whose result has not yet
+// been published. Callers hold g_mutex. Each detach is covered by an active-op
+// reservation, so waiting cannot let teardown overtake the detaching thread.
+static void wait_for_detach_publication_locked(void) {
+  bool counted = false;
+  while (g_detach_in_progress > 0 &&
+         g_detach_in_progress_generation == g_isolate_generation) {
+    if (g_test_hooks && !counted) {
+      g_detach_publication_waiters++;
+      counted = true;
+      uv_cond_broadcast(&g_teardown_cond);
+    }
+    uv_cond_wait(&g_teardown_cond, &g_mutex);
+  }
+  if (counted) {
+    g_detach_publication_waiters--;
+    uv_cond_broadcast(&g_teardown_cond);
+  }
+}
+
+// Centralized policy for every ordinary operation detach. The real Graal
+// detach always runs first. Test injection may turn only a successful detach
+// at the selected site into one synthetic failure; real failures never consume
+// the arm. Any nonzero result poisons this published isolate before later work
+// can be admitted.
+static int detach_thread_checked(detach_site_t site, void* thread) {
   uv_mutex_lock(&g_mutex);
-  poison_isolate_detach_failure_locked(detach_rc);
+  uint64_t generation = g_isolate_generation;
+  if (g_detach_in_progress == 0) {
+    g_detach_in_progress_generation = generation;
+  }
+  g_detach_in_progress++;
   uv_mutex_unlock(&g_mutex);
+
+  int detach_rc = fn_detach_thread(thread);
+  uv_mutex_lock(&g_mutex);
+  bool current_generation = generation == g_isolate_generation;
+  if (detach_rc == 0 && current_generation && g_test_hooks &&
+      g_test_detach_failure_site == site) {
+    g_test_detach_failure_site = DETACH_SITE_NONE;
+    g_test_forced_detach_failures++;
+    detach_rc = -1;
+  }
+  if (current_generation && g_test_hooks &&
+      g_test_hold_next_detach_publication) {
+    g_test_hold_next_detach_publication = false;
+    g_test_detach_publication_held = true;
+    uv_cond_broadcast(&g_teardown_cond);
+    while (!g_test_release_detach_publication) {
+      uv_cond_wait(&g_teardown_cond, &g_mutex);
+    }
+    g_test_release_detach_publication = false;
+    g_test_detach_publication_held = false;
+  }
+  if (detach_rc != 0 && current_generation) {
+    poison_isolate_detach_failure_locked(detach_rc);
+  }
+  if (generation == g_detach_in_progress_generation && g_detach_in_progress > 0) {
+    g_detach_in_progress--;
+    if (g_detach_in_progress == 0) g_detach_in_progress_generation = 0;
+  }
+  uv_cond_broadcast(&g_teardown_cond);
+  uv_mutex_unlock(&g_mutex);
+  return detach_rc;
 }
 
 // One node per cleanup() call that arrived while a teardown was already
@@ -336,12 +555,147 @@ static void resolver_results_free_all(engine_bridge_t* b) {
     b->results = NULL;
 }
 
-// Call under g_mutex.
-static engine_bridge_t* bridge_find(long long handle) {
+typedef struct bridge_finalize_action {
+    napi_threadsafe_function owner_cleanup_tsfn;
+    bool bridge_reclaimed;
+} bridge_finalize_action_t;
+
+// Caller holds g_mutex. A call that can satisfy all three free predicates must
+// be the caller's final operation through b.
+static void bridge_release_if_unowned_locked(
+    engine_bridge_t* b, bridge_finalize_action_t* action) {
+    if (b == NULL || b->native_alive || b->owner_alive ||
+        b->owner_cleanup_tsfn != NULL) return;
+    resolver_results_free_all(b);
+    if (g_test_hooks) {
+        g_test_bridge_frees++;
+        if (action != NULL) action->bridge_reclaimed = true;
+    }
+    free(b);
+}
+
+// Executes the final owner-side action from stack state captured before any
+// bridge reclamation. The probe is independent of b, so a reordered caller can
+// report an action attempted after logical reclamation without touching freed
+// memory. When bridge is non-NULL and no TSFN release is pending, reclamation is
+// performed here as this function's final bridge operation.
+static void bridge_finalize_execute_action(
+    bridge_finalize_action_t* action, engine_bridge_t* bridge) {
+    if (action == NULL) return;
+    if (action->bridge_reclaimed) {
+        uv_mutex_lock(&g_mutex);
+        g_test_post_reclamation_actions++;
+        uv_mutex_unlock(&g_mutex);
+    }
+    if (action->owner_cleanup_tsfn != NULL) {
+        napi_release_threadsafe_function(
+            action->owner_cleanup_tsfn, napi_tsfn_release);
+        return;
+    }
+    if (bridge != NULL) {
+        uv_mutex_lock(&g_mutex);
+        bridge_release_if_unowned_locked(bridge, action);
+        uv_mutex_unlock(&g_mutex);
+    }
+}
+
+static void bridge_owner_cleanup_finalize(
+    napi_env env, void* finalize_data, void* finalize_hint) {
+    (void)env;
+    (void)finalize_hint;
+    engine_bridge_t* b = (engine_bridge_t*)finalize_data;
+    if (b == NULL) return;
+    uv_mutex_lock(&g_mutex);
+    b->owner_cleanup_tsfn = NULL;
+    if (b->owner_alive && b->resolver_js != NULL && g_test_hooks &&
+        g_test_live_resolver_refs > 0) {
+        g_test_live_resolver_refs--;
+    }
+    b->owner_alive = false;
+    b->resolver_js = NULL;
+    bridge_release_if_unowned_locked(b, NULL);
+    uv_mutex_unlock(&g_mutex);
+}
+
+static void call_js_bridge_owner_cleanup(
+    napi_env env, napi_value js_callback, void* context, void* data) {
+    (void)js_callback;
+    (void)data;
+    engine_bridge_t* b = (engine_bridge_t*)context;
+    if (b == NULL || env == NULL) return;
+    if (b->hook_registered) {
+        napi_remove_env_cleanup_hook(env, bridge_env_cleanup, b);
+        b->hook_registered = false;
+    }
+    bridge_finalize_free(b, /*env_still_alive=*/true);
+}
+
+// Called on the bridge owner thread after its resolver reference is created.
+// The unreferenced TSFN is an owner-env cleanup handoff: native drains may queue
+// its JS callback from any thread, while env teardown invokes its finalizer.
+static bool bridge_register_owner_cleanup(engine_bridge_t* b) {
+    if (b == NULL || b->resolver_js == NULL || b->env == NULL) return true;
+    napi_value resource_name;
+    if (napi_create_string_utf8(
+            b->env, "dwResolverOwnerCleanup", NAPI_AUTO_LENGTH, &resource_name) != napi_ok ||
+        napi_create_threadsafe_function(
+            b->env, NULL, NULL, resource_name, 0, 1, b,
+            bridge_owner_cleanup_finalize, b, call_js_bridge_owner_cleanup,
+            &b->owner_cleanup_tsfn) != napi_ok) {
+        return false;
+    }
+    if (napi_unref_threadsafe_function(b->env, b->owner_cleanup_tsfn) != napi_ok) {
+        napi_release_threadsafe_function(
+            b->owner_cleanup_tsfn, napi_tsfn_abort);
+        b->owner_cleanup_released = true;
+        return false;
+    }
+    return true;
+}
+
+static void bridge_release_native_and_handoff(engine_bridge_t* b) {
+    if (b == NULL) return;
+    uv_mutex_lock(&g_mutex);
+    if (b->owner_alive && b->resolver_js != NULL &&
+        b->owner_cleanup_tsfn != NULL && !b->owner_cleanup_queued) {
+        b->owner_cleanup_queued = true;
+        // Queueing is thread-safe and never invokes the JS callback inline. Keep
+        // native ownership until the enqueue returns, so an env finalizer cannot
+        // free b between the ownership transition and this handoff.
+        napi_status status = napi_call_threadsafe_function(
+            b->owner_cleanup_tsfn, b, napi_tsfn_nonblocking);
+        if (status != napi_ok) b->owner_cleanup_queued = false;
+    }
+    b->native_alive = false;
+    bridge_release_if_unowned_locked(b, NULL);
+    uv_mutex_unlock(&g_mutex);
+}
+
+// Call under g_mutex. Stale bridges stay owned by their env cleanup hooks, but
+// only records from the currently published isolate may admit operations.
+static engine_bridge_t* bridge_find_current(long long handle) {
+    for (engine_bridge_t* b = g_bridges; b != NULL; b = b->next) {
+        if (b->handle == handle && b->isolate_generation == g_isolate_generation) return b;
+    }
+    return NULL;
+}
+
+// Destruction may reclaim a stale bridge, provided finalization does not touch
+// the replacement isolate. Call under g_mutex.
+static engine_bridge_t* bridge_find_any(long long handle) {
     for (engine_bridge_t* b = g_bridges; b != NULL; b = b->next) {
         if (b->handle == handle) return b;
     }
     return NULL;
+}
+
+// Allocate the public handle while g_mutex is held. A zero result means the JS
+// safe-integer handle space is exhausted.
+static long long next_engine_handle_locked(void) {
+    if (g_next_engine_handle <= 0 || g_next_engine_handle > MAX_SAFE_ENGINE_HANDLE) return 0;
+    long long handle = g_next_engine_handle;
+    g_next_engine_handle = handle == MAX_SAFE_ENGINE_HANDLE ? 0 : handle + 1;
+    return handle;
 }
 
 // Round-15 (svacas P1): retain a bridge whose engine destroy was skipped while
@@ -358,7 +712,7 @@ static engine_bridge_t* bridge_find(long long handle) {
 // both of those already require in_flight == 0 to have run at all (see the
 // deferred-destroy comment above bridge_finalize_registry) -- so in_flight is
 // already drained to zero by construction before a bridge is ever stranded, and
-// bridge_find() can no longer look it up by handle (it's unlinked from
+// bridge_find_current() can no longer look it up by handle (it's unlinked from
 // g_bridges), so no new op can be admitted against it. The only way a
 // drained-then-freed stranded bridge could still be dereferenced is unsupported
 // cross-Worker handle sharing or other API misuse that starts a background
@@ -444,6 +798,10 @@ static int env_init_refs_total_locked(void) {
 // section: no teardown path can interleave between "isolate is live" and
 // "reservation taken". Callable from any thread NOT holding g_mutex.
 //
+// `detach_site` identifies the operation whose successful attach/destroy is
+// being detached; normal finalization uses bridge-finalize, while creation
+// rollback keeps the distinct create-rollback fault-injection contract.
+//
 // Returns TRUE when the caller may safely free the bridge: the engine was
 // actually destroyed (registry entry removed), OR the whole isolate is going
 // away (TEARING_DOWN / g_isolate == NULL) so the Java registry -- and the
@@ -452,8 +810,17 @@ static int env_init_refs_total_locked(void) {
 // live (fn_attach_thread failed): the Java registry still holds this bridge as a
 // resolver ctx, so freeing it now would be a UAF. The caller must instead retain
 // the bridge (bridge_retain_stranded) and retry later (round-15, svacas P1).
-static bool bridge_finalize_registry(engine_bridge_t* b) {
+static bool bridge_finalize_registry_at_site(engine_bridge_t* b, detach_site_t detach_site) {
     if (b == NULL || fn_destroy_engine == NULL) return true;
+    uv_mutex_lock(&g_mutex);
+    bool stale_generation = g_isolate == NULL ||
+        b->isolate_generation != g_isolate_generation;
+    uv_mutex_unlock(&g_mutex);
+    if (stale_generation) {
+        // The bridge's Java registry died with its old isolate. Never attach to
+        // a replacement isolate, where native_handle may identify a new engine.
+        return true;
+    }
     // Test-only: force ONE live-isolate strand (simulate fn_attach_thread failing
     // while the isolate is live -> destroy SKIPPED). Inert unless a test both
     // enabled the hooks (DATAWEAVE_TEST_HOOKS) and armed it via
@@ -468,6 +835,7 @@ static bool bridge_finalize_registry(engine_bridge_t* b) {
         uv_mutex_unlock(&g_mutex);
     }
     uv_mutex_lock(&g_mutex);
+    wait_for_detach_publication_locked();
     // If the waiter already committed to physical teardown (TEARING_DOWN) or the
     // isolate is already gone, the Java registry died/dies with it -- nothing to
     // remove, and attaching would race graal_tear_down_isolate. Skip, but report
@@ -476,7 +844,8 @@ static bool bridge_finalize_registry(engine_bridge_t* b) {
     // publishes TEARING_DOWN (and Case 4 holds g_mutex across its g_active_ops==0
     // check + teardown) under this same lock, this check plus the increment below
     // cannot be split by a teardown.
-    if (g_teardown_state == TEARDOWN_TEARING_DOWN || g_isolate == NULL) {
+    if (g_teardown_state == TEARDOWN_TEARING_DOWN || g_isolate == NULL ||
+        b->isolate_generation != g_isolate_generation) {
         uv_mutex_unlock(&g_mutex);
         return true;
     }
@@ -486,9 +855,8 @@ static bool bridge_finalize_registry(engine_bridge_t* b) {
     void* thread = NULL;
     bool destroyed = false;
     if (fn_attach_thread(g_isolate, &thread) == 0 && thread != NULL) {
-        fn_destroy_engine(thread, b->handle);
-        int detach_rc = fn_detach_thread(thread);
-        if (detach_rc != 0) poison_isolate_detach_failure(detach_rc);
+        fn_destroy_engine(thread, b->native_handle);
+        detach_thread_checked(detach_site, thread);
         destroyed = true;  // registry entry removed -> resolver ctx is now dead
     }
     // else: attach failed while the isolate is STILL LIVE -- destroy was skipped,
@@ -504,10 +872,9 @@ static bool bridge_finalize_registry(engine_bridge_t* b) {
     return destroyed;
 }
 
-// Forward declaration: the env cleanup hook. bridge_finalize re-registers/keeps
-// it on an owner-thread live-isolate strand (may_rehook) and removes it on the
-// owner-thread free path; the definition is below (after drain_stranded_bridges).
-static void bridge_env_cleanup(void* arg);
+static bool bridge_finalize_registry(engine_bridge_t* b) {
+    return bridge_finalize_registry_at_site(b, DETACH_SITE_BRIDGE_FINALIZE);
+}
 
 // The non-isolate finalize phase: delete the resolver napi_ref (owner JS thread
 // only, and only while its env is alive -- resolver-gated), free tracked result
@@ -523,11 +890,29 @@ static void bridge_finalize_free(engine_bridge_t* b, bool env_still_alive) {
         if (g_test_hooks) {
             uv_mutex_lock(&g_mutex);
             g_test_resolver_ref_deletes++;
+            if (g_test_live_resolver_refs > 0) g_test_live_resolver_refs--;
             uv_mutex_unlock(&g_mutex);
         }
     }
-    resolver_results_free_all(b);
-    free(b);
+    bridge_finalize_action_t action = {0};
+    uv_mutex_lock(&g_mutex);
+    if (env_still_alive || b->env == NULL || !b->owner_alive) {
+        b->resolver_js = NULL;
+        b->owner_alive = false;
+    }
+    if (env_still_alive && b->owner_cleanup_tsfn != NULL &&
+        !b->owner_cleanup_released) {
+        b->owner_cleanup_released = true;
+        action.owner_cleanup_tsfn = b->owner_cleanup_tsfn;
+    }
+    b->native_alive = false;
+    uv_mutex_unlock(&g_mutex);
+
+    // Releasing the TSFN lets its finalizer clear owner_cleanup_tsfn and perform
+    // the final bridge free. If no TSFN exists (resolver-less), the ownership
+    // drop below frees directly. In both cases the finalization action is the
+    // final bridge operation: never dereference b afterward.
+    bridge_finalize_execute_action(&action, b);
 }
 
 // Thin wrapper preserving the original signature and every call site. Registry
@@ -603,10 +988,10 @@ static void drain_stranded_bridges(void) {
         list = list->next;  // snapshot the link before b is freed or re-retained
         b->next = NULL;
         if (bridge_finalize_registry(b)) {
-            // Registry entry removed (or isolate gone): the resolver ctx is dead,
-            // so freeing is safe. Skip the napi_ref delete (env_still_alive=false)
-            // -- we may not be on the owner thread.
-            bridge_finalize_free(b, /*env_still_alive=*/false);
+            // Registry entry removed (or isolate gone): release native ownership.
+            // The owner env hook remains responsible for deleting resolver_js and
+            // releasing owner ownership on its Node thread.
+            bridge_release_native_and_handoff(b);
         } else {
             // Still could not attach (isolate live, transient failure): keep the
             // ctx valid and retry at the next drain.
@@ -638,6 +1023,15 @@ static void bridge_env_cleanup(void* arg) {
     while (*pp != NULL) {
         if (*pp == b) { *pp = b->next; break; }
         pp = &(*pp)->next;
+    }
+    engine_bridge_t** stranded_pp = &g_stranded_bridges;
+    while (*stranded_pp != NULL) {
+        if (*stranded_pp == b) {
+            *stranded_pp = b->next;
+            b->next = NULL;
+            break;
+        }
+        stranded_pp = &(*stranded_pp)->next;
     }
     // An in-flight streaming/transform op holds a live threadsafe function that
     // keeps this env's event loop alive, so the env should never tear down while
@@ -679,7 +1073,31 @@ static void bridge_env_cleanup(void* arg) {
     // may_rehook=false: the env is tearing down, so do NOT re-register the hook on
     // a strand -- a strand here falls back to g_stranded_bridges (Node reclaims the
     // ref at env teardown; the off-thread drain frees the record later).
-    bridge_finalize(b, /*env_still_alive=*/true, /*do_registry_remove=*/true, /*may_rehook=*/false);
+    if (b->resolver_js != NULL && b->env != NULL) {
+        napi_delete_reference(b->env, b->resolver_js);
+        b->resolver_js = NULL;
+        if (g_test_hooks) {
+            uv_mutex_lock(&g_mutex);
+            g_test_resolver_ref_deletes++;
+            if (g_test_live_resolver_refs > 0) g_test_live_resolver_refs--;
+            uv_mutex_unlock(&g_mutex);
+        }
+    }
+    b->owner_alive = false;
+    if (b->native_alive) {
+        if (bridge_finalize_registry(b)) {
+            uv_mutex_lock(&g_mutex);
+            b->native_alive = false;
+            bridge_release_if_unowned_locked(b, NULL);
+            uv_mutex_unlock(&g_mutex);
+        } else {
+            bridge_retain_stranded(b);
+        }
+    } else {
+        uv_mutex_lock(&g_mutex);
+        bridge_release_if_unowned_locked(b, NULL);
+        uv_mutex_unlock(&g_mutex);
+    }
 }
 
 // Increment this engine's in_flight while g_mutex is ALREADY held. Used by the
@@ -690,7 +1108,7 @@ static void bridge_env_cleanup(void* arg) {
 // record, or NULL for an unknown handle (nothing to pin; the worker/native call
 // surfaces "Unknown engine handle"). Caller MUST hold g_mutex.
 static engine_bridge_t* bridge_begin_op_locked(long long handle) {
-    engine_bridge_t* b = bridge_find(handle);
+    engine_bridge_t* b = bridge_find_current(handle);
     if (b != NULL) b->in_flight++;
     return b;
 }
@@ -812,6 +1230,28 @@ static void init_thread_fn(void* arg) {
     return;
   }
 
+  if (g_isolate_generation == UINT64_MAX) {
+    if (g_test_hooks) {
+      g_test_isolate_creations++;
+      g_test_teardown_calls++;
+    }
+    int td_rc = fn_tear_down_isolate(boot_thread);
+    g_isolate = NULL;
+    g_thread = NULL;
+    if (td_rc != 0) {
+      fprintf(stderr,
+              "[DataWeave Node addon] isolate generation space was exhausted and "
+              "the unpublishable isolate could not be torn down; it is being leaked "
+              "for the process lifetime.\n");
+    }
+    snprintf(args->error, sizeof(args->error),
+             "DataWeave isolate generation space exhausted");
+    args->result = -4;
+    return;
+  }
+  g_isolate_generation++;
+  if (g_test_hooks) g_test_isolate_creations++;
+
   // review #21 #1: a brand-new isolate starts un-poisoned. Any poison flag left
   // over from a previously abandoned/leaked isolate must not carry onto this
   // fresh one. Runs under the init caller's g_mutex (see the g_mutex discipline
@@ -836,7 +1276,11 @@ static void init_thread_fn(void* arg) {
   // the caller's `args->result != 0` path (addon.c ~955) sees the recoverable
   // "no isolate" state, exactly like every other init failure path.
   if (fn_detach_thread && fn_detach_thread(boot_thread) != 0) {
-    int td_rc = fn_tear_down_isolate ? fn_tear_down_isolate(boot_thread) : -1;
+    int td_rc = -1;
+    if (fn_tear_down_isolate) {
+      if (g_test_hooks) g_test_teardown_calls++;
+      td_rc = fn_tear_down_isolate(boot_thread);
+    }
     if (td_rc != 0) {
       fprintf(stderr,
               "[DataWeave Node addon] bootstrap thread detach AND isolate "
@@ -903,6 +1347,7 @@ static void cleanup_thread_fn(void* arg);
 static void retry_stranded_teardown_locked(void);
 
 static napi_value napi_initialize(napi_env env, napi_callback_info info) {
+  if (native_callback_active()) return throw_callback_reentrancy(env);
   size_t argc = 1;
   napi_value argv[1];
   // Review #10 #5 (svacas P2): check napi_get_cb_info's status too, not just
@@ -930,6 +1375,15 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
     return NULL;
   }
 
+  uv_mutex_lock(&g_mutex);
+  wait_for_detach_publication_locked();
+  bool poisoned_before_drain = g_isolate_poisoned;
+  uv_mutex_unlock(&g_mutex);
+  if (poisoned_before_drain) {
+    napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+    return NULL;
+  }
+
   // Round-15 (svacas P1): retry any bridge whose engine destroy was skipped on a
   // transient attach failure (g_stranded_bridges). Drain before taking g_mutex
   // (drain_stranded_bridges locks internally). If a live isolate survives from a
@@ -939,6 +1393,15 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
   drain_stranded_bridges();
 
   uv_mutex_lock(&g_mutex);
+  wait_for_detach_publication_locked();
+
+  // A detach failure is terminal for the currently published isolate. It may
+  // not be adopted or reused; explicit cleanup must abandon it first.
+  if (g_isolate_poisoned) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+    return NULL;
+  }
 
   // A prior last-release could not tear the isolate down and armed the retry
   // signal (review #6 #3/#4). Because retries otherwise fire only at op
@@ -987,6 +1450,11 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
       // cancel the queued teardown, take a fresh ref, and wake the waiter so it
       // aborts without tearing down. g_initialized is already 1, so fall through
       // to the ref-count path below is unnecessary -- return directly.
+      if (g_isolate_poisoned) {
+        uv_mutex_unlock(&g_mutex);
+        napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+        return NULL;
+      }
       if (!env_init_acquire_and_hook(env)) {
         uv_mutex_unlock(&g_mutex);
         napi_throw_error(env, NULL, "Failed to allocate/register env init record");
@@ -1008,6 +1476,11 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
   }
 
   if (g_initialized) {
+    if (g_isolate_poisoned) {
+      uv_mutex_unlock(&g_mutex);
+      napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+      return NULL;
+    }
     if (!env_init_acquire_and_hook(env)) {
       uv_mutex_unlock(&g_mutex);
       napi_throw_error(env, NULL, "Failed to allocate/register env init record");
@@ -1065,18 +1538,22 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
     uv_thread_options_t cleanup_opts;
     cleanup_opts.flags = UV_THREAD_HAS_STACK_SIZE;
     cleanup_opts.stack_size = 2 * 1024 * 1024;
-    cleanup_result_t result = CLEANUP_RETAIN;
+    cleanup_thread_result_t result = {CLEANUP_RETAIN, false};
     int cleanup_spawn_rc = uv_thread_create_ex(&cleanup_tid, &cleanup_opts, cleanup_thread_fn, &result);
     if (cleanup_spawn_rc == 0) {
       uv_thread_join(&cleanup_tid);
     }
-    if (result == CLEANUP_TORN_DOWN) {
+    if (g_test_hooks && result.teardown_callable) g_test_teardown_calls++;
+    if (result.outcome == CLEANUP_TORN_DOWN) {
       // Teardown ran (or there was nothing to tear down) -- clear the globals
       // so the next initialize() sees a clean slate. g_ref_count is already 0.
+      if (g_test_engine_record_allocation_failure_generation == g_isolate_generation) {
+        g_test_engine_record_allocation_failure_generation = 0;
+      }
       g_thread = NULL;
       g_isolate = NULL;
       g_initialized = 0;
-    } else if (result == CLEANUP_UNRECOVERABLE) {
+    } else if (result.outcome == CLEANUP_UNRECOVERABLE) {
       // teardown+detach double failure (review #17 #1): abandon the isolate and
       // reset published state so this same initialize() failure path throws
       // below and a LATER initialize() builds a fresh isolate. Does NOT arm the
@@ -1123,17 +1600,890 @@ static napi_value napi_initialize(napi_env env, napi_callback_info info) {
 
 // --- Streaming output ---
 
+#define OUTPUT_HIGH_BYTES (1024 * 1024)
+#define OUTPUT_LOW_BYTES (512 * 1024)
+#define OUTPUT_HIGH_CHUNKS 128
+#define OUTPUT_LOW_CHUNKS 64
+#define OUTPUT_TSFN_QUEUE_SIZE 129
+
+typedef struct output_credit {
+  size_t bytes;
+  uint64_t sequence;
+  bool delivered;
+  bool acknowledged;
+  struct output_credit* previous;
+  struct output_credit* next;
+} output_credit_t;
+
+typedef struct output_flow {
+  uv_mutex_t mutex;
+  uv_cond_t cond;
+  size_t outstanding_bytes;
+  size_t outstanding_chunks;
+  size_t peak_buffered_bytes;
+  size_t peak_buffered_chunks;
+  size_t largest_chunk_bytes;
+  bool paused;
+  bool cancelled;
+  bool done;
+  unsigned int refs;
+  uint64_t operation_id;
+  uint64_t next_sequence;
+  output_credit_t* credit_head;
+  output_credit_t* credit_tail;
+  napi_ref thenable_ref;
+  napi_ref settlement_fallback_ref;
+  bool settlement_started;
+} output_flow_t;
+
+typedef struct output_flow_stats {
+  uint64_t operation_id;
+  size_t outstanding_bytes;
+  size_t outstanding_chunks;
+  size_t peak_buffered_bytes;
+  size_t peak_buffered_chunks;
+  size_t largest_chunk_bytes;
+  bool paused;
+  bool cancelled;
+  bool done;
+  long long live_flows;
+} output_flow_stats_t;
+
+// Test hooks store a value snapshot, never a flow pointer, so close/finalize
+// cannot leave introspection pointing at freed operation state.
+static output_flow_stats_t g_test_last_output_stats;
+static uint64_t g_test_next_output_operation_id = 1;
+static long long g_test_live_output_flows = 0;
+
+static void output_flow_record_stats_locked(output_flow_t* flow) {
+  if (!g_test_hooks || flow == NULL) return;
+  uv_mutex_lock(&g_test_output_mutex);
+  g_test_last_output_stats.operation_id = flow->operation_id;
+  g_test_last_output_stats.outstanding_bytes = flow->outstanding_bytes;
+  g_test_last_output_stats.outstanding_chunks = flow->outstanding_chunks;
+  g_test_last_output_stats.peak_buffered_bytes = flow->peak_buffered_bytes;
+  g_test_last_output_stats.peak_buffered_chunks = flow->peak_buffered_chunks;
+  g_test_last_output_stats.largest_chunk_bytes = flow->largest_chunk_bytes;
+  g_test_last_output_stats.paused = flow->paused;
+  g_test_last_output_stats.cancelled = flow->cancelled;
+  g_test_last_output_stats.done = flow->done;
+  g_test_last_output_stats.live_flows = g_test_live_output_flows;
+  uv_mutex_unlock(&g_test_output_mutex);
+}
+
+static output_flow_t* output_flow_create(void) {
+  output_flow_t* flow = (output_flow_t*)calloc(1, sizeof(output_flow_t));
+  if (flow == NULL) return NULL;
+  if (uv_mutex_init(&flow->mutex) != 0) {
+    free(flow);
+    return NULL;
+  }
+  if (uv_cond_init(&flow->cond) != 0) {
+    uv_mutex_destroy(&flow->mutex);
+    free(flow);
+    return NULL;
+  }
+  flow->refs = 1;
+  if (g_test_hooks) {
+    uv_mutex_lock(&g_test_output_mutex);
+    flow->operation_id = g_test_next_output_operation_id++;
+    g_test_live_output_flows++;
+    memset(&g_test_last_output_stats, 0, sizeof(g_test_last_output_stats));
+    g_test_last_output_stats.operation_id = flow->operation_id;
+    g_test_last_output_stats.live_flows = g_test_live_output_flows;
+    uv_mutex_unlock(&g_test_output_mutex);
+  }
+  return flow;
+}
+
+static void output_flow_retain(output_flow_t* flow) {
+  if (flow == NULL) return;
+  uv_mutex_lock(&flow->mutex);
+  flow->refs++;
+  uv_mutex_unlock(&flow->mutex);
+}
+
+static void output_flow_release(output_flow_t* flow, napi_env env) {
+  if (flow == NULL) return;
+  bool destroy = false;
+  uv_mutex_lock(&flow->mutex);
+  if (flow->refs > 0) {
+    flow->refs--;
+    destroy = flow->refs == 0;
+  }
+  uv_mutex_unlock(&flow->mutex);
+  if (!destroy) return;
+  // A dead env auto-reclaims N-API references. Live-env terminal paths delete
+  // them before releasing the final native owner.
+  flow->thenable_ref = NULL;
+  if (env != NULL && flow->settlement_fallback_ref != NULL) {
+    napi_delete_reference(env, flow->settlement_fallback_ref);
+  }
+  flow->settlement_fallback_ref = NULL;
+
+  if (g_test_hooks) {
+    uv_mutex_lock(&g_test_output_mutex);
+    g_test_live_output_flows--;
+    if (g_test_last_output_stats.operation_id == flow->operation_id) {
+      g_test_last_output_stats.live_flows = g_test_live_output_flows;
+    }
+    uv_mutex_unlock(&g_test_output_mutex);
+  }
+  output_credit_t* credit = flow->credit_head;
+  while (credit != NULL) {
+    output_credit_t* next = credit->next;
+    free(credit);
+    credit = next;
+  }
+  uv_cond_destroy(&flow->cond);
+  uv_mutex_destroy(&flow->mutex);
+  free(flow);
+}
+
+// Only the native producer waits here. No caller holds g_mutex while waiting.
+static bool output_flow_reserve(
+    output_flow_t* flow, size_t bytes, uint64_t* sequence_out) {
+  if (flow == NULL) return false;
+  output_credit_t* credit = (output_credit_t*)calloc(1, sizeof(output_credit_t));
+  if (credit == NULL) return false;
+  credit->bytes = bytes;
+
+  uv_mutex_lock(&flow->mutex);
+  if (flow->cancelled || flow->done) {
+    flow->paused = false;
+    output_flow_record_stats_locked(flow);
+    uv_mutex_unlock(&flow->mutex);
+    free(credit);
+    return false;
+  }
+  bool empty = flow->outstanding_bytes == 0 && flow->outstanding_chunks == 0;
+  bool oversized = bytes > OUTPUT_HIGH_BYTES;
+  bool oversized_empty = empty && oversized;
+  bool over_high =
+    flow->outstanding_chunks + 1 > OUTPUT_HIGH_CHUNKS ||
+    bytes > SIZE_MAX - flow->outstanding_bytes ||
+    flow->outstanding_bytes + bytes > OUTPUT_HIGH_BYTES;
+  if (over_high && !oversized_empty) {
+    flow->paused = true;
+    output_flow_record_stats_locked(flow);
+    while (!flow->cancelled && !flow->done &&
+           ((oversized &&
+             (flow->outstanding_bytes > 0 || flow->outstanding_chunks > 0)) ||
+            flow->outstanding_bytes > OUTPUT_LOW_BYTES ||
+            flow->outstanding_chunks > OUTPUT_LOW_CHUNKS)) {
+      uv_cond_wait(&flow->cond, &flow->mutex);
+    }
+  }
+
+  if (flow->cancelled || flow->done) {
+    flow->paused = false;
+    output_flow_record_stats_locked(flow);
+    uv_mutex_unlock(&flow->mutex);
+    free(credit);
+    return false;
+  }
+
+  flow->paused = false;
+  // The overflow check above routes a huge reservation through the oversized
+  // wait, which drains prior credit; ordinary reservations are already bounded.
+  flow->outstanding_bytes += bytes;
+  flow->outstanding_chunks++;
+  credit->sequence = ++flow->next_sequence;
+  credit->previous = flow->credit_tail;
+  if (flow->credit_tail != NULL) flow->credit_tail->next = credit;
+  else flow->credit_head = credit;
+  flow->credit_tail = credit;
+  if (flow->outstanding_bytes > flow->peak_buffered_bytes) {
+    flow->peak_buffered_bytes = flow->outstanding_bytes;
+  }
+  if (flow->outstanding_chunks > flow->peak_buffered_chunks) {
+    flow->peak_buffered_chunks = flow->outstanding_chunks;
+  }
+  if (bytes > flow->largest_chunk_bytes) flow->largest_chunk_bytes = bytes;
+  output_flow_record_stats_locked(flow);
+  *sequence_out = credit->sequence;
+  uv_mutex_unlock(&flow->mutex);
+  return true;
+}
+
+typedef enum {
+  OUTPUT_ACK_IGNORED = 0,
+  OUTPUT_ACK_ACCEPTED,
+  OUTPUT_ACK_INVALID_SEQUENCE,
+  OUTPUT_ACK_NOT_DELIVERED,
+  OUTPUT_ACK_OUT_OF_ORDER,
+  OUTPUT_ACK_BYTES_MISMATCH,
+  OUTPUT_ACK_DUPLICATE,
+} output_ack_result_t;
+
+static output_ack_result_t output_flow_acknowledge(
+    output_flow_t* flow, uint64_t sequence, size_t bytes) {
+  if (flow == NULL) return OUTPUT_ACK_IGNORED;
+  uv_mutex_lock(&flow->mutex);
+  if (flow->cancelled) {
+    output_flow_record_stats_locked(flow);
+    uv_mutex_unlock(&flow->mutex);
+    return OUTPUT_ACK_IGNORED;
+  }
+
+  output_credit_t* credit = flow->credit_head;
+  output_credit_t* requested = credit;
+  while (requested != NULL && requested->sequence != sequence) {
+    requested = requested->next;
+  }
+  output_ack_result_t result;
+  if (requested == NULL) {
+    result = flow->done
+      ? OUTPUT_ACK_IGNORED
+      : sequence <= flow->next_sequence
+      ? OUTPUT_ACK_DUPLICATE
+      : OUTPUT_ACK_INVALID_SEQUENCE;
+  } else if (!requested->delivered) {
+    result = OUTPUT_ACK_NOT_DELIVERED;
+  } else if (requested != credit) {
+    result = OUTPUT_ACK_OUT_OF_ORDER;
+  } else if (requested->bytes != bytes) {
+    result = OUTPUT_ACK_BYTES_MISMATCH;
+  } else if (requested->acknowledged) {
+    result = OUTPUT_ACK_DUPLICATE;
+  } else if (bytes <= flow->outstanding_bytes && flow->outstanding_chunks > 0) {
+    requested->acknowledged = true;
+    flow->outstanding_bytes -= bytes;
+    flow->outstanding_chunks--;
+    flow->credit_head = requested->next;
+    if (flow->credit_head != NULL) flow->credit_head->previous = NULL;
+    else flow->credit_tail = NULL;
+    free(requested);
+    if (flow->paused &&
+        flow->outstanding_bytes <= OUTPUT_LOW_BYTES &&
+        flow->outstanding_chunks <= OUTPUT_LOW_CHUNKS) {
+      uv_cond_broadcast(&flow->cond);
+    }
+    result = OUTPUT_ACK_ACCEPTED;
+  } else {
+    result = OUTPUT_ACK_INVALID_SEQUENCE;
+  }
+  output_flow_record_stats_locked(flow);
+  uv_mutex_unlock(&flow->mutex);
+  return result;
+}
+
+static bool output_flow_mark_delivered(output_flow_t* flow, uint64_t sequence) {
+  if (flow == NULL) return false;
+  uv_mutex_lock(&flow->mutex);
+  output_credit_t* credit = flow->credit_head;
+  while (credit != NULL && credit->sequence != sequence) credit = credit->next;
+  bool delivered = !flow->cancelled && !flow->done && credit != NULL;
+  if (delivered) credit->delivered = true;
+  output_flow_record_stats_locked(flow);
+  uv_mutex_unlock(&flow->mutex);
+  return delivered;
+}
+
+static bool output_flow_is_cancelled(output_flow_t* flow);
+
+static bool test_hold_output_delivery_if_armed(
+    output_flow_t* flow, uint64_t sequence, size_t bytes) {
+  if (!g_test_hooks) return true;
+  bool cancelled = false;
+  uv_mutex_lock(&g_test_output_mutex);
+  if (g_test_hold_next_output_delivery) {
+    g_test_hold_next_output_delivery = false;
+    g_test_output_delivery_held = true;
+    g_test_held_output_sequence = sequence;
+    g_test_held_output_bytes = bytes;
+    while (!g_test_release_output_delivery) {
+      uv_mutex_unlock(&g_test_output_mutex);
+      cancelled = output_flow_is_cancelled(flow);
+      if (!cancelled) uv_sleep(1);
+      uv_mutex_lock(&g_test_output_mutex);
+      if (cancelled) break;
+    }
+    g_test_release_output_delivery = false;
+    g_test_output_delivery_held = false;
+    g_test_held_output_sequence = 0;
+    g_test_held_output_bytes = 0;
+  }
+  uv_mutex_unlock(&g_test_output_mutex);
+  return !cancelled && !output_flow_is_cancelled(flow);
+}
+
+// Enqueue/allocation rollback always targets the newest reservation because
+// callbacks reserve and enqueue serially on the sole producer worker.
+static void output_flow_rollback(
+    output_flow_t* flow, uint64_t sequence, size_t bytes) {
+  if (flow == NULL) return;
+  uv_mutex_lock(&flow->mutex);
+  output_credit_t* credit = flow->credit_tail;
+  if (credit != NULL && credit->sequence == sequence && credit->bytes == bytes &&
+      bytes <= flow->outstanding_bytes && flow->outstanding_chunks > 0) {
+    flow->outstanding_bytes -= bytes;
+    flow->outstanding_chunks--;
+    flow->credit_tail = credit->previous;
+    if (flow->credit_tail != NULL) flow->credit_tail->next = NULL;
+    else flow->credit_head = NULL;
+    free(credit);
+  }
+  uv_cond_broadcast(&flow->cond);
+  output_flow_record_stats_locked(flow);
+  uv_mutex_unlock(&flow->mutex);
+}
+
+static void output_flow_cancel_locked(output_flow_t* flow) {
+  if (!flow->cancelled) {
+    flow->cancelled = true;
+    flow->paused = false;
+    flow->outstanding_bytes = 0;
+    flow->outstanding_chunks = 0;
+    output_credit_t* credit = flow->credit_head;
+    while (credit != NULL) {
+      output_credit_t* next = credit->next;
+      free(credit);
+      credit = next;
+    }
+    flow->credit_head = NULL;
+    flow->credit_tail = NULL;
+  }
+  uv_cond_broadcast(&flow->cond);
+}
+
+static void output_flow_cancel(output_flow_t* flow) {
+  if (flow == NULL) return;
+  uv_mutex_lock(&flow->mutex);
+  output_flow_cancel_locked(flow);
+  output_flow_record_stats_locked(flow);
+  uv_mutex_unlock(&flow->mutex);
+}
+
+static void output_flow_cancel_if_running(output_flow_t* flow) {
+  if (flow == NULL) return;
+  uv_mutex_lock(&flow->mutex);
+  if (!flow->done) output_flow_cancel_locked(flow);
+  output_flow_record_stats_locked(flow);
+  uv_mutex_unlock(&flow->mutex);
+}
+
+static bool output_flow_is_cancelled(output_flow_t* flow) {
+  if (flow == NULL) return true;
+  uv_mutex_lock(&flow->mutex);
+  bool cancelled = flow->cancelled;
+  uv_mutex_unlock(&flow->mutex);
+  return cancelled;
+}
+
+static void output_flow_retain_thenable(
+    output_flow_t* flow, napi_env env, napi_value controller) {
+  if (flow == NULL || env == NULL) return;
+  uv_mutex_lock(&flow->mutex);
+  if (!flow->done && flow->thenable_ref == NULL) {
+    napi_ref thenable_ref = NULL;
+    if (napi_create_reference(env, controller, 1, &thenable_ref) == napi_ok) {
+      flow->thenable_ref = thenable_ref;
+    }
+  }
+  uv_mutex_unlock(&flow->mutex);
+}
+
+static bool output_flow_begin_settlement(output_flow_t* flow) {
+  if (flow == NULL) return false;
+  uv_mutex_lock(&flow->mutex);
+  bool begin = !flow->settlement_started;
+  if (begin) flow->settlement_started = true;
+  uv_mutex_unlock(&flow->mutex);
+  return begin;
+}
+
+static void output_flow_release_settlement_ref(output_flow_t* flow, napi_env env) {
+  if (flow == NULL || env == NULL) return;
+  uv_mutex_lock(&flow->mutex);
+  napi_ref fallback_ref = flow->settlement_fallback_ref;
+  flow->settlement_fallback_ref = NULL;
+  uv_mutex_unlock(&flow->mutex);
+  if (fallback_ref != NULL) napi_delete_reference(env, fallback_ref);
+}
+
+static void output_flow_mark_done(output_flow_t* flow, napi_env env) {
+  if (flow == NULL) return;
+  napi_ref thenable_ref = NULL;
+  uv_mutex_lock(&flow->mutex);
+  flow->done = true;
+  flow->paused = false;
+  thenable_ref = flow->thenable_ref;
+  flow->thenable_ref = NULL;
+  uv_cond_broadcast(&flow->cond);
+  output_flow_record_stats_locked(flow);
+  uv_mutex_unlock(&flow->mutex);
+  // The reference is only created on this env's JS thread. env == NULL means
+  // teardown owns automatic N-API reference reclamation.
+  if (env != NULL && thenable_ref != NULL) napi_delete_reference(env, thenable_ref);
+}
+
+typedef struct output_controller {
+  uv_mutex_t mutex;
+  output_flow_t* flow;
+  bool closed;
+  uint64_t operation_id;
+} output_controller_t;
+
+static const napi_type_tag OUTPUT_CONTROLLER_TAG = {
+  0x9d29436c7a6848e1ULL,
+  0xa8e6af21e52d879bULL,
+};
+
+static void output_controller_cancel(output_controller_t* holder) {
+  if (holder == NULL) return;
+  uv_mutex_lock(&holder->mutex);
+  output_flow_t* flow = holder->flow;
+  if (flow != NULL) output_flow_retain(flow);
+  uv_mutex_unlock(&holder->mutex);
+  if (flow != NULL) {
+    output_flow_cancel(flow);
+    output_flow_release(flow, NULL);
+  }
+}
+
+static void output_controller_close(output_controller_t* holder, napi_env env) {
+  if (holder == NULL) return;
+  uv_mutex_lock(&holder->mutex);
+  output_flow_t* flow = NULL;
+  if (!holder->closed) {
+    holder->closed = true;
+    flow = holder->flow;
+    holder->flow = NULL;
+  }
+  uv_mutex_unlock(&holder->mutex);
+  if (flow != NULL) {
+    output_flow_cancel_if_running(flow);
+    output_flow_release(flow, env);
+  }
+}
+
+static void output_controller_finalize(napi_env env, void* data, void* hint) {
+  (void)hint;
+  output_controller_t* holder = (output_controller_t*)data;
+  if (holder == NULL) return;
+  output_controller_cancel(holder);
+  output_controller_close(holder, env);
+  uv_mutex_destroy(&holder->mutex);
+  free(holder);
+}
+
+static output_controller_t* output_controller_unwrap(
+    napi_env env, napi_callback_info info, size_t expected_argc, napi_value* argv) {
+  napi_value this_arg;
+  size_t actual = expected_argc;
+  if (napi_get_cb_info(env, info, &actual, argv, &this_arg, NULL) != napi_ok) {
+    napi_throw_type_error(env, NULL, "Invalid output controller invocation");
+    return NULL;
+  }
+  if (actual < expected_argc) {
+    napi_throw_type_error(env, NULL, "Missing output controller argument");
+    return NULL;
+  }
+  bool tagged = false;
+  if (napi_check_object_type_tag(env, this_arg, &OUTPUT_CONTROLLER_TAG, &tagged) != napi_ok ||
+      !tagged) {
+    napi_throw_type_error(env, NULL, "Invalid output controller receiver");
+    return NULL;
+  }
+  output_controller_t* holder = NULL;
+  if (napi_unwrap(env, this_arg, (void**)&holder) != napi_ok || holder == NULL) {
+    napi_throw_type_error(env, NULL, "Invalid output controller receiver");
+    return NULL;
+  }
+  return holder;
+}
+
+static napi_value napi_output_acknowledge(napi_env env, napi_callback_info info) {
+  napi_value argv[2];
+  output_controller_t* holder = output_controller_unwrap(env, info, 2, argv);
+  if (holder == NULL) return NULL;
+  napi_valuetype type;
+  uint64_t sequence;
+  double value;
+  bool lossless = false;
+  if (napi_typeof(env, argv[0], &type) != napi_ok || type != napi_bigint ||
+      napi_get_value_bigint_uint64(env, argv[0], &sequence, &lossless) != napi_ok ||
+      !lossless || sequence == 0) {
+    napi_throw_range_error(env, NULL,
+                           "acknowledge(sequence, bytes) requires a positive uint64 BigInt sequence");
+    return NULL;
+  }
+  if (napi_typeof(env, argv[1], &type) != napi_ok || type != napi_number ||
+      napi_get_value_double(env, argv[1], &value) != napi_ok ||
+      value != value || value < 0 || value > 9007199254740991.0 ||
+      value > (double)SIZE_MAX || value != (double)(size_t)value) {
+    napi_throw_range_error(env, NULL,
+                           "acknowledge(sequence, bytes) requires finite non-negative safe integer bytes");
+    return NULL;
+  }
+  uv_mutex_lock(&holder->mutex);
+  output_flow_t* flow = holder->flow;
+  if (flow != NULL) output_flow_retain(flow);
+  uv_mutex_unlock(&holder->mutex);
+  if (flow != NULL) {
+    output_ack_result_t result = output_flow_acknowledge(flow, sequence, (size_t)value);
+    output_flow_release(flow, NULL);
+    switch (result) {
+      case OUTPUT_ACK_IGNORED:
+      case OUTPUT_ACK_ACCEPTED:
+        return NULL;
+      case OUTPUT_ACK_INVALID_SEQUENCE:
+        napi_throw_range_error(env, NULL, "Unknown output sequence");
+        return NULL;
+      case OUTPUT_ACK_NOT_DELIVERED:
+        napi_throw_error(env, NULL, "Output sequence has not been delivered");
+        return NULL;
+      case OUTPUT_ACK_OUT_OF_ORDER:
+        napi_throw_error(env, NULL, "Output acknowledgement is out of order");
+        return NULL;
+      case OUTPUT_ACK_BYTES_MISMATCH:
+        napi_throw_range_error(env, NULL, "Output acknowledgement byte count does not match");
+        return NULL;
+      case OUTPUT_ACK_DUPLICATE:
+        napi_throw_error(env, NULL, "Output sequence was already acknowledged");
+        return NULL;
+    }
+  }
+  return NULL;
+}
+
+static napi_value napi_output_cancel(napi_env env, napi_callback_info info) {
+  output_controller_t* holder = output_controller_unwrap(env, info, 0, NULL);
+  if (holder == NULL) return NULL;
+  output_controller_cancel(holder);
+  return NULL;
+}
+
+static napi_value napi_output_close(napi_env env, napi_callback_info info) {
+  output_controller_t* holder = output_controller_unwrap(env, info, 0, NULL);
+  if (holder == NULL) return NULL;
+  output_controller_close(holder, env);
+  return NULL;
+}
+
+static napi_value napi_output_promise_method(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_value controller;
+  void* data;
+  if (napi_get_cb_info(env, info, &argc, argv, &controller, &data) != napi_ok) {
+    napi_throw_type_error(env, NULL, "Invalid output controller promise method");
+    return NULL;
+  }
+  bool tagged = false;
+  if (napi_check_object_type_tag(env, controller, &OUTPUT_CONTROLLER_TAG, &tagged) != napi_ok ||
+      !tagged) {
+    napi_throw_type_error(env, NULL, "Invalid output controller receiver");
+    return NULL;
+  }
+  const char* name = (const char*)data;
+  napi_value completion;
+  napi_value method;
+  napi_value result;
+  if (napi_get_named_property(env, controller, "completion", &completion) != napi_ok ||
+      napi_get_named_property(env, completion, name, &method) != napi_ok ||
+      napi_call_function(env, completion, method, argc, argv, &result) != napi_ok) {
+    return NULL;
+  }
+
+  output_controller_t* holder = NULL;
+  if (napi_unwrap(env, controller, (void**)&holder) != napi_ok || holder == NULL) {
+    napi_throw_type_error(env, NULL, "Invalid output controller receiver");
+    return NULL;
+  }
+  uv_mutex_lock(&holder->mutex);
+  output_flow_t* flow = holder->flow;
+  if (flow != NULL) output_flow_retain(flow);
+  uv_mutex_unlock(&holder->mutex);
+  if (flow != NULL) {
+    // Retain only after the Promise method call succeeds. Failed assimilation
+    // must not root a controller that no caller can use to close the flow.
+    output_flow_retain_thenable(flow, env, controller);
+    output_flow_release(flow, NULL);
+  }
+  return result;
+}
+
+static napi_value output_controller_create(
+    napi_env env, napi_value completion, output_flow_t* flow) {
+  output_controller_t* holder = (output_controller_t*)calloc(1, sizeof(output_controller_t));
+  if (holder == NULL || uv_mutex_init(&holder->mutex) != 0) {
+    free(holder);
+    napi_throw_error(env, NULL, "OOM");
+    return NULL;
+  }
+  holder->flow = flow;
+  holder->operation_id = flow->operation_id;
+  output_flow_retain(flow);  // JS ownership, released once by close/finalizer.
+
+  napi_value controller;
+  napi_value method;
+  if (napi_create_object(env, &controller) != napi_ok ||
+      napi_set_named_property(env, controller, "completion", completion) != napi_ok ||
+      napi_create_function(env, "acknowledge", NAPI_AUTO_LENGTH,
+                           napi_output_acknowledge, NULL, &method) != napi_ok ||
+      napi_set_named_property(env, controller, "acknowledge", method) != napi_ok ||
+      napi_create_function(env, "cancel", NAPI_AUTO_LENGTH,
+                           napi_output_cancel, NULL, &method) != napi_ok ||
+      napi_set_named_property(env, controller, "cancel", method) != napi_ok ||
+      napi_create_function(env, "close", NAPI_AUTO_LENGTH,
+                           napi_output_close, NULL, &method) != napi_ok ||
+      napi_set_named_property(env, controller, "close", method) != napi_ok ||
+      napi_create_function(env, "then", NAPI_AUTO_LENGTH,
+                           napi_output_promise_method, (void*)"then", &method) != napi_ok ||
+      napi_set_named_property(env, controller, "then", method) != napi_ok ||
+      napi_create_function(env, "catch", NAPI_AUTO_LENGTH,
+                           napi_output_promise_method, (void*)"catch", &method) != napi_ok ||
+      napi_set_named_property(env, controller, "catch", method) != napi_ok ||
+      napi_create_function(env, "finally", NAPI_AUTO_LENGTH,
+                           napi_output_promise_method, (void*)"finally", &method) != napi_ok ||
+      napi_set_named_property(env, controller, "finally", method) != napi_ok) {
+    output_controller_cancel(holder);
+    output_controller_close(holder, env);
+    uv_mutex_destroy(&holder->mutex);
+    free(holder);
+    napi_throw_error(env, NULL, "Failed to create output controller");
+    return NULL;
+  }
+  if (napi_wrap(env, controller, holder, output_controller_finalize, NULL, NULL) != napi_ok) {
+    output_controller_cancel(holder);
+    output_controller_close(holder, env);
+    uv_mutex_destroy(&holder->mutex);
+    free(holder);
+    napi_throw_error(env, NULL, "Failed to wrap output controller");
+    return NULL;
+  }
+  if (napi_type_tag_object(env, controller, &OUTPUT_CONTROLLER_TAG) != napi_ok) {
+    void* removed = NULL;
+    napi_remove_wrap(env, controller, &removed);
+    output_controller_cancel(holder);
+    output_controller_close(holder, env);
+    uv_mutex_destroy(&holder->mutex);
+    free(holder);
+    napi_throw_error(env, NULL, "Failed to tag output controller");
+    return NULL;
+  }
+  return controller;
+}
+
 // Round-9 (#2): static terminal-error JSON used when a worker thread cannot
 // even strdup its result string (OOM). It is a file-scope constant, never
 // heap-allocated, so any code path that would free a sentinel/chunk buffer
 // must first check `buf != OOM_JSON` -- freeing a static pointer is UB. The
 // wording matches the existing terse worker error style ("Empty response").
 static const char OOM_JSON[] = "{\"success\":false,\"error\":\"Out of memory\"}";
+static const char SETTLEMENT_ERROR_JSON[] =
+  "{\"success\":false,\"error\":\"Failed to settle native output completion\"}";
+
+static output_settlement_fault_t test_consume_output_settlement_fault(void) {
+  if (!g_test_hooks) return OUTPUT_SETTLEMENT_FAULT_NONE;
+  uv_mutex_lock(&g_test_output_mutex);
+  output_settlement_fault_t fault = g_test_next_output_settlement_fault;
+  g_test_next_output_settlement_fault = OUTPUT_SETTLEMENT_FAULT_NONE;
+  uv_mutex_unlock(&g_test_output_mutex);
+  return fault;
+}
+
+typedef enum {
+  OUTPUT_EXCEPTION_CLEARED,
+  OUTPUT_EXCEPTION_NOT_PENDING,
+  OUTPUT_EXCEPTION_CLEAR_FAILED,
+} output_exception_clear_result_t;
+
+static output_exception_clear_result_t clear_pending_exception(napi_env env) {
+  output_exception_clear_fault_t fault = OUTPUT_EXCEPTION_CLEAR_FAULT_NONE;
+  if (g_test_hooks) {
+    uv_mutex_lock(&g_test_output_mutex);
+    fault = g_test_next_output_exception_clear_fault;
+    g_test_next_output_exception_clear_fault = OUTPUT_EXCEPTION_CLEAR_FAULT_NONE;
+    uv_mutex_unlock(&g_test_output_mutex);
+  }
+  bool pending = false;
+  if (fault == OUTPUT_EXCEPTION_CLEAR_FAULT_IS_PENDING ||
+      napi_is_exception_pending(env, &pending) != napi_ok) {
+    return OUTPUT_EXCEPTION_CLEAR_FAILED;
+  }
+  if (!pending) {
+    return OUTPUT_EXCEPTION_NOT_PENDING;
+  }
+  napi_value exception;
+  if (fault == OUTPUT_EXCEPTION_CLEAR_FAULT_GET_AND_CLEAR ||
+      napi_get_and_clear_last_exception(env, &exception) != napi_ok) {
+    fprintf(stderr,
+            "[DataWeave Node addon] Failed to clear an output settlement exception.\n");
+    return OUTPUT_EXCEPTION_CLEAR_FAILED;
+  }
+  return OUTPUT_EXCEPTION_CLEARED;
+}
+
+static napi_status settle_output_fallback(
+    napi_env env, napi_deferred deferred, napi_ref fallback_ref,
+    bool* conclude_called) {
+  *conclude_called = false;
+  napi_value holder;
+  napi_status status = napi_get_reference_value(env, fallback_ref, &holder);
+  if (status != napi_ok) return status;
+  napi_value fallback;
+  status = napi_get_named_property(env, holder, "value", &fallback);
+  if (status != napi_ok) return status;
+  *conclude_called = true;
+  return napi_resolve_deferred(env, deferred, fallback);
+}
+
+static void output_settlement_fail_closed(napi_status status) {
+  // Node frees a deferred whenever napi_resolve_deferred/reject_deferred is
+  // invoked, including failure returns. Continuing would either reuse freed
+  // memory or leave callers waiting forever, so terminate deterministically.
+  char message[128];
+  int length = snprintf(
+    message, sizeof(message),
+    "Output completion settlement failed after deferred consumption (napi status %d)",
+    (int)status
+  );
+  size_t message_length = length > 0
+    ? ((size_t)length < sizeof(message) ? (size_t)length : sizeof(message) - 1)
+    : 0;
+  static const char location[] = "DataWeave Node addon";
+  napi_fatal_error(
+    location, sizeof(location) - 1, message, message_length
+  );
+}
+
+static napi_status settle_output_deferred(
+    napi_env env, napi_deferred deferred, output_flow_t* flow,
+    const char* result_json) {
+  if (env == NULL || flow == NULL || !output_flow_begin_settlement(flow)) {
+    return napi_ok;
+  }
+
+  output_settlement_fault_t fault = test_consume_output_settlement_fault();
+  napi_value result;
+  bool fail_initial =
+    fault == OUTPUT_SETTLEMENT_FAULT_INITIAL_CREATE_GENERIC ||
+    fault == OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC ||
+    fault == OUTPUT_SETTLEMENT_FAULT_FALLBACK_PENDING_EXCEPTION ||
+    fault == OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC_AFTER_CALL;
+  napi_status status = fail_initial
+    ? napi_generic_failure
+    : napi_create_string_utf8(env, result_json, strlen(result_json), &result);
+  if (status == napi_ok) {
+    if (fault == OUTPUT_SETTLEMENT_FAULT_INITIAL_PENDING_EXCEPTION) {
+      napi_throw_error(env, NULL, "Injected initial output settlement exception");
+      status = napi_pending_exception;
+    } else {
+      status = napi_resolve_deferred(env, deferred, result);
+      if (status == napi_ok &&
+          fault == OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_GENERIC_AFTER_CALL) {
+        status = napi_generic_failure;
+      } else if (status == napi_ok &&
+                 fault == OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_PENDING_AFTER_CALL) {
+        napi_throw_error(env, NULL, "Injected consumed output settlement exception");
+        status = napi_pending_exception;
+      }
+      if (status != napi_ok) {
+        if (status == napi_pending_exception) {
+          output_exception_clear_result_t clear_result =
+            clear_pending_exception(env);
+          if (clear_result == OUTPUT_EXCEPTION_CLEAR_FAILED) {
+            output_settlement_fail_closed(status);
+          }
+          if (clear_result == OUTPUT_EXCEPTION_NOT_PENDING) {
+            output_flow_release_settlement_ref(flow, env);
+            return status;
+          }
+        }
+        output_settlement_fail_closed(status);
+      }
+      output_flow_release_settlement_ref(flow, env);
+      return napi_ok;
+    }
+  }
+  if (status == napi_pending_exception) {
+    output_exception_clear_result_t clear_result = clear_pending_exception(env);
+    if (clear_result == OUTPUT_EXCEPTION_CLEAR_FAILED) {
+      output_settlement_fail_closed(status);
+    }
+    if (clear_result == OUTPUT_EXCEPTION_NOT_PENDING) {
+      output_flow_release_settlement_ref(flow, env);
+      return status;
+    }
+  }
+
+  bool conclude_called = false;
+  if (fault == OUTPUT_SETTLEMENT_FAULT_FALLBACK_PENDING_EXCEPTION) {
+    napi_throw_error(env, NULL, "Injected fallback output settlement exception");
+    status = napi_pending_exception;
+  } else if (fault == OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC) {
+    status = napi_generic_failure;
+  } else {
+    status = settle_output_fallback(
+      env, deferred, flow->settlement_fallback_ref, &conclude_called
+    );
+  }
+  if (status == napi_ok &&
+      fault == OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC_AFTER_CALL) {
+    status = napi_generic_failure;
+  }
+  if (status == napi_ok) {
+    output_flow_release_settlement_ref(flow, env);
+    return napi_ok;
+  }
+  if (status == napi_pending_exception) {
+    output_exception_clear_result_t clear_result = clear_pending_exception(env);
+    if (clear_result == OUTPUT_EXCEPTION_CLEAR_FAILED) {
+      output_settlement_fail_closed(status);
+    }
+    if (clear_result == OUTPUT_EXCEPTION_NOT_PENDING) {
+      output_flow_release_settlement_ref(flow, env);
+      return status;
+    }
+  }
+  if (conclude_called) output_settlement_fail_closed(status);
+
+  status = settle_output_fallback(
+    env, deferred, flow->settlement_fallback_ref, &conclude_called
+  );
+  if (status != napi_ok) {
+    if (status == napi_pending_exception) {
+      output_exception_clear_result_t clear_result = clear_pending_exception(env);
+      if (clear_result == OUTPUT_EXCEPTION_CLEAR_FAILED) {
+        output_settlement_fail_closed(status);
+      }
+      if (clear_result == OUTPUT_EXCEPTION_NOT_PENDING) {
+        output_flow_release_settlement_ref(flow, env);
+        return status;
+      }
+    }
+    output_settlement_fail_closed(status);
+  }
+  output_flow_release_settlement_ref(flow, env);
+  return napi_ok;
+}
+
+static bool prepare_output_settlement(napi_env env, output_flow_t* flow) {
+  napi_value fallback;
+  if (napi_create_string_utf8(
+        env, SETTLEMENT_ERROR_JSON, NAPI_AUTO_LENGTH, &fallback) != napi_ok) {
+    return false;
+  }
+  // N-API v8 cannot retain a primitive string directly, so keep it reachable
+  // through a referenced object before the asynchronous operation starts.
+  napi_value holder;
+  if (napi_create_object(env, &holder) != napi_ok ||
+      napi_set_named_property(env, holder, "value", fallback) != napi_ok) {
+    return false;
+  }
+  return napi_create_reference(env, holder, 1, &flow->settlement_fallback_ref) == napi_ok;
+}
 
 // chunk_data with len == -1 is a sentinel indicating completion (buf holds meta JSON)
 struct chunk_data {
   char* buf;
   int len;
+  output_flow_t* flow;
+  size_t accounted_bytes;
+  uint64_t sequence;
 };
 
 struct streaming_work {
@@ -1155,7 +2505,20 @@ struct streaming_work {
   // WITHOUT enqueuing -- but the env is alive on OOM, so the promise would
   // never settle and the tsfn would never be released: a permanent hang.
   struct chunk_data* sentinel;
+  output_flow_t* flow;
 };
+
+static void output_chunk_release(struct chunk_data* chunk, bool rollback) {
+  if (chunk == NULL) return;
+  if (chunk->flow != NULL) {
+    if (rollback) {
+      output_flow_rollback(chunk->flow, chunk->sequence, chunk->accounted_bytes);
+    }
+    output_flow_release(chunk->flow, NULL);
+  }
+  free(chunk->buf);
+  free(chunk);
+}
 
 static void call_js_write(napi_env env, napi_value js_callback, void* context, void* data) {
   // data == NULL: nothing was queued, nothing to free or finalize.
@@ -1173,11 +2536,10 @@ static void call_js_write(napi_env env, napi_value js_callback, void* context, v
     // would leak `w` and could strand a bridge marked for deferred destruction
     // indefinitely.
     if (env != NULL) {
-      napi_value result;
-      napi_create_string_utf8(env, chunk->buf, strlen(chunk->buf), &result);
-      napi_resolve_deferred(env, w->deferred, result);
+      settle_output_deferred(env, w->deferred, w->flow, chunk->buf);
     }
 
+    output_flow_mark_done(w->flow, env);
     if (chunk->buf != OOM_JSON) free(chunk->buf);
     free(chunk);
     free(w->script);
@@ -1191,6 +2553,7 @@ static void call_js_write(napi_env env, napi_value js_callback, void* context, v
     // dead/tearing down -- tell bridge_end_op (and any bridge_finalize it
     // triggers) not to touch the napi_ref, since b->env is this same dead env.
     bridge_end_op(w->bridge, /*env_still_alive=*/env != NULL);
+    output_flow_release(w->flow, NULL);
     free(w);
     return;
   }
@@ -1199,40 +2562,88 @@ static void call_js_write(napi_env env, napi_value js_callback, void* context, v
   // cannot deliver it to JS; free it and return without touching `w` (its
   // finalization happens only on the sentinel, above).
   if (env == NULL) {
-    free(chunk->buf);
-    free(chunk);
+    output_flow_cancel(chunk->flow);
+    output_chunk_release(chunk, /*rollback=*/true);
+    return;
+  }
+  // cancel() already released this payload's credit. Drop any TSFN payload
+  // that was queued before cancellation instead of calling JavaScript again.
+  if (output_flow_is_cancelled(chunk->flow)) {
+    output_chunk_release(chunk, /*rollback=*/false);
     return;
   }
 
   napi_value buffer;
+  napi_value sequence;
   void* buf_data;
-  napi_create_buffer_copy(env, chunk->len, chunk->buf, &buf_data, &buffer);
-
-  napi_value global;
-  napi_get_global(env, &global);
-  napi_call_function(env, global, js_callback, 1, &buffer, NULL);
-
-  free(chunk->buf);
-  free(chunk);
+  napi_status status = napi_create_buffer_copy(
+    env, chunk->len, chunk->buf, &buf_data, &buffer
+  );
+  if (status == napi_ok) {
+    status = napi_create_bigint_uint64(env, chunk->sequence, &sequence);
+  }
+  if (status == napi_ok) {
+    napi_value global;
+    status = napi_get_global(env, &global);
+    if (status == napi_ok) {
+      if (!output_flow_mark_delivered(chunk->flow, chunk->sequence)) {
+        output_chunk_release(chunk, /*rollback=*/false);
+        return;
+      }
+      native_callback_enter();
+      napi_value argv[2] = {buffer, sequence};
+      status = napi_call_function(env, global, js_callback, 2, argv, NULL);
+      native_callback_exit();
+    }
+  }
+  if (status != napi_ok) {
+    output_flow_cancel(chunk->flow);
+    if (status == napi_pending_exception) {
+      napi_value exception;
+      napi_get_and_clear_last_exception(env, &exception);
+    }
+  }
+  output_chunk_release(chunk, /*rollback=*/status != napi_ok);
 }
 
 static int streaming_write_cb(void* ctx, const char* buf, int len) {
-  napi_threadsafe_function tsfn = (napi_threadsafe_function)ctx;
+  struct streaming_work* w = (struct streaming_work*)ctx;
+  if (len < 0 || output_flow_is_cancelled(w->flow)) return -1;
+  uint64_t sequence;
+  if (!output_flow_reserve(w->flow, (size_t)len, &sequence)) return -1;
+  if (!test_hold_output_delivery_if_armed(w->flow, sequence, (size_t)len)) {
+    return -1;
+  }
   // Round-9 (#2): OOM here must not deref NULL / memcpy into NULL. Returning -1
   // aborts the native run cleanly (write-callback contract: non-zero stops the
   // DataWeave run); the worker then still produces a terminal meta_result and
   // sentinel, so the op resolves.
   struct chunk_data* chunk = malloc(sizeof(struct chunk_data));
-  if (chunk == NULL) return -1;
-  chunk->buf = malloc(len);
-  if (chunk->buf == NULL) { free(chunk); return -1; }
-  memcpy(chunk->buf, buf, len);
-  chunk->len = len;
-
-  napi_status status = napi_call_threadsafe_function(tsfn, chunk, napi_tsfn_blocking);
-  if (status != napi_ok) {
-    free(chunk->buf);
+  if (chunk == NULL) {
+    output_flow_rollback(w->flow, sequence, (size_t)len);
+    output_flow_cancel(w->flow);
+    return -1;
+  }
+  chunk->buf = len == 0 ? NULL : malloc((size_t)len);
+  if (len > 0 && chunk->buf == NULL) {
     free(chunk);
+    output_flow_rollback(w->flow, sequence, (size_t)len);
+    output_flow_cancel(w->flow);
+    return -1;
+  }
+  if (len > 0) memcpy(chunk->buf, buf, (size_t)len);
+  chunk->len = len;
+  chunk->flow = w->flow;
+  chunk->accounted_bytes = (size_t)len;
+  chunk->sequence = sequence;
+  output_flow_retain(w->flow);
+
+  napi_status status = napi_call_threadsafe_function(
+    w->tsfn, chunk, napi_tsfn_nonblocking
+  );
+  if (status != napi_ok) {
+    output_chunk_release(chunk, /*rollback=*/true);
+    output_flow_cancel(w->flow);
     return -1;
   }
   return 0;
@@ -1240,6 +2651,7 @@ static int streaming_write_cb(void* ctx, const char* buf, int len) {
 
 static void streaming_thread_fn(void* arg) {
   struct streaming_work* w = (struct streaming_work*)arg;
+  test_hold_async_op_if_armed();
 
   void* worker_thread = NULL;
   int rc = fn_attach_thread(g_isolate, &worker_thread);
@@ -1249,7 +2661,6 @@ static void streaming_thread_fn(void* arg) {
   // back to the OOM_JSON static (which must never be freed; see the guarded
   // frees below and in call_js_write).
   char* meta_result = NULL;
-  int detach_rc = 0;
   if (rc != 0) {
     char err[256];
     snprintf(err, sizeof(err), "{\"success\":false,\"error\":\"Failed to attach thread (code %d)\"}", rc);
@@ -1257,7 +2668,7 @@ static void streaming_thread_fn(void* arg) {
     if (meta_result == NULL) meta_result = (char*)OOM_JSON;
   } else {
     void* result_ptr = fn_run_script_callback_engine(
-      worker_thread, w->handle, w->script, w->inputs_json, streaming_write_cb, (void*)w->tsfn
+      worker_thread, w->handle, w->script, w->inputs_json, streaming_write_cb, (void*)w
     );
     if (result_ptr) {
       meta_result = strdup((const char*)result_ptr);
@@ -1267,7 +2678,7 @@ static void streaming_thread_fn(void* arg) {
       meta_result = strdup("{\"success\":false,\"error\":\"Empty response\"}");
       if (meta_result == NULL) meta_result = (char*)OOM_JSON;
     }
-    detach_rc = fn_detach_thread(worker_thread);
+    detach_thread_checked(DETACH_SITE_STREAM_WORKER, worker_thread);
   }
 
   // Decrement here, once this thread has fully detached from the isolate --
@@ -1278,7 +2689,6 @@ static void streaming_thread_fn(void* arg) {
   // here ties g_active_ops to the actual invariant isolate teardown needs
   // (no GraalVM-attached thread remains), independent of the event loop.
   uv_mutex_lock(&g_mutex);
-  if (detach_rc != 0) poison_isolate_detach_failure_locked(detach_rc);
   g_active_ops--;
   uv_cond_broadcast(&g_teardown_cond);
   // Round-14 (#2/#3): if a prior last-release could not tear the isolate down
@@ -1304,6 +2714,9 @@ static void streaming_thread_fn(void* arg) {
   struct chunk_data* sentinel = w->sentinel;
   sentinel->buf = meta_result;
   sentinel->len = -1;
+  sentinel->flow = NULL;
+  sentinel->accounted_bytes = 0;
+  sentinel->sequence = 0;
   napi_status enq = napi_call_threadsafe_function(w->tsfn, sentinel, napi_tsfn_blocking);
   if (enq != napi_ok) {
     // The env is tearing down (napi_closing): the sentinel was dropped and
@@ -1336,11 +2749,14 @@ static void streaming_thread_fn(void* arg) {
     free(w->script);
     free(w->inputs_json);
     bridge_end_op(w->bridge, /*env_still_alive=*/false);
+    output_flow_mark_done(w->flow, NULL);
+    output_flow_release(w->flow, NULL);
     free(w);
   }
 }
 
 static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_info info) {
+  if (native_callback_active()) return throw_callback_reentrancy(env);
   if (!g_initialized) {
     napi_throw_error(env, NULL, "Not initialized. Call initialize() first.");
     return NULL;
@@ -1383,6 +2799,12 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
   // genuine (non-cancelled) PENDING_WAIT or a committed TEARING_DOWN still
   // rejects.
   uv_mutex_lock(&g_mutex);
+  wait_for_detach_publication_locked();
+  if (g_isolate_poisoned) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+    return NULL;
+  }
   if (!g_initialized || (g_teardown_state != TEARDOWN_NONE && !g_teardown_cancelled)) {
     uv_mutex_unlock(&g_mutex);
     napi_throw_error(env, NULL, "Not initialized. Call initialize() first.");
@@ -1425,7 +2847,7 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
     napi_throw_error(env, NULL, "OOM");
     return NULL;
   }
-  w->handle = (long long)handle64;
+  w->handle = pinned != NULL ? pinned->native_handle : 0;
   w->script = malloc(script_len + 1);
   w->inputs_json = malloc(inputs_len + 1);
   if (w->script == NULL || w->inputs_json == NULL) {
@@ -1443,6 +2865,22 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
     napi_throw_error(env, NULL, "runScriptStreamingEngine: failed to read script/inputsJson");
     return NULL;
   }
+  w->flow = output_flow_create();
+  if (w->flow == NULL) {
+    free(w->script); free(w->inputs_json); free(w);
+    bridge_end_op(pinned, /*env_still_alive=*/true);
+    uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "OOM");
+    return NULL;
+  }
+  if (!prepare_output_settlement(env, w->flow)) {
+    output_flow_release(w->flow, NULL);
+    free(w->script); free(w->inputs_json); free(w);
+    bridge_end_op(pinned, /*env_still_alive=*/true);
+    uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "runScriptStreamingEngine: failed to create settlement fallback");
+    return NULL;
+  }
 
   // Round-9 (#3, updated round-11 #2): the resource creations below run AFTER
   // g_active_ops was reserved (and after w + its buffers were allocated), and
@@ -1454,13 +2892,17 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
   // (teardown wedge).
   napi_value resource_name;
   if (napi_create_string_utf8(env, "dwStreaming", NAPI_AUTO_LENGTH, &resource_name) != napi_ok) {
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
     napi_throw_error(env, NULL, "runScriptStreamingEngine: failed to create resource name");
     return NULL;
   }
-  if (napi_create_threadsafe_function(env, argv[3], NULL, resource_name, 0, 1, NULL, NULL, w, call_js_write, &w->tsfn) != napi_ok) {
+  if (napi_create_threadsafe_function(env, argv[3], NULL, resource_name,
+                                      OUTPUT_TSFN_QUEUE_SIZE, 1, NULL, NULL,
+                                      w, call_js_write, &w->tsfn) != napi_ok) {
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -1478,6 +2920,7 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
   w->sentinel = malloc(sizeof(struct chunk_data));
   if (w->sentinel == NULL) {
     napi_release_threadsafe_function(w->tsfn, napi_tsfn_release);
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -1490,10 +2933,21 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
     // The tsfn was created above; release it before freeing w (it holds w as
     // its context). No worker exists yet, so this release is the sole discharge.
     napi_release_threadsafe_function(w->tsfn, napi_tsfn_release);
+    output_flow_release(w->flow, env);
     free(w->sentinel); free(w->script); free(w->inputs_json); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
     napi_throw_error(env, NULL, "runScriptStreamingEngine: failed to create promise");
+    return NULL;
+  }
+
+  napi_value controller = output_controller_create(env, promise, w->flow);
+  if (controller == NULL) {
+    napi_release_threadsafe_function(w->tsfn, napi_tsfn_release);
+    output_flow_release(w->flow, env);
+    free(w->sentinel); free(w->script); free(w->inputs_json); free(w);
+    bridge_end_op(pinned, /*env_still_alive=*/true);
+    uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
     return NULL;
   }
 
@@ -1523,17 +2977,20 @@ static napi_value napi_run_script_streaming_engine(napi_env env, napi_callback_i
     bridge_end_op(w->bridge, /*env_still_alive=*/true);
     napi_release_threadsafe_function(w->tsfn, napi_tsfn_release);
 
-    napi_value result;
-    napi_create_string_utf8(env, "{\"success\":false,\"error\":\"Failed to spawn streaming worker thread\"}", NAPI_AUTO_LENGTH, &result);
-    napi_resolve_deferred(env, w->deferred, result);
+    settle_output_deferred(
+      env, w->deferred, w->flow,
+      "{\"success\":false,\"error\":\"Failed to spawn streaming worker thread\"}"
+    );
 
     free(w->sentinel);
     free(w->script);
     free(w->inputs_json);
+    output_flow_mark_done(w->flow, env);
+    output_flow_release(w->flow, env);
     free(w);
   }
 
-  return promise;
+  return controller;
 }
 
 // --- Bidirectional streaming ---
@@ -1559,6 +3016,7 @@ struct transform_work {
   // terminal path is allocation-free and can ALWAYS enqueue completion. See
   // the same field on struct streaming_work for the hang this prevents.
   struct chunk_data* sentinel;
+  output_flow_t* flow;
 };
 
 struct read_request {
@@ -1592,7 +3050,9 @@ static void call_js_read(napi_env env, napi_value js_callback, void* context, vo
     napi_get_global(env, &global);
 
     napi_value result;
+    native_callback_enter();
     napi_status status = napi_call_function(env, global, js_callback, 1, &buf_size_val, &result);
+    native_callback_exit();
 
     if (status == napi_ok && result != NULL) {
       bool is_buffer;
@@ -1683,19 +3143,40 @@ static int transform_read_cb(void* ctx, char* buf, int buf_size) {
 
 static int transform_write_cb(void* ctx, const char* buf, int len) {
   struct transform_work* w = (struct transform_work*)ctx;
+  if (len < 0 || output_flow_is_cancelled(w->flow)) return -1;
+  uint64_t sequence;
+  if (!output_flow_reserve(w->flow, (size_t)len, &sequence)) return -1;
+  if (!test_hold_output_delivery_if_armed(w->flow, sequence, (size_t)len)) {
+    return -1;
+  }
   // Round-9 (#2): OOM-safe, mirrors streaming_write_cb. Return -1 to abort the
   // native run cleanly; the worker still delivers a terminal sentinel.
   struct chunk_data* chunk = malloc(sizeof(struct chunk_data));
-  if (chunk == NULL) return -1;
-  chunk->buf = malloc(len);
-  if (chunk->buf == NULL) { free(chunk); return -1; }
-  memcpy(chunk->buf, buf, len);
-  chunk->len = len;
-
-  napi_status status = napi_call_threadsafe_function(w->write_tsfn, chunk, napi_tsfn_blocking);
-  if (status != napi_ok) {
-    free(chunk->buf);
+  if (chunk == NULL) {
+    output_flow_rollback(w->flow, sequence, (size_t)len);
+    output_flow_cancel(w->flow);
+    return -1;
+  }
+  chunk->buf = len == 0 ? NULL : malloc((size_t)len);
+  if (len > 0 && chunk->buf == NULL) {
     free(chunk);
+    output_flow_rollback(w->flow, sequence, (size_t)len);
+    output_flow_cancel(w->flow);
+    return -1;
+  }
+  if (len > 0) memcpy(chunk->buf, buf, (size_t)len);
+  chunk->len = len;
+  chunk->flow = w->flow;
+  chunk->accounted_bytes = (size_t)len;
+  chunk->sequence = sequence;
+  output_flow_retain(w->flow);
+
+  napi_status status = napi_call_threadsafe_function(
+    w->write_tsfn, chunk, napi_tsfn_nonblocking
+  );
+  if (status != napi_ok) {
+    output_chunk_release(chunk, /*rollback=*/true);
+    output_flow_cancel(w->flow);
     return -1;
   }
   return 0;
@@ -1717,11 +3198,10 @@ static void call_js_transform_write(napi_env env, napi_value js_callback, void* 
     // would leak `w` and could strand a bridge marked for deferred destruction
     // indefinitely.
     if (env != NULL) {
-      napi_value result;
-      napi_create_string_utf8(env, chunk->buf, strlen(chunk->buf), &result);
-      napi_resolve_deferred(env, w->deferred, result);
+      settle_output_deferred(env, w->deferred, w->flow, chunk->buf);
     }
 
+    output_flow_mark_done(w->flow, env);
     if (chunk->buf != OOM_JSON) free(chunk->buf);
     free(chunk);
     free(w->script);
@@ -1739,6 +3219,7 @@ static void call_js_transform_write(napi_env env, napi_value js_callback, void* 
     // dead/tearing down -- tell bridge_end_op (and any bridge_finalize it
     // triggers) not to touch the napi_ref, since b->env is this same dead env.
     bridge_end_op(w->bridge, /*env_still_alive=*/env != NULL);
+    output_flow_release(w->flow, NULL);
     free(w);
     return;
   }
@@ -1747,25 +3228,53 @@ static void call_js_transform_write(napi_env env, napi_value js_callback, void* 
   // cannot deliver it to JS; free it and return without touching `w` (its
   // finalization happens only on the sentinel, above).
   if (env == NULL) {
-    free(chunk->buf);
-    free(chunk);
+    output_flow_cancel(chunk->flow);
+    output_chunk_release(chunk, /*rollback=*/true);
+    return;
+  }
+  // cancel() already released this payload's credit. Drop any TSFN payload
+  // that was queued before cancellation instead of calling JavaScript again.
+  if (output_flow_is_cancelled(chunk->flow)) {
+    output_chunk_release(chunk, /*rollback=*/false);
     return;
   }
 
   napi_value buffer;
+  napi_value sequence;
   void* buf_data;
-  napi_create_buffer_copy(env, chunk->len, chunk->buf, &buf_data, &buffer);
-
-  napi_value global;
-  napi_get_global(env, &global);
-  napi_call_function(env, global, js_callback, 1, &buffer, NULL);
-
-  free(chunk->buf);
-  free(chunk);
+  napi_status status = napi_create_buffer_copy(
+    env, chunk->len, chunk->buf, &buf_data, &buffer
+  );
+  if (status == napi_ok) {
+    status = napi_create_bigint_uint64(env, chunk->sequence, &sequence);
+  }
+  if (status == napi_ok) {
+    napi_value global;
+    status = napi_get_global(env, &global);
+    if (status == napi_ok) {
+      if (!output_flow_mark_delivered(chunk->flow, chunk->sequence)) {
+        output_chunk_release(chunk, /*rollback=*/false);
+        return;
+      }
+      native_callback_enter();
+      napi_value argv[2] = {buffer, sequence};
+      status = napi_call_function(env, global, js_callback, 2, argv, NULL);
+      native_callback_exit();
+    }
+  }
+  if (status != napi_ok) {
+    output_flow_cancel(chunk->flow);
+    if (status == napi_pending_exception) {
+      napi_value exception;
+      napi_get_and_clear_last_exception(env, &exception);
+    }
+  }
+  output_chunk_release(chunk, /*rollback=*/status != napi_ok);
 }
 
 static void transform_thread_fn(void* arg) {
   struct transform_work* w = (struct transform_work*)arg;
+  test_hold_async_op_if_armed();
 
   void* worker_thread = NULL;
   int rc = fn_attach_thread(g_isolate, &worker_thread);
@@ -1774,7 +3283,6 @@ static void transform_thread_fn(void* arg) {
   // so the sentinel below still delivers a terminal result. Mirrors
   // streaming_thread_fn.
   char* meta_result = NULL;
-  int detach_rc = 0;
   if (rc != 0) {
     char err[256];
     snprintf(err, sizeof(err), "{\"success\":false,\"error\":\"Failed to attach thread (code %d)\"}", rc);
@@ -1795,14 +3303,13 @@ static void transform_thread_fn(void* arg) {
       meta_result = strdup("{\"success\":false,\"error\":\"Empty response\"}");
       if (meta_result == NULL) meta_result = (char*)OOM_JSON;
     }
-    detach_rc = fn_detach_thread(worker_thread);
+    detach_thread_checked(DETACH_SITE_TRANSFORM_WORKER, worker_thread);
   }
 
   // See streaming_thread_fn's comment: decrement here (after detach), not in
   // call_js_transform_write's completion branch, to avoid the same
   // circular-wait deadlock against napi_initialize's pending-teardown wait.
   uv_mutex_lock(&g_mutex);
-  if (detach_rc != 0) poison_isolate_detach_failure_locked(detach_rc);
   g_active_ops--;
   uv_cond_broadcast(&g_teardown_cond);
   // Round-14 (#2/#3): retry a stranded teardown now that this op has drained.
@@ -1828,6 +3335,9 @@ static void transform_thread_fn(void* arg) {
   struct chunk_data* sentinel = w->sentinel;
   sentinel->buf = meta_result;
   sentinel->len = -1;
+  sentinel->flow = NULL;
+  sentinel->accounted_bytes = 0;
+  sentinel->sequence = 0;
   napi_status enq = napi_call_threadsafe_function(w->write_tsfn, sentinel, napi_tsfn_blocking);
   if (enq != napi_ok) {
     // See streaming_thread_fn: env tearing down, sentinel dropped, finalize
@@ -1861,11 +3371,14 @@ static void transform_thread_fn(void* arg) {
     free(w->input_mime_type);
     free(w->input_charset);
     bridge_end_op(w->bridge, /*env_still_alive=*/false);
+    output_flow_mark_done(w->flow, NULL);
+    output_flow_release(w->flow, NULL);
     free(w);
   }
 }
 
 static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_info info) {
+  if (native_callback_active()) return throw_callback_reentrancy(env);
   if (!g_initialized) {
     napi_throw_error(env, NULL, "Not initialized. Call initialize() first.");
     return NULL;
@@ -1905,6 +3418,12 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
   // post-adoption op throws "Not initialized". A genuine (non-cancelled)
   // PENDING_WAIT or a committed TEARING_DOWN still rejects.
   uv_mutex_lock(&g_mutex);
+  wait_for_detach_publication_locked();
+  if (g_isolate_poisoned) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+    return NULL;
+  }
   if (!g_initialized || (g_teardown_state != TEARDOWN_NONE && !g_teardown_cancelled)) {
     uv_mutex_unlock(&g_mutex);
     napi_throw_error(env, NULL, "Not initialized. Call initialize() first.");
@@ -1936,7 +3455,7 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
     return NULL;
   }
   size_t len;
-  w->handle = (long long)handle64;
+  w->handle = pinned != NULL ? pinned->native_handle : 0;
 
   #define TRANSFORM_FAIL(msg) do { \
       bridge_end_op(pinned, /*env_still_alive=*/true); \
@@ -1986,6 +3505,24 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
     TRANSFORM_FAIL("runScriptTransformEngine: inputCharset must be a string, null, or undefined");
   }
   #undef TRANSFORM_FAIL
+  w->flow = output_flow_create();
+  if (w->flow == NULL) {
+    free(w->script); free(w->inputs_json); free(w->input_name);
+    free(w->input_mime_type); free(w->input_charset); free(w);
+    bridge_end_op(pinned, /*env_still_alive=*/true);
+    uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "OOM");
+    return NULL;
+  }
+  if (!prepare_output_settlement(env, w->flow)) {
+    output_flow_release(w->flow, env);
+    free(w->script); free(w->inputs_json); free(w->input_name);
+    free(w->input_mime_type); free(w->input_charset); free(w);
+    bridge_end_op(pinned, /*env_still_alive=*/true);
+    uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "runScriptTransformEngine: failed to create settlement fallback");
+    return NULL;
+  }
 
   // Round-9 (#3, updated round-11 #2): check each resource creation; on
   // failure release the engine pin (`pinned`, taken at admission) via
@@ -1995,6 +3532,7 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
   // before freeing w if it was created.
   napi_value resource_name;
   if (napi_create_string_utf8(env, "dwTransform", NAPI_AUTO_LENGTH, &resource_name) != napi_ok) {
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w->input_name); free(w->input_mime_type); free(w->input_charset); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -2003,14 +3541,18 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
   }
 
   if (napi_create_threadsafe_function(env, argv[6], NULL, resource_name, 0, 1, NULL, NULL, NULL, call_js_read, &w->read_tsfn) != napi_ok) {
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w->input_name); free(w->input_mime_type); free(w->input_charset); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
     napi_throw_error(env, NULL, "runScriptTransformEngine: failed to create read threadsafe function");
     return NULL;
   }
-  if (napi_create_threadsafe_function(env, argv[7], NULL, resource_name, 0, 1, NULL, NULL, w, call_js_transform_write, &w->write_tsfn) != napi_ok) {
+  if (napi_create_threadsafe_function(env, argv[7], NULL, resource_name,
+                                      OUTPUT_TSFN_QUEUE_SIZE, 1, NULL, NULL,
+                                      w, call_js_transform_write, &w->write_tsfn) != napi_ok) {
     napi_release_threadsafe_function(w->read_tsfn, napi_tsfn_release);
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w->input_name); free(w->input_mime_type); free(w->input_charset); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -2029,6 +3571,7 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
   if (w->sentinel == NULL) {
     napi_release_threadsafe_function(w->read_tsfn, napi_tsfn_release);
     napi_release_threadsafe_function(w->write_tsfn, napi_tsfn_release);
+    output_flow_release(w->flow, env);
     free(w->script); free(w->inputs_json); free(w->input_name); free(w->input_mime_type); free(w->input_charset); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
@@ -2040,10 +3583,23 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
   if (napi_create_promise(env, &w->deferred, &promise) != napi_ok) {
     napi_release_threadsafe_function(w->read_tsfn, napi_tsfn_release);
     napi_release_threadsafe_function(w->write_tsfn, napi_tsfn_release);
+    output_flow_release(w->flow, env);
     free(w->sentinel); free(w->script); free(w->inputs_json); free(w->input_name); free(w->input_mime_type); free(w->input_charset); free(w);
     bridge_end_op(pinned, /*env_still_alive=*/true);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
     napi_throw_error(env, NULL, "runScriptTransformEngine: failed to create promise");
+    return NULL;
+  }
+
+  napi_value controller = output_controller_create(env, promise, w->flow);
+  if (controller == NULL) {
+    napi_release_threadsafe_function(w->read_tsfn, napi_tsfn_release);
+    napi_release_threadsafe_function(w->write_tsfn, napi_tsfn_release);
+    output_flow_release(w->flow, env);
+    free(w->sentinel); free(w->script); free(w->inputs_json);
+    free(w->input_name); free(w->input_mime_type); free(w->input_charset); free(w);
+    bridge_end_op(pinned, /*env_still_alive=*/true);
+    uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
     return NULL;
   }
 
@@ -2075,9 +3631,10 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
     napi_release_threadsafe_function(w->read_tsfn, napi_tsfn_release);
     napi_release_threadsafe_function(w->write_tsfn, napi_tsfn_release);
 
-    napi_value result;
-    napi_create_string_utf8(env, "{\"success\":false,\"error\":\"Failed to spawn transform worker thread\"}", NAPI_AUTO_LENGTH, &result);
-    napi_resolve_deferred(env, w->deferred, result);
+    settle_output_deferred(
+      env, w->deferred, w->flow,
+      "{\"success\":false,\"error\":\"Failed to spawn transform worker thread\"}"
+    );
 
     free(w->sentinel);
     free(w->script);
@@ -2085,10 +3642,12 @@ static napi_value napi_run_script_transform_engine(napi_env env, napi_callback_i
     free(w->input_name);
     free(w->input_mime_type);
     free(w->input_charset);
+    output_flow_mark_done(w->flow, NULL);
+    output_flow_release(w->flow, NULL);
     free(w);
   }
 
-  return promise;
+  return controller;
 }
 
 // --- Resolver callback bridge ---
@@ -2144,7 +3703,9 @@ static char* resolve_module_callback(void* thread, void* ctx, const char* module
 
     napi_value undefined, result;
     napi_get_undefined(env, &undefined);
+    native_callback_enter();
     napi_status status = napi_call_function(env, undefined, js_callback, 1, &module_path_str, &result);
+    native_callback_exit();
     if (status != napi_ok) {
         // JS resolver threw — clear the pending exception so it doesn't leak
         // into the next napi call, extract and log its message/stack for
@@ -2234,6 +3795,7 @@ static char* resolve_module_callback(void* thread, void* ctx, const char* module
 
 // createEngine() -> number
 static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
+    if (native_callback_active()) return throw_callback_reentrancy(env);
     (void)info;
     if (!fn_create_engine) { napi_throw_error(env, NULL, "create_engine not available in native library"); return NULL; }
 
@@ -2247,7 +3809,13 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
     // check and the g_active_ops++ cannot be split by a teardown because every
     // teardown transition and the g_active_ops==0 fast path also hold g_mutex.
     uv_mutex_lock(&g_mutex);
+    wait_for_detach_publication_locked();
     env_init_rec_t* self = env_init_rec_find_locked(env);
+    if (g_isolate_poisoned) {
+        uv_mutex_unlock(&g_mutex);
+        napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+        return NULL;
+    }
     if (!g_initialized || g_isolate == NULL ||
         g_teardown_state == TEARDOWN_TEARING_DOWN ||
         self == NULL || self->init_refs == 0) {
@@ -2264,13 +3832,11 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
         napi_throw_error(env, NULL, "Failed to attach thread"); return NULL;
     }
     long long handle = fn_create_engine(thread);
-    int detach_rc = fn_detach_thread(thread);
-    if (detach_rc != 0) poison_isolate_detach_failure(detach_rc);
-    // A GraalVM @CEntryPoint that throws on the Java side returns the return
-    // type's default value instead of propagating the exception — 0 for a
-    // long long. The real handle registry only ever hands out handles >= 1, so
-    // any handle <= 0 means construction failed; never hand that back to JS as
-    // if it were usable.
+    detach_thread_checked(DETACH_SITE_CREATE_ENGINE, thread);
+    // The Java @CEntryPoint exception handler explicitly returns 0 as its ABI
+    // exception sentinel when engine construction throws. The real handle
+    // registry only ever hands out handles >= 1, so any handle <= 0 means
+    // construction failed; never hand that back to JS as if it were usable.
     if (handle <= 0) {
         uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
         napi_throw_error(env, NULL, "create_engine returned an invalid handle"); return NULL;
@@ -2290,29 +3856,65 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
     // owner is recorded for symmetry but is NOT used to restrict destruction based
     // on resolver state (see the owner guard in napi_destroy_engine, which now
     // fires for any record).
-    engine_bridge_t* rec = (engine_bridge_t*)calloc(1, sizeof(engine_bridge_t));
+    bool fail_record_allocation = false;
+    if (g_test_hooks) {
+        uv_mutex_lock(&g_mutex);
+        fail_record_allocation =
+            g_test_engine_record_allocation_failure_generation == g_isolate_generation;
+        if (fail_record_allocation) {
+            g_test_engine_record_allocation_failure_generation = 0;
+        }
+        uv_mutex_unlock(&g_mutex);
+    }
+    engine_bridge_t* rec = fail_record_allocation
+        ? NULL
+        : (engine_bridge_t*)calloc(1, sizeof(engine_bridge_t));
     if (rec == NULL) {
         // Roll back the engine we just created so we don't leak a registered but
         // unrecorded handle. fn_destroy_engine attaches its own thread.
-        int detach_rc = 0;
         if (fn_destroy_engine) {
             void* t2 = NULL;
-            if (fn_attach_thread(g_isolate, &t2) == 0) { fn_destroy_engine(t2, handle); detach_rc = fn_detach_thread(t2); }
+            if (fn_attach_thread(g_isolate, &t2) == 0) {
+                fn_destroy_engine(t2, handle);
+                detach_thread_checked(DETACH_SITE_CREATE_ROLLBACK, t2);
+            }
         }
         // review #21 #1 (final-review completeness): this OOM-rollback detach is an
         // ordinary detach too -- a failure here strands a phantom thread and would
         // wedge a later teardown, so poison in the same critical section as the
         // g_active_ops-- (before the decrement/broadcast), matching the other sites.
         uv_mutex_lock(&g_mutex);
-        if (detach_rc != 0) poison_isolate_detach_failure_locked(detach_rc);
         g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
         napi_throw_error(env, NULL, "Failed to allocate engine record");
         return NULL;
     }
-    rec->handle = handle;
+    rec->native_handle = handle;
+    rec->native_alive = true;
+    rec->owner_alive = true;
     rec->owner = uv_thread_self();
     rec->env = env;
-    uv_mutex_lock(&g_mutex); rec->next = g_bridges; g_bridges = rec; uv_mutex_unlock(&g_mutex);
+    uv_mutex_lock(&g_mutex);
+    rec->handle = next_engine_handle_locked();
+    rec->isolate_generation = g_isolate_generation;
+    if (rec->handle > 0) {
+        rec->next = g_bridges;
+        g_bridges = rec;
+    }
+    uv_mutex_unlock(&g_mutex);
+    if (rec->handle <= 0) {
+        // No public handle or cleanup hook was published. Use the normal
+        // generation-aware finalizer so a transient attach failure retains the
+        // native registry record instead of freeing a resolver ctx still held
+        // by Java. may_rehook=false because no cleanup hook was registered.
+        if (bridge_finalize_registry_at_site(rec, DETACH_SITE_CREATE_ROLLBACK)) {
+            bridge_finalize_free(rec, /*env_still_alive=*/true);
+        } else {
+            bridge_retain_stranded(rec);
+        }
+        uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
+        napi_throw_error(env, NULL, "Engine handle space exhausted");
+        return NULL;
+    }
     // Round-11 (#1): register an env cleanup hook for EVERY engine, not just
     // resolver-backed ones. Without it, a Worker that creates a resolver-less
     // engine and exits without destroyEngine() would strand this record, the Java
@@ -2361,13 +3963,14 @@ static napi_value napi_create_engine(napi_env env, napi_callback_info info) {
         return NULL;
     }
 
-    napi_value out; napi_create_int64(env, (int64_t)handle, &out);
+    napi_value out; napi_create_int64(env, (int64_t)rec->handle, &out);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
     return out;
 }
 
 // createEngineWithResolver(resolver) -> number
 static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_info info) {
+    if (native_callback_active()) return throw_callback_reentrancy(env);
     if (!fn_create_engine_with_resolver) { napi_throw_error(env, NULL, "create_engine_with_resolver not available in native library"); return NULL; }
     size_t argc = 1; napi_value argv[1];
     napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
@@ -2378,18 +3981,36 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
     if (napi_create_reference(env, argv[0], 1, &bridge->resolver_js) != napi_ok) {
         free(bridge); napi_throw_error(env, NULL, "Failed to reference resolver callback"); return NULL;
     }
+    if (g_test_hooks) {
+        uv_mutex_lock(&g_mutex);
+        g_test_live_resolver_refs++;
+        uv_mutex_unlock(&g_mutex);
+    }
     bridge->env = env; bridge->owner = uv_thread_self(); bridge->results = NULL;
+    bridge->owner_alive = true;
+    if (!bridge_register_owner_cleanup(bridge)) {
+        bridge_finalize_free(bridge, /*env_still_alive=*/true);
+        napi_throw_error(env, NULL, "Failed to register resolver owner cleanup");
+        return NULL;
+    }
 
     // Round-14 (#1): same admission block as napi_create_engine. Taken AFTER the
     // bridge/resolver-ref allocation (those failures touch no isolate state and
     // must not decrement a reservation not yet held) and BEFORE fn_attach_thread.
     uv_mutex_lock(&g_mutex);
+    wait_for_detach_publication_locked();
     env_init_rec_t* self = env_init_rec_find_locked(env);
+    if (g_isolate_poisoned) {
+        uv_mutex_unlock(&g_mutex);
+        bridge_finalize_free(bridge, /*env_still_alive=*/true);
+        napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+        return NULL;
+    }
     if (!g_initialized || g_isolate == NULL ||
         g_teardown_state == TEARDOWN_TEARING_DOWN ||
         self == NULL || self->init_refs == 0) {
         uv_mutex_unlock(&g_mutex);
-        napi_delete_reference(env, bridge->resolver_js); free(bridge);
+        bridge_finalize_free(bridge, /*env_still_alive=*/true);
         napi_throw_error(env, NULL, "Not initialized. Call initialize() first.");
         return NULL;
     }
@@ -2399,16 +4020,15 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
     void* thread = NULL;
     if (fn_attach_thread(g_isolate, &thread) != 0) {
         uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
-        napi_delete_reference(env, bridge->resolver_js); free(bridge);
+        bridge_finalize_free(bridge, /*env_still_alive=*/true);
         napi_throw_error(env, NULL, "Failed to attach thread"); return NULL;
     }
     long long handle = fn_create_engine_with_resolver(thread, resolve_module_callback, (void*)bridge);
-    int detach_rc = fn_detach_thread(thread);
-    if (detach_rc != 0) poison_isolate_detach_failure(detach_rc);
+    detach_thread_checked(DETACH_SITE_RESOLVER_CREATE, thread);
 
-    // Same invalid-handle guard as napi_create_engine: a Java-side construction
-    // failure surfaces here as handle == 0 (GraalVM @CEntryPoint default-value
-    // semantics), and any handle <= 0 is never valid. Reject before this bridge
+    // Same invalid-handle guard as napi_create_engine: the Java @CEntryPoint
+    // exception handler explicitly returns handle == 0 as its ABI sentinel,
+    // and any handle <= 0 is never valid. Reject before this bridge
     // is linked into g_bridges or a cleanup hook is registered for it — at this
     // point neither has happened, so there's nothing to unlink/unhook. Still use
     // bridge_finalize (not a manual napi_delete_reference+free) because the failed
@@ -2426,8 +4046,26 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
         return NULL;
     }
 
-    bridge->handle = handle;
-    uv_mutex_lock(&g_mutex); bridge->next = g_bridges; g_bridges = bridge; uv_mutex_unlock(&g_mutex);
+    bridge->native_handle = handle;
+    bridge->native_alive = true;
+    uv_mutex_lock(&g_mutex);
+    bridge->handle = next_engine_handle_locked();
+    bridge->isolate_generation = g_isolate_generation;
+    if (bridge->handle > 0) {
+        bridge->next = g_bridges;
+        g_bridges = bridge;
+    }
+    uv_mutex_unlock(&g_mutex);
+    if (bridge->handle <= 0) {
+        if (bridge_finalize_registry_at_site(bridge, DETACH_SITE_CREATE_ROLLBACK)) {
+            bridge_finalize_free(bridge, /*env_still_alive=*/true);
+        } else {
+            bridge_retain_stranded(bridge);
+        }
+        uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
+        napi_throw_error(env, NULL, "Engine handle space exhausted");
+        return NULL;
+    }
     // Register a per-env cleanup hook so THIS Worker/main thread disposes this
     // bridge's napi_ref on its own thread when its env tears down (F2). napi_cleanup
     // no longer touches bridge refs. destroyEngine removes this hook before an
@@ -2467,13 +4105,14 @@ static napi_value napi_create_engine_with_resolver(napi_env env, napi_callback_i
         napi_throw_error(env, NULL, "Failed to register engine cleanup hook");
         return NULL;
     }
-    napi_value out; napi_create_int64(env, (int64_t)handle, &out);
+    napi_value out; napi_create_int64(env, (int64_t)bridge->handle, &out);
     uv_mutex_lock(&g_mutex); g_active_ops--; uv_cond_broadcast(&g_teardown_cond); uv_mutex_unlock(&g_mutex);
     return out;
 }
 
 // destroyEngine(handle) -> void
 static napi_value napi_destroy_engine(napi_env env, napi_callback_info info) {
+    if (native_callback_active()) return throw_callback_reentrancy(env);
     if (!g_initialized) return NULL;
     size_t argc = 1; napi_value argv[1];
     napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
@@ -2502,7 +4141,7 @@ static napi_value napi_destroy_engine(napi_env env, napi_callback_info info) {
     // ones. bridge_finalize's napi_ref deletion stays resolver-gated
     // (resolver_js != NULL && env != NULL) -- that part is unchanged.
     uv_mutex_lock(&g_mutex);
-    engine_bridge_t* owned = bridge_find(handle);
+    engine_bridge_t* owned = bridge_find_any(handle);
     if (owned != NULL) {
         uv_thread_t self = uv_thread_self();
         if (!uv_thread_equal(&self, &owned->owner)) {
@@ -2586,20 +4225,23 @@ static napi_value napi_destroy_engine(napi_env env, napi_callback_info info) {
         // window; only the g_mutex-guarded read here does.
         if (fn_destroy_engine && fn_attach_thread) {
             uv_mutex_lock(&g_mutex);
+            wait_for_detach_publication_locked();
             if (g_teardown_state == TEARDOWN_TEARING_DOWN || g_isolate == NULL) {
                 uv_mutex_unlock(&g_mutex);  // isolate gone/tearing down -> nothing to remove
             } else {
                 g_active_ops++;  // pins the live isolate against teardown for this attach
                 uv_mutex_unlock(&g_mutex);
                 void* thread = NULL;
-                int detach_rc = 0;
                 if (fn_attach_thread(g_isolate, &thread) == 0 && thread != NULL) {
-                    fn_destroy_engine(thread, handle);
-                    detach_rc = fn_detach_thread(thread);
+                    // Public handles are addon-local and cannot be passed to
+                    // the isolate registry when no current bridge maps them.
+                    // Preserve the native unknown-destroy call with the ABI's
+                    // guaranteed-invalid zero handle.
+                    fn_destroy_engine(thread, 0);
+                    detach_thread_checked(DETACH_SITE_UNKNOWN_DESTROY, thread);
                 }
                 // Verbatim g_active_ops release pattern.
                 uv_mutex_lock(&g_mutex);
-                if (detach_rc != 0) poison_isolate_detach_failure_locked(detach_rc);
                 g_active_ops--;
                 uv_cond_broadcast(&g_teardown_cond);
                 uv_mutex_unlock(&g_mutex);
@@ -2611,6 +4253,7 @@ static napi_value napi_destroy_engine(napi_env env, napi_callback_info info) {
 
 // runScriptEngine(handle, script, inputsJson) -> string
 static napi_value napi_run_script_engine(napi_env env, napi_callback_info info) {
+    if (native_callback_active()) return throw_callback_reentrancy(env);
     if (!g_initialized) { napi_throw_error(env, NULL, "Not initialized. Call initialize() first."); return NULL; }
     if (!fn_run_script_engine) { napi_throw_error(env, NULL, "run_script_engine not available in native library"); return NULL; }
     size_t argc = 3; napi_value argv[3];
@@ -2659,7 +4302,14 @@ static napi_value napi_run_script_engine(napi_env env, napi_callback_info info) 
     // merely-cancelled teardown must not reject here -- otherwise a valid
     // post-adoption op throws "Not initialized". A genuine (non-cancelled)
     // PENDING_WAIT or a committed TEARING_DOWN still rejects.
-    uv_mutex_lock(&g_mutex);
+  uv_mutex_lock(&g_mutex);
+  wait_for_detach_publication_locked();
+  if (g_isolate_poisoned) {
+      uv_mutex_unlock(&g_mutex);
+      free(script); free(inputs);
+      napi_throw_error(env, NULL, ISOLATE_POISONED_MESSAGE);
+      return NULL;
+    }
     if (!g_initialized || (g_teardown_state != TEARDOWN_NONE && !g_teardown_cancelled)) {
       uv_mutex_unlock(&g_mutex);
       free(script); free(inputs);
@@ -2685,7 +4335,8 @@ static napi_value napi_run_script_engine(napi_env env, napi_callback_info info) 
       return NULL;
     }
 
-    char* result = (char*)fn_run_script_engine(thread, handle, script, inputs);
+    long long native_handle = bridge != NULL ? bridge->native_handle : 0;
+    char* result = (char*)fn_run_script_engine(thread, native_handle, script, inputs);
 
     // The pin taken at admission kept this record alive across the run, so no
     // second lookup is needed. resolver_results_free_all is a no-op for a
@@ -2694,8 +4345,7 @@ static napi_value napi_run_script_engine(napi_env env, napi_callback_info info) 
 
     char* result_copy = result ? strdup(result) : NULL;
     if (result != NULL) fn_free_cstring(thread, result);
-    int detach_rc = fn_detach_thread(thread);
-    if (detach_rc != 0) poison_isolate_detach_failure(detach_rc);
+    detach_thread_checked(DETACH_SITE_SYNCHRONOUS_RUN, thread);
     free(script); free(inputs);
 
     // Round-11 (#3): release the per-engine pin (may finalize a destroy that a
@@ -2750,7 +4400,7 @@ static void call_js_teardown_done(napi_env env, napi_value js_callback, void* co
   free(waiter);
 }
 
-// `arg` is a cleanup_result_t* out-param: the caller must set it to
+// `arg` is a cleanup_thread_result_t* out-param: the caller must initialize its
 // CLEANUP_RETAIN before spawning this thread (so a spawn that never runs, or the
 // attach-failure early return, leaves the live isolate retained) and read it
 // after uv_thread_join returns. Mirrors teardown_waiter_thread_fn's outcome
@@ -2758,8 +4408,10 @@ static void call_js_teardown_done(napi_env env, napi_value js_callback, void* co
 // down" (clear g_thread/g_isolate/g_initialized/g_ref_count) from "attach or
 // teardown failed but the isolate is still reachable" (retain + arm retry) from
 // "teardown AND detach both failed" (unrecoverable -- leak the isolate).
+// Follow-up detaches remain direct: they classify that teardown double failure,
+// rather than poisoning an otherwise completed ordinary operation.
 static void cleanup_thread_fn(void* arg) {
-  cleanup_result_t* out_result = (cleanup_result_t*)arg;
+  cleanup_thread_result_t* result = (cleanup_thread_result_t*)arg;
   // graal_tear_down_isolate() must be passed the IsolateThread belonging to the
   // *calling* OS thread. g_thread was created by graal_create_isolate() on the
   // (now-exited, already-joined) init thread, so it is invalid here — passing it
@@ -2768,7 +4420,7 @@ static void cleanup_thread_fn(void* arg) {
   // to obtain a valid local IsolateThread, then tear down with that.
   if (!fn_tear_down_isolate || !fn_attach_thread || !g_isolate) {
     // Nothing to tear down (no isolate / FFI unavailable) -- safe to clear.
-    *out_result = CLEANUP_TORN_DOWN;
+    result->outcome = CLEANUP_TORN_DOWN;
     return;
   }
   if (g_isolate_poisoned) {
@@ -2777,7 +4429,7 @@ static void cleanup_thread_fn(void* arg) {
     // NOT attempt teardown -- signal leak-and-continue (the caller runs
     // abandon_unrecoverable_isolate_locked()). Reading g_isolate_poisoned unlocked
     // is safe: the caller spawns+joins this thread while holding g_mutex.
-    *out_result = CLEANUP_UNRECOVERABLE;
+    result->outcome = CLEANUP_UNRECOVERABLE;
     return;
   }
   void* local_thread = NULL;
@@ -2787,22 +4439,26 @@ static void cleanup_thread_fn(void* arg) {
     // (or it becomes unreachable and can never be torn down) and arms the retry.
     return;
   }
+  // The attached worker is about to invoke teardown. The caller increments the
+  // counter after join, avoiding a second g_mutex lock while synchronous callers
+  // deliberately hold it across this worker.
+  result->teardown_callable = true;
   // Check the teardown return code (0 == success). On nonzero the isolate is
   // still live and this thread is still attached to it -- detach before exiting
   // or the live isolate keeps a phantom attached thread that can block/fail a
   // later retry teardown (review #7 #1). On success the isolate is gone: do NOT
   // detach (would be a UAF).
   if (fn_tear_down_isolate(local_thread) == 0) {
-    *out_result = CLEANUP_TORN_DOWN;
+    result->outcome = CLEANUP_TORN_DOWN;
   } else if (fn_detach_thread(local_thread) == 0) {
     // Teardown failed but the worker detached cleanly: the isolate is live and
     // reachable -- retain it and (per the caller's own logic) arm the retry
     // (review #6 #3).
-    *out_result = CLEANUP_RETAIN;
+    result->outcome = CLEANUP_RETAIN;
   } else {
     // Teardown AND detach both failed (review #17 #1): the worker is stuck
     // attached, so this isolate can never be torn down. Signal leak-and-continue.
-    *out_result = CLEANUP_UNRECOVERABLE;
+    result->outcome = CLEANUP_UNRECOVERABLE;
   }
 }
 
@@ -2811,11 +4467,16 @@ static void cleanup_thread_fn(void* arg) {
 // op has drained, performs isolate teardown exactly like cleanup_thread_fn
 // does on the unchanged fast path, then resolves every caller who is waiting
 // on this same teardown (there may be more than one -- see g_teardown_waiters).
+// Its teardown-failure follow-up detach is direct for the same double-failure
+// classification documented on cleanup_thread_fn.
 static void teardown_waiter_thread_fn(void* arg) {
   (void)arg;
 
   uv_mutex_lock(&g_mutex);
-  while (g_active_ops > 0 && !g_teardown_cancelled) {
+  while ((g_active_ops > 0 ||
+          (g_detach_in_progress > 0 &&
+           g_detach_in_progress_generation == g_isolate_generation)) &&
+         !g_teardown_cancelled) {
     uv_cond_wait(&g_teardown_cond, &g_mutex);
   }
   bool cancelled = g_teardown_cancelled;
@@ -2841,6 +4502,11 @@ static void teardown_waiter_thread_fn(void* arg) {
   } else if (!cancelled && fn_tear_down_isolate && fn_attach_thread && g_isolate) {
     void* local_thread = NULL;
     if (fn_attach_thread(g_isolate, &local_thread) == 0 && local_thread != NULL) {
+      if (g_test_hooks) {
+        uv_mutex_lock(&g_mutex);
+        g_test_teardown_calls++;
+        uv_mutex_unlock(&g_mutex);
+      }
       if (fn_tear_down_isolate(local_thread) == 0) {
         result = CLEANUP_TORN_DOWN;
       } else if (fn_detach_thread(local_thread) == 0) {
@@ -2863,6 +4529,9 @@ static void teardown_waiter_thread_fn(void* arg) {
 
   uv_mutex_lock(&g_mutex);
   if (!cancelled && result == CLEANUP_TORN_DOWN) {
+    if (g_test_engine_record_allocation_failure_generation == g_isolate_generation) {
+      g_test_engine_record_allocation_failure_generation = 0;
+    }
     g_thread = NULL;
     g_isolate = NULL;
     g_initialized = 0;
@@ -2997,28 +4666,34 @@ static napi_value already_resolved_promise(napi_env env) {
 // failure it leaves g_teardown_needed set to retry on the next drain. Spawns+joins
 // cleanup_thread_fn while holding g_mutex, exactly as the Case-4 /
 // isolate_ref_release_n_locked g_active_ops==0 branch does; cleanup_thread_fn
-// takes no lock and makes no napi call, so this is deadlock-free and thread-safe
-// from any drain site.
+// makes no N-API calls and writes only its caller-owned result struct, so this
+// is deadlock-free and thread-safe from any drain site.
 static void retry_stranded_teardown_locked(void) {
   if (!g_teardown_needed) return;
   if (g_ref_count > 0) { g_teardown_needed = false; return; }  // adopted -> keep
   if (g_teardown_state != TEARDOWN_NONE) return;               // a teardown drives
   if (g_active_ops > 0) return;                                // wait for drain
+  if (g_detach_in_progress > 0 &&
+      g_detach_in_progress_generation == g_isolate_generation) return;
   if (g_isolate == NULL) { g_teardown_needed = false; return; } // nothing to do
   uv_thread_t tid;
   uv_thread_options_t opts;
   opts.flags = UV_THREAD_HAS_STACK_SIZE;
   opts.stack_size = 2 * 1024 * 1024;
-  cleanup_result_t result = CLEANUP_RETAIN;
+  cleanup_thread_result_t result = {CLEANUP_RETAIN, false};
   int spawn_rc = uv_thread_create_ex(&tid, &opts, cleanup_thread_fn, &result);
   if (spawn_rc == 0) uv_thread_join(&tid);
-  if (result == CLEANUP_TORN_DOWN) {
+  if (g_test_hooks && result.teardown_callable) g_test_teardown_calls++;
+  if (result.outcome == CLEANUP_TORN_DOWN) {
+    if (g_test_engine_record_allocation_failure_generation == g_isolate_generation) {
+      g_test_engine_record_allocation_failure_generation = 0;
+    }
     g_thread = NULL;
     g_isolate = NULL;
     g_initialized = 0;
     g_ref_count = 0;
     g_teardown_needed = false;
-  } else if (result == CLEANUP_UNRECOVERABLE) {
+  } else if (result.outcome == CLEANUP_UNRECOVERABLE) {
     // teardown+detach double failure (review #17 #1): abandon + leak; the helper
     // also clears g_teardown_needed so this stranded-teardown retry stops.
     abandon_unrecoverable_isolate_locked();
@@ -3033,22 +4708,28 @@ static void isolate_ref_release_n_locked(int n) {
   if (g_ref_count > 0) return;              // other envs still hold references
   if (g_teardown_state != TEARDOWN_NONE) return;  // a teardown already drives
 
-  if (g_active_ops == 0) {
+  if (g_active_ops == 0 &&
+      !(g_detach_in_progress > 0 &&
+        g_detach_in_progress_generation == g_isolate_generation)) {
     uv_thread_t tid;
     uv_thread_options_t opts;
     opts.flags = UV_THREAD_HAS_STACK_SIZE;
     opts.stack_size = 2 * 1024 * 1024;
-    cleanup_result_t result = CLEANUP_RETAIN;
+    cleanup_thread_result_t result = {CLEANUP_RETAIN, false};
     int spawn_rc = uv_thread_create_ex(&tid, &opts, cleanup_thread_fn, &result);
     if (spawn_rc == 0) {
       uv_thread_join(&tid);
     }
-    if (result == CLEANUP_TORN_DOWN) {
+    if (g_test_hooks && result.teardown_callable) g_test_teardown_calls++;
+    if (result.outcome == CLEANUP_TORN_DOWN) {
+      if (g_test_engine_record_allocation_failure_generation == g_isolate_generation) {
+        g_test_engine_record_allocation_failure_generation = 0;
+      }
       g_thread = NULL;
       g_isolate = NULL;
       g_initialized = 0;
       g_ref_count = 0;
-    } else if (result == CLEANUP_UNRECOVERABLE) {
+    } else if (result.outcome == CLEANUP_UNRECOVERABLE) {
       // teardown+detach double failure (review #17 #1): abandon + leak the
       // isolate; do NOT arm the retry. Mirrors Python native.py leak-and-continue.
       abandon_unrecoverable_isolate_locked();
@@ -3213,7 +4894,9 @@ static napi_value release_isolate_ref_locked(napi_env env) {
 
   // Case 4: last release, no teardown pending, and nothing active -- the
   // original, unchanged synchronous fast path.
-  if (g_active_ops == 0) {
+  if (g_active_ops == 0 &&
+      !(g_detach_in_progress > 0 &&
+        g_detach_in_progress_generation == g_isolate_generation)) {
     uv_thread_t tid;
     uv_thread_options_t opts;
     opts.flags = UV_THREAD_HAS_STACK_SIZE;
@@ -3224,7 +4907,7 @@ static napi_value release_isolate_ref_locked(napi_env env) {
     // never touches it), leaves the live isolate retained + the retry armed.
     // uv_thread_join is synchronous, so when spawn_rc == 0 this stack variable safely
     // outlives the thread's write to it.
-    cleanup_result_t result = CLEANUP_RETAIN;
+    cleanup_thread_result_t result = {CLEANUP_RETAIN, false};
     int spawn_rc = uv_thread_create_ex(&tid, &opts, cleanup_thread_fn, &result);
     if (spawn_rc == 0) {
       uv_thread_join(&tid);
@@ -3240,12 +4923,16 @@ static napi_value release_isolate_ref_locked(napi_env env) {
     // initialize() correctly ref-counts the surviving isolate instead of
     // building a second one (identical semantics to teardown_waiter_thread_fn's
     // attach-failure path).
-    if (result == CLEANUP_TORN_DOWN) {
+    if (g_test_hooks && result.teardown_callable) g_test_teardown_calls++;
+    if (result.outcome == CLEANUP_TORN_DOWN) {
+      if (g_test_engine_record_allocation_failure_generation == g_isolate_generation) {
+        g_test_engine_record_allocation_failure_generation = 0;
+      }
       g_thread = NULL;
       g_isolate = NULL;
       g_initialized = 0;
       g_ref_count = 0;
-    } else if (result == CLEANUP_UNRECOVERABLE) {
+    } else if (result.outcome == CLEANUP_UNRECOVERABLE) {
       // teardown+detach double failure (review #17 #1): abandon + leak the
       // isolate; the promise below still RESOLVES (deliberate, per the note that
       // follows). The helper emits its own stderr diagnostic. Mirrors Python
@@ -3363,6 +5050,7 @@ static napi_value release_isolate_ref_locked(napi_env env) {
 }
 
 static napi_value napi_cleanup(napi_env env, napi_callback_info info) {
+  if (native_callback_active()) return throw_callback_reentrancy(env);
   (void)info;
   uv_mutex_lock(&g_mutex);
   return release_isolate_ref_locked(env);  // unlocks g_mutex, returns the promise
@@ -3372,7 +5060,9 @@ static napi_value napi_cleanup(napi_env env, napi_callback_info info) {
 
 static void init_g_mutex(void) {
   uv_mutex_init(&g_mutex);
+  uv_mutex_init(&g_test_output_mutex);
   uv_cond_init(&g_teardown_cond);
+  g_native_callback_depth_status = uv_key_create(&g_native_callback_depth);
 }
 
 // --- Test-only N-API entrypoints (review #12 #3 / #13) ---
@@ -3408,34 +5098,571 @@ static napi_value napi_test_resolver_ref_delete_count(napi_env env, napi_callbac
     return out;
 }
 
+static detach_site_t detach_site_from_name(const char* name, size_t length) {
+  #define DETACH_SITE_MATCH(value, site) \
+    if (length == sizeof(value) - 1 && memcmp(name, value, sizeof(value) - 1) == 0) return site
+  DETACH_SITE_MATCH("bridge-finalize", DETACH_SITE_BRIDGE_FINALIZE);
+  DETACH_SITE_MATCH("stream-worker", DETACH_SITE_STREAM_WORKER);
+  DETACH_SITE_MATCH("transform-worker", DETACH_SITE_TRANSFORM_WORKER);
+  DETACH_SITE_MATCH("create-engine", DETACH_SITE_CREATE_ENGINE);
+  DETACH_SITE_MATCH("create-rollback", DETACH_SITE_CREATE_ROLLBACK);
+  DETACH_SITE_MATCH("resolver-create", DETACH_SITE_RESOLVER_CREATE);
+  DETACH_SITE_MATCH("unknown-destroy", DETACH_SITE_UNKNOWN_DESTROY);
+  DETACH_SITE_MATCH("synchronous-run", DETACH_SITE_SYNCHRONOUS_RUN);
+  #undef DETACH_SITE_MATCH
+  return DETACH_SITE_NONE;
+}
+
+static napi_value napi_test_force_detach_failure_once(
+    napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_valuetype type;
+  char site_name[64];
+  size_t length = 0;
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 1 ||
+      napi_typeof(env, argv[0], &type) != napi_ok || type != napi_string ||
+      napi_get_value_string_utf8(env, argv[0], NULL, 0, &length) != napi_ok ||
+      length >= sizeof(site_name)) {
+    napi_throw_type_error(env, NULL, "A detach site string is required");
+    return NULL;
+  }
+  size_t copied = 0;
+  if (
+      napi_get_value_string_utf8(
+        env, argv[0], site_name, sizeof(site_name), &copied) != napi_ok ||
+      copied != length || memchr(site_name, '\0', length) != NULL) {
+    napi_throw_type_error(env, NULL, "A detach site string is required");
+    return NULL;
+  }
+  detach_site_t site = detach_site_from_name(site_name, length);
+  if (site == DETACH_SITE_NONE) {
+    napi_throw_range_error(env, NULL, "Unknown detach site");
+    return NULL;
+  }
+  uv_mutex_lock(&g_mutex);
+  if (g_test_detach_failure_site != DETACH_SITE_NONE) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "A detach failure is already armed");
+    return NULL;
+  }
+  g_test_detach_failure_site = site;
+  uv_mutex_unlock(&g_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_isolate_poisoned(napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  bool poisoned = g_isolate_poisoned;
+  uv_mutex_unlock(&g_mutex);
+  napi_value out;
+  napi_get_boolean(env, poisoned, &out);
+  return out;
+}
+
+static napi_value test_uint64_counter(napi_env env, uint64_t value) {
+  napi_value out;
+  if (napi_create_bigint_uint64(env, value, &out) != napi_ok) {
+    napi_throw_error(env, NULL, "Failed to create test counter");
+    return NULL;
+  }
+  return out;
+}
+
+static napi_value napi_test_isolate_creation_count(napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t value = g_test_isolate_creations;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, value);
+}
+
+static napi_value napi_test_teardown_call_count(napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t value = g_test_teardown_calls;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, value);
+}
+
+static napi_value napi_test_abandoned_isolate_count(napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t value = g_test_abandoned_isolates;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, value);
+}
+
+static napi_value napi_test_forced_detach_failure_count(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t value = g_test_forced_detach_failures;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, value);
+}
+
+static napi_value napi_test_hold_next_async_op(napi_env env, napi_callback_info info) {
+    (void)info;
+    uv_mutex_lock(&g_mutex);
+    if (g_test_hold_next_async_op || g_test_async_op_held) {
+        uv_mutex_unlock(&g_mutex);
+        napi_throw_error(env, NULL, "A test async operation gate is already armed");
+        return NULL;
+    }
+    g_test_hold_next_async_op = true;
+    g_test_release_async_op = false;
+    uv_mutex_unlock(&g_mutex);
+    return NULL;
+}
+
+static napi_value napi_test_async_op_held(napi_env env, napi_callback_info info) {
+    (void)info;
+    uv_mutex_lock(&g_mutex);
+    bool held = g_test_async_op_held;
+    uv_mutex_unlock(&g_mutex);
+    napi_value out;
+    napi_get_boolean(env, held, &out);
+    return out;
+}
+
+static napi_value napi_test_release_async_op(napi_env env, napi_callback_info info) {
+  (void)env;
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  g_test_release_async_op = true;
+  uv_cond_broadcast(&g_teardown_cond);
+  uv_mutex_unlock(&g_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_hold_detach_publication(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  if (g_test_hold_next_detach_publication || g_test_detach_publication_held) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "A detach publication gate is already armed");
+    return NULL;
+  }
+  g_test_hold_next_detach_publication = true;
+  g_test_release_detach_publication = false;
+  uv_mutex_unlock(&g_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_detach_publication_held(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  bool held = g_test_detach_publication_held;
+  uv_mutex_unlock(&g_mutex);
+  napi_value out;
+  napi_get_boolean(env, held, &out);
+  return out;
+}
+
+static napi_value napi_test_detach_publication_waiters(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t waiters = g_detach_publication_waiters;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, waiters);
+}
+
+static napi_value napi_test_release_detach_publication(
+    napi_env env, napi_callback_info info) {
+  (void)env;
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  g_test_release_detach_publication = true;
+  uv_cond_broadcast(&g_teardown_cond);
+  uv_mutex_unlock(&g_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_live_stranded_resolver_ref_count(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t count = g_test_live_resolver_refs;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, count);
+}
+
+static napi_value napi_test_bridge_free_count(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t count = g_test_bridge_frees;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, count);
+}
+
+static napi_value napi_test_post_reclamation_action_count(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t count = g_test_post_reclamation_actions;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, count);
+}
+
+static napi_value napi_test_fail_next_engine_record_allocation(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  if (!g_initialized || g_isolate == NULL || g_isolate_poisoned ||
+      g_teardown_state != TEARDOWN_NONE || g_teardown_needed ||
+      g_active_ops != 0 || g_isolate_generation == 0) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "A healthy initialized isolate generation is required");
+    return NULL;
+  }
+  if (g_test_engine_record_allocation_failure_generation != 0) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "An engine record allocation failure is already armed");
+    return NULL;
+  }
+  g_test_engine_record_allocation_failure_generation = g_isolate_generation;
+  uv_mutex_unlock(&g_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_set_next_engine_handle(
+    napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_valuetype type;
+  double next_handle;
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 1 ||
+      napi_typeof(env, argv[0], &type) != napi_ok || type != napi_number ||
+      napi_get_value_double(env, argv[0], &next_handle) != napi_ok ||
+      next_handle <= 0 || next_handle > (double)MAX_SAFE_ENGINE_HANDLE ||
+      next_handle != (double)(long long)next_handle) {
+    napi_throw_range_error(env, NULL, "Next engine handle must be a positive safe integer");
+    return NULL;
+  }
+  uv_mutex_lock(&g_mutex);
+  if (g_bridges != NULL || g_stranded_bridges != NULL || g_active_ops != 0 ||
+      g_next_engine_handle == 0 || next_handle < g_next_engine_handle) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "Next engine handle cannot be changed in the current state");
+    return NULL;
+  }
+  g_next_engine_handle = (long long)next_handle;
+  uv_mutex_unlock(&g_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_set_isolate_generation(
+    napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  uint64_t generation;
+  bool lossless = false;
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 1 ||
+      napi_get_value_bigint_uint64(env, argv[0], &generation, &lossless) != napi_ok ||
+      !lossless) {
+    napi_throw_range_error(env, NULL, "Isolate generation must be a non-decreasing uint64 BigInt");
+    return NULL;
+  }
+  uv_mutex_lock(&g_mutex);
+  if (generation < g_isolate_generation ||
+      !g_initialized || g_isolate == NULL || g_isolate_poisoned ||
+      g_teardown_state != TEARDOWN_NONE || g_active_ops != 0 ||
+      g_bridges != NULL || g_stranded_bridges != NULL ||
+      g_test_engine_record_allocation_failure_generation != 0) {
+    uv_mutex_unlock(&g_mutex);
+    napi_throw_error(env, NULL, "Isolate generation cannot be changed in the current state");
+    return NULL;
+  }
+  g_isolate_generation = generation;
+  uv_mutex_unlock(&g_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_isolate_generation(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_mutex);
+  uint64_t generation = g_isolate_generation;
+  uv_mutex_unlock(&g_mutex);
+  return test_uint64_counter(env, generation);
+}
+
+typedef struct foreign_wrapped_value {
+  uint64_t marker;
+} foreign_wrapped_value_t;
+
+static void foreign_wrapped_finalize(napi_env env, void* data, void* hint) {
+  (void)env;
+  (void)hint;
+  free(data);
+}
+
+static napi_value napi_test_create_foreign_wrapped_object(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  foreign_wrapped_value_t* value = calloc(1, sizeof(foreign_wrapped_value_t));
+  if (value == NULL) {
+    napi_throw_error(env, NULL, "OOM");
+    return NULL;
+  }
+  value->marker = 424242;
+  napi_value object;
+  if (napi_create_object(env, &object) != napi_ok ||
+      napi_wrap(env, object, value, foreign_wrapped_finalize, NULL, NULL) != napi_ok) {
+    free(value);
+    napi_throw_error(env, NULL, "Failed to create foreign wrapped object");
+    return NULL;
+  }
+  return object;
+}
+
+static napi_value napi_test_fail_next_output_settlement(
+    napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  size_t length;
+  char stage[64];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 1 ||
+      napi_get_value_string_utf8(env, argv[0], stage, sizeof(stage), &length) != napi_ok) {
+    napi_throw_type_error(env, NULL, "A settlement fault stage is required");
+    return NULL;
+  }
+  output_settlement_fault_t fault = OUTPUT_SETTLEMENT_FAULT_NONE;
+  if (strcmp(stage, "initial-create-generic") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_INITIAL_CREATE_GENERIC;
+  } else if (strcmp(stage, "initial-pending-exception") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_INITIAL_PENDING_EXCEPTION;
+  } else if (strcmp(stage, "initial-call-generic-after-call") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_GENERIC_AFTER_CALL;
+  } else if (strcmp(stage, "initial-call-pending-after-call") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_INITIAL_CALL_PENDING_AFTER_CALL;
+  } else if (strcmp(stage, "fallback-call-generic") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC;
+  } else if (strcmp(stage, "fallback-pending-exception") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_FALLBACK_PENDING_EXCEPTION;
+  } else if (strcmp(stage, "fallback-call-generic-after-call") == 0) {
+    fault = OUTPUT_SETTLEMENT_FAULT_FALLBACK_CALL_GENERIC_AFTER_CALL;
+  } else {
+    napi_throw_range_error(env, NULL, "Unknown settlement fault stage");
+    return NULL;
+  }
+  uv_mutex_lock(&g_test_output_mutex);
+  if (g_test_next_output_settlement_fault != OUTPUT_SETTLEMENT_FAULT_NONE) {
+    uv_mutex_unlock(&g_test_output_mutex);
+    napi_throw_error(env, NULL, "An output settlement fault is already armed");
+    return NULL;
+  }
+  g_test_next_output_settlement_fault = fault;
+  uv_mutex_unlock(&g_test_output_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_fail_next_output_exception_clear(
+    napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  size_t length;
+  char stage[64];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 1 ||
+      napi_get_value_string_utf8(env, argv[0], stage, sizeof(stage), &length) != napi_ok) {
+    napi_throw_type_error(env, NULL, "An exception clear fault stage is required");
+    return NULL;
+  }
+  output_exception_clear_fault_t fault = OUTPUT_EXCEPTION_CLEAR_FAULT_NONE;
+  if (strcmp(stage, "is-exception-pending") == 0) {
+    fault = OUTPUT_EXCEPTION_CLEAR_FAULT_IS_PENDING;
+  } else if (strcmp(stage, "get-and-clear-last-exception") == 0) {
+    fault = OUTPUT_EXCEPTION_CLEAR_FAULT_GET_AND_CLEAR;
+  } else {
+    napi_throw_range_error(env, NULL, "Unknown exception clear fault stage");
+    return NULL;
+  }
+  uv_mutex_lock(&g_test_output_mutex);
+  if (g_test_next_output_exception_clear_fault !=
+      OUTPUT_EXCEPTION_CLEAR_FAULT_NONE) {
+    uv_mutex_unlock(&g_test_output_mutex);
+    napi_throw_error(env, NULL, "An output exception clear fault is already armed");
+    return NULL;
+  }
+  g_test_next_output_exception_clear_fault = fault;
+  uv_mutex_unlock(&g_test_output_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_hold_next_output_delivery(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_test_output_mutex);
+  if (g_test_hold_next_output_delivery || g_test_output_delivery_held) {
+    uv_mutex_unlock(&g_test_output_mutex);
+    napi_throw_error(env, NULL, "An output delivery gate is already armed");
+    return NULL;
+  }
+  g_test_hold_next_output_delivery = true;
+  g_test_release_output_delivery = false;
+  uv_mutex_unlock(&g_test_output_mutex);
+  return NULL;
+}
+
+static napi_value napi_test_held_output_delivery(
+    napi_env env, napi_callback_info info) {
+  (void)info;
+  uv_mutex_lock(&g_test_output_mutex);
+  bool held = g_test_output_delivery_held;
+  uint64_t sequence = g_test_held_output_sequence;
+  size_t bytes = g_test_held_output_bytes;
+  uv_mutex_unlock(&g_test_output_mutex);
+
+  napi_value out;
+  napi_value value;
+  if (napi_create_object(env, &out) != napi_ok ||
+      napi_get_boolean(env, held, &value) != napi_ok ||
+      napi_set_named_property(env, out, "held", value) != napi_ok ||
+      napi_create_bigint_uint64(env, sequence, &value) != napi_ok ||
+      napi_set_named_property(env, out, "sequence", value) != napi_ok ||
+      napi_create_double(env, (double)bytes, &value) != napi_ok ||
+      napi_set_named_property(env, out, "bytes", value) != napi_ok) {
+    napi_throw_error(env, NULL, "Failed to create held output delivery state");
+    return NULL;
+  }
+  return out;
+}
+
+static napi_value napi_test_release_output_delivery(
+    napi_env env, napi_callback_info info) {
+  (void)env;
+  (void)info;
+  uv_mutex_lock(&g_test_output_mutex);
+  g_test_release_output_delivery = true;
+  if (!g_test_output_delivery_held) {
+    g_test_hold_next_output_delivery = false;
+    g_test_held_output_sequence = 0;
+    g_test_held_output_bytes = 0;
+  }
+  uv_mutex_unlock(&g_test_output_mutex);
+  return NULL;
+}
+
+static void set_named_size(napi_env env, napi_value object, const char* name, size_t value) {
+  napi_value out;
+  napi_create_double(env, (double)value, &out);
+  napi_set_named_property(env, object, name, out);
+}
+
+static void set_named_bool(napi_env env, napi_value object, const char* name, bool value) {
+  napi_value out;
+  napi_get_boolean(env, value, &out);
+  napi_set_named_property(env, object, name, out);
+}
+
+static napi_value output_stats_value(napi_env env, const output_flow_stats_t* stats) {
+  napi_value out;
+  napi_value value;
+  napi_create_object(env, &out);
+  napi_create_double(env, (double)stats->operation_id, &value);
+  napi_set_named_property(env, out, "operationId", value);
+  set_named_size(env, out, "outstandingBytes", stats->outstanding_bytes);
+  set_named_size(env, out, "outstandingChunks", stats->outstanding_chunks);
+  set_named_size(env, out, "peakBufferedBytes", stats->peak_buffered_bytes);
+  set_named_size(env, out, "peakBufferedChunks", stats->peak_buffered_chunks);
+  set_named_size(env, out, "largestChunkBytes", stats->largest_chunk_bytes);
+  set_named_size(env, out, "highBytes", OUTPUT_HIGH_BYTES);
+  set_named_size(env, out, "lowBytes", OUTPUT_LOW_BYTES);
+  set_named_size(env, out, "highChunks", OUTPUT_HIGH_CHUNKS);
+  set_named_size(env, out, "lowChunks", OUTPUT_LOW_CHUNKS);
+  set_named_bool(env, out, "paused", stats->paused);
+  set_named_bool(env, out, "cancelled", stats->cancelled);
+  set_named_bool(env, out, "done", stats->done);
+  napi_create_int64(env, stats->live_flows, &value);
+  napi_set_named_property(env, out, "liveFlows", value);
+  return out;
+}
+
+static napi_value napi_test_output_stats(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+  uint64_t requested = 0;
+  if (argc == 1) {
+    int64_t id;
+    if (napi_get_value_int64(env, argv[0], &id) != napi_ok || id < 0) {
+      napi_throw_type_error(env, NULL, "operationId must be a non-negative integer");
+      return NULL;
+    }
+    requested = (uint64_t)id;
+  }
+  output_flow_stats_t stats;
+  uv_mutex_lock(&g_test_output_mutex);
+  stats = g_test_last_output_stats;
+  stats.live_flows = g_test_live_output_flows;
+  uv_mutex_unlock(&g_test_output_mutex);
+  if (requested != 0 && requested != stats.operation_id) {
+    napi_throw_error(env, NULL, "Output operation statistics are no longer current");
+    return NULL;
+  }
+  return output_stats_value(env, &stats);
+}
+
+static napi_value napi_test_output_operation_id(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc < 1) {
+    napi_throw_type_error(env, NULL, "An output controller is required");
+    return NULL;
+  }
+  bool tagged = false;
+  if (napi_check_object_type_tag(env, argv[0], &OUTPUT_CONTROLLER_TAG, &tagged) != napi_ok ||
+      !tagged) {
+    napi_throw_type_error(env, NULL, "Invalid output controller");
+    return NULL;
+  }
+  output_controller_t* holder = NULL;
+  if (napi_unwrap(env, argv[0], (void**)&holder) != napi_ok || holder == NULL) {
+    napi_throw_type_error(env, NULL, "Invalid output controller");
+    return NULL;
+  }
+  napi_value out;
+  napi_create_double(env, (double)holder->operation_id, &out);
+  return out;
+}
+
+static bool export_function(napi_env env, napi_value exports, const char* name,
+                            napi_callback callback) {
+  napi_value fn;
+  return napi_create_function(
+           env, name, NAPI_AUTO_LENGTH, callback, NULL, &fn) == napi_ok &&
+         napi_set_named_property(env, exports, name, fn) == napi_ok;
+}
+
 static napi_value Init(napi_env env, napi_value exports) {
   uv_once(&g_mutex_once, init_g_mutex);
 
-  napi_value fn;
+  if (g_native_callback_depth_status != 0) {
+    char message[128];
+    snprintf(message, sizeof(message),
+             "Failed to initialize native callback state (libuv error %d)",
+             g_native_callback_depth_status);
+    napi_throw_error(env, NULL, message);
+    return NULL;
+  }
 
-  napi_create_function(env, "initialize", NAPI_AUTO_LENGTH, napi_initialize, NULL, &fn);
-  napi_set_named_property(env, exports, "initialize", fn);
-
-  napi_create_function(env, "createEngine", NAPI_AUTO_LENGTH, napi_create_engine, NULL, &fn);
-  napi_set_named_property(env, exports, "createEngine", fn);
-
-  napi_create_function(env, "createEngineWithResolver", NAPI_AUTO_LENGTH, napi_create_engine_with_resolver, NULL, &fn);
-  napi_set_named_property(env, exports, "createEngineWithResolver", fn);
-
-  napi_create_function(env, "destroyEngine", NAPI_AUTO_LENGTH, napi_destroy_engine, NULL, &fn);
-  napi_set_named_property(env, exports, "destroyEngine", fn);
-
-  napi_create_function(env, "runScriptEngine", NAPI_AUTO_LENGTH, napi_run_script_engine, NULL, &fn);
-  napi_set_named_property(env, exports, "runScriptEngine", fn);
-
-  napi_create_function(env, "runScriptStreamingEngine", NAPI_AUTO_LENGTH, napi_run_script_streaming_engine, NULL, &fn);
-  napi_set_named_property(env, exports, "runScriptStreamingEngine", fn);
-
-  napi_create_function(env, "runScriptTransformEngine", NAPI_AUTO_LENGTH, napi_run_script_transform_engine, NULL, &fn);
-  napi_set_named_property(env, exports, "runScriptTransformEngine", fn);
-
-  napi_create_function(env, "cleanup", NAPI_AUTO_LENGTH, napi_cleanup, NULL, &fn);
-  napi_set_named_property(env, exports, "cleanup", fn);
+  if (!export_function(env, exports, "initialize", napi_initialize) ||
+      !export_function(env, exports, "createEngine", napi_create_engine) ||
+      !export_function(env, exports, "createEngineWithResolver", napi_create_engine_with_resolver) ||
+      !export_function(env, exports, "destroyEngine", napi_destroy_engine) ||
+      !export_function(env, exports, "runScriptEngine", napi_run_script_engine) ||
+      !export_function(env, exports, "runScriptStreamingEngine", napi_run_script_streaming_engine) ||
+      !export_function(env, exports, "runScriptTransformEngine", napi_run_script_transform_engine) ||
+      !export_function(env, exports, "cleanup", napi_cleanup)) {
+    napi_throw_error(env, NULL, "Failed to register DataWeave native exports");
+    return NULL;
+  }
 
   // Test-only entrypoints, registered only when the process opts in via
   // DATAWEAVE_TEST_HOOKS (non-empty). getenv() is safe here: Init runs once per
@@ -3444,12 +5671,40 @@ static napi_value Init(napi_env env, napi_value exports) {
   const char* test_hooks = getenv("DATAWEAVE_TEST_HOOKS");
   if (test_hooks != NULL && test_hooks[0] != '\0') {
     g_test_hooks = true;
-    napi_create_function(env, "__test_forceStrandOnce", NAPI_AUTO_LENGTH, napi_test_force_strand_once, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_forceStrandOnce", fn);
-    napi_create_function(env, "__test_strandedCount", NAPI_AUTO_LENGTH, napi_test_stranded_count, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_strandedCount", fn);
-    napi_create_function(env, "__test_resolverRefDeleteCount", NAPI_AUTO_LENGTH, napi_test_resolver_ref_delete_count, NULL, &fn);
-    napi_set_named_property(env, exports, "__test_resolverRefDeleteCount", fn);
+    if (!export_function(env, exports, "__test_forceStrandOnce", napi_test_force_strand_once) ||
+        !export_function(env, exports, "__test_strandedCount", napi_test_stranded_count) ||
+        !export_function(env, exports, "__test_resolverRefDeleteCount", napi_test_resolver_ref_delete_count) ||
+        !export_function(env, exports, "__test_forceDetachFailureOnce", napi_test_force_detach_failure_once) ||
+        !export_function(env, exports, "__test_isolatePoisoned", napi_test_isolate_poisoned) ||
+        !export_function(env, exports, "__test_isolateCreationCount", napi_test_isolate_creation_count) ||
+        !export_function(env, exports, "__test_teardownCallCount", napi_test_teardown_call_count) ||
+        !export_function(env, exports, "__test_abandonedIsolateCount", napi_test_abandoned_isolate_count) ||
+        !export_function(env, exports, "__test_forcedDetachFailureCount", napi_test_forced_detach_failure_count) ||
+        !export_function(env, exports, "__test_failNextEngineRecordAllocation", napi_test_fail_next_engine_record_allocation) ||
+        !export_function(env, exports, "__test_setNextEngineHandle", napi_test_set_next_engine_handle) ||
+        !export_function(env, exports, "__test_setIsolateGeneration", napi_test_set_isolate_generation) ||
+        !export_function(env, exports, "__test_isolateGeneration", napi_test_isolate_generation) ||
+        !export_function(env, exports, "__test_holdNextAsyncOp", napi_test_hold_next_async_op) ||
+        !export_function(env, exports, "__test_asyncOpHeld", napi_test_async_op_held) ||
+        !export_function(env, exports, "__test_releaseAsyncOp", napi_test_release_async_op) ||
+        !export_function(env, exports, "__test_holdDetachPublication", napi_test_hold_detach_publication) ||
+        !export_function(env, exports, "__test_detachPublicationHeld", napi_test_detach_publication_held) ||
+        !export_function(env, exports, "__test_detachPublicationWaiters", napi_test_detach_publication_waiters) ||
+        !export_function(env, exports, "__test_releaseDetachPublication", napi_test_release_detach_publication) ||
+        !export_function(env, exports, "__test_liveStrandedResolverRefCount", napi_test_live_stranded_resolver_ref_count) ||
+        !export_function(env, exports, "__test_bridgeFreeCount", napi_test_bridge_free_count) ||
+        !export_function(env, exports, "__test_postReclamationActionCount", napi_test_post_reclamation_action_count) ||
+        !export_function(env, exports, "__test_outputStats", napi_test_output_stats) ||
+        !export_function(env, exports, "__test_outputOperationId", napi_test_output_operation_id) ||
+        !export_function(env, exports, "__test_createForeignWrappedObject", napi_test_create_foreign_wrapped_object) ||
+        !export_function(env, exports, "__test_failNextOutputSettlement", napi_test_fail_next_output_settlement) ||
+        !export_function(env, exports, "__test_failNextOutputExceptionClear", napi_test_fail_next_output_exception_clear) ||
+        !export_function(env, exports, "__test_holdNextOutputDelivery", napi_test_hold_next_output_delivery) ||
+        !export_function(env, exports, "__test_heldOutputDelivery", napi_test_held_output_delivery) ||
+        !export_function(env, exports, "__test_releaseOutputDelivery", napi_test_release_output_delivery)) {
+      napi_throw_error(env, NULL, "Failed to register DataWeave native test exports");
+      return NULL;
+    }
   }
 
   return exports;

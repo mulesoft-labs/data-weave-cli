@@ -1,12 +1,16 @@
 from pathlib import Path
 import ctypes
 import threading
-from threading import Barrier, BrokenBarrierError, current_thread, get_ident, Thread
+from threading import Barrier, BrokenBarrierError, Condition, current_thread, Event, get_ident, Lock, Thread
 
 import pytest
 
 import dataweave
 from dataweave import native
+
+
+class CallbackBaseException(BaseException):
+    pass
 
 
 class Function:
@@ -77,6 +81,268 @@ class FakeLibrary:
         )[0] = worker_thread
         self.attach_calls.append((get_ident(), worker_thread))
         return 0
+
+
+@pytest.mark.unit
+def test_run_admission_generation_rejects_operation_after_cleanup_and_reinitialize(monkeypatch):
+    library = FakeLibrary()
+    result_buffer = ctypes.create_string_buffer(
+        b'{"success":true,"result":"","binary":false,"mimeType":"application/json","charset":"UTF-8"}'
+    )
+    run_handles = []
+    library.run_script_engine = CallableFunction(
+        lambda _thread, handle, _script, _inputs: run_handles.append(handle)
+        or ctypes.addressof(result_buffer)
+    )
+    library.free_cstring = CallableFunction(lambda _thread, _ptr: None)
+    monkeypatch.setattr(native.ctypes, "CDLL", lambda _path: library)
+    wrapper = dataweave.DataWeave("/tmp/dwlib")
+    wrapper.initialize()
+    old_handle = wrapper._native.handle
+    captured = Event()
+    resume = Event()
+    original_require_initialized = wrapper._require_initialized
+
+    def pause_after_capture(supported, api_name):
+        operation = original_require_initialized(supported, api_name)
+        captured.set()
+        assert resume.wait(1)
+        return operation
+
+    monkeypatch.setattr(wrapper, "_require_initialized", pause_after_capture)
+    errors = []
+    worker = Thread(target=lambda: _capture_error(errors, lambda: wrapper.run("1")))
+    worker.start()
+    assert captured.wait(1)
+
+    wrapper.cleanup()
+    wrapper.initialize()
+    replacement_handle = wrapper._native.handle
+    assert replacement_handle != old_handle
+    resume.set()
+    worker.join(1)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert "stale engine generation" in str(errors[0])
+    assert run_handles == []
+    wrapper.cleanup()
+
+
+@pytest.mark.unit
+def test_failed_initialize_does_not_publish_or_advance_engine_generation(monkeypatch):
+    library = FakeLibrary()
+    library.create_engine = CallableFunction(lambda _thread: 0)
+    monkeypatch.setattr(native.ctypes, "CDLL", lambda _path: library)
+    runtime = native.NativeRuntime("/tmp/dwlib")
+
+    with pytest.raises(dataweave.DataWeaveError, match="null handle"):
+        runtime.initialize()
+
+    assert runtime._generation == 0
+    assert runtime._engine_operation is None
+
+
+@pytest.mark.unit
+def test_engine_operation_is_immutable_and_generation_remains_monotonic(monkeypatch):
+    library = FakeLibrary()
+    monkeypatch.setattr(native.ctypes, "CDLL", lambda _path: library)
+    runtime = native.NativeRuntime("/tmp/dwlib")
+    runtime.initialize()
+    first = runtime.capture_operation()
+
+    with pytest.raises(AttributeError):
+        first.handle = 99
+    runtime.cleanup()
+    runtime.initialize()
+    second = runtime.capture_operation()
+
+    assert second.generation == first.generation + 1
+    runtime.cleanup()
+
+
+@pytest.mark.unit
+def test_run_admission_generation_uses_captured_handle_after_mutable_handle_changes(monkeypatch):
+    library = FakeLibrary()
+    result_buffer = ctypes.create_string_buffer(b"result")
+    run_handles = []
+    library.run_script_engine = CallableFunction(
+        lambda _thread, handle, _script, _inputs: run_handles.append(handle)
+        or ctypes.addressof(result_buffer)
+    )
+    library.free_cstring = CallableFunction(lambda _thread, _ptr: None)
+    monkeypatch.setattr(native.ctypes, "CDLL", lambda _path: library)
+    runtime = native.NativeRuntime("/tmp/dwlib")
+    runtime.initialize()
+    operation = runtime.capture_operation()
+    runtime.handle = operation.handle + 100
+
+    assert runtime.run_engine_and_decode(b"script", b"{}", operation=operation) == "result"
+    assert run_handles == [operation.handle]
+    runtime.cleanup()
+
+
+@pytest.mark.unit
+def test_run_admission_generation_keeps_admitted_operation_on_original_engine(monkeypatch):
+    library = FakeLibrary()
+    result_buffer = ctypes.create_string_buffer(
+        b'{"success":true,"result":"","binary":false,"mimeType":"application/json","charset":"UTF-8"}'
+    )
+    admitted = Event()
+    release_run = Event()
+    run_handles = []
+    destroyed_handles = []
+
+    def run_script(_thread, handle, _script, _inputs):
+        run_handles.append(handle)
+        admitted.set()
+        assert release_run.wait(1)
+        return ctypes.addressof(result_buffer)
+
+    library.run_script_engine = CallableFunction(run_script)
+    library.free_cstring = CallableFunction(lambda _thread, _ptr: None)
+    library.destroy_engine = CallableFunction(
+        lambda _thread, handle: destroyed_handles.append(handle)
+    )
+    monkeypatch.setattr(native.ctypes, "CDLL", lambda _path: library)
+    wrapper = dataweave.DataWeave("/tmp/dwlib")
+    wrapper.initialize()
+    old_handle = wrapper._native.handle
+    run_errors = []
+    cleanup_errors = []
+    run_worker = Thread(
+        target=lambda: _capture_error(run_errors, lambda: wrapper.run("1"))
+    )
+    run_worker.start()
+    assert admitted.wait(1)
+
+    cleanup_worker = Thread(
+        target=lambda: _capture_error(cleanup_errors, wrapper.cleanup)
+    )
+    cleanup_worker.start()
+    assert cleanup_worker.is_alive()
+    assert destroyed_handles == []
+
+    release_run.set()
+    run_worker.join(1)
+    cleanup_worker.join(1)
+
+    assert not run_worker.is_alive()
+    assert not cleanup_worker.is_alive()
+    assert run_errors == []
+    assert cleanup_errors == []
+    assert run_handles == [old_handle]
+    assert destroyed_handles == [old_handle]
+
+
+@pytest.mark.unit
+def test_run_admission_generation_wakes_all_stale_waiters_after_cleanup(monkeypatch):
+    library = FakeLibrary()
+    result_buffer = ctypes.create_string_buffer(
+        b'{"success":true,"result":"","binary":false,"mimeType":"application/json","charset":"UTF-8"}'
+    )
+    active_started = Event()
+    release_active = Event()
+
+    def run_script(_thread, _handle, _script, _inputs):
+        active_started.set()
+        assert release_active.wait(1)
+        return ctypes.addressof(result_buffer)
+
+    library.run_script_engine = CallableFunction(run_script)
+    library.free_cstring = CallableFunction(lambda _thread, _ptr: None)
+    monkeypatch.setattr(native.ctypes, "CDLL", lambda _path: library)
+    runtime = native.NativeRuntime("/tmp/dwlib")
+    runtime.initialize()
+    operation = runtime.capture_operation()
+    active_errors = []
+    cleanup_errors = []
+    stale_errors = []
+    active = Thread(
+        target=lambda: _capture_error(
+            active_errors,
+            lambda: runtime.run_engine_and_decode(b"active", b"{}", operation=operation),
+        )
+    )
+    active.start()
+    assert active_started.wait(1)
+
+    original_wait = runtime._operation_lock.wait
+    cleanup_done = Event()
+    waiting = {
+        "cleanup-waiter": Event(),
+        "stale-waiter-0": Event(),
+        "stale-waiter-1": Event(),
+    }
+
+    def record_wait(timeout=None):
+        name = current_thread().name
+        waiting[name].set()
+        result = original_wait(timeout)
+        if name.startswith("stale-waiter"):
+            runtime._operation_lock.release()
+            try:
+                assert cleanup_done.wait(1)
+            finally:
+                runtime._operation_lock.acquire()
+        return result
+
+    monkeypatch.setattr(runtime._operation_lock, "wait", record_wait)
+
+    def cleanup_runtime():
+        try:
+            runtime.cleanup()
+        finally:
+            cleanup_done.set()
+
+    cleanup = Thread(
+        target=lambda: _capture_error(cleanup_errors, cleanup_runtime),
+        name="cleanup-waiter",
+    )
+    cleanup.start()
+    assert waiting["cleanup-waiter"].wait(1)
+    with runtime._operation_lock:
+        pass
+    stale_waiters = [
+        Thread(
+            target=lambda: _capture_error(
+                stale_errors,
+                lambda: runtime.run_engine_and_decode(
+                    b"stale", b"{}", operation=operation
+                ),
+            ),
+            name=f"stale-waiter-{index}",
+        )
+        for index in range(2)
+    ]
+    for waiter in stale_waiters:
+        waiter.start()
+        assert waiting[waiter.name].wait(1)
+        with runtime._operation_lock:
+            pass
+    release_active.set()
+    active.join(1)
+    cleanup.join(1)
+    for waiter in stale_waiters:
+        waiter.join(1)
+    stranded = [waiter.name for waiter in stale_waiters if waiter.is_alive()]
+    if stranded:
+        with runtime._operation_lock:
+            runtime._operation_lock.notify_all()
+        for waiter in stale_waiters:
+            waiter.join(1)
+
+    assert not active.is_alive()
+    assert not cleanup.is_alive()
+    assert stranded == []
+    assert not any(waiter.is_alive() for waiter in stale_waiters)
+    assert active_errors == []
+    assert cleanup_errors == []
+    assert len(stale_errors) == 2
+    assert all(
+        str(error) == "DataWeave operation belongs to a stale engine generation."
+        for error in stale_errors
+    )
 
 
 @pytest.mark.unit
@@ -232,7 +498,7 @@ def test_buffered_worker_execution_uses_one_current_thread_attachment_for_run_de
 
     worker = Thread(
         target=lambda: outcomes.append(
-            (get_ident(), runtime.run_engine_and_decode(b"script", b"{}"))
+            (get_ident(), runtime.run_engine_and_decode(b"script", b"{}", operation=runtime.capture_operation()))
         )
     )
     worker.start()
@@ -290,7 +556,7 @@ def test_attach_on_demand_does_not_cache_by_thread_ident(monkeypatch):
     worker = Thread(
         target=lambda: (
             observed_threads.append(current_thread()),
-            outcomes.append(runtime.run_engine_and_decode(b"script", b"{}")),
+            outcomes.append(runtime.run_engine_and_decode(b"script", b"{}", operation=runtime.capture_operation())),
         )
     )
     worker.start()
@@ -358,7 +624,7 @@ def test_buffered_worker_execution_detaches_current_thread_after_failure(monkeyp
     worker = Thread(
         target=lambda: _capture_error(
             errors,
-            lambda: runtime.run_engine_and_decode(b"script", b"{}"),
+            lambda: runtime.run_engine_and_decode(b"script", b"{}", operation=runtime.capture_operation()),
         )
     )
     worker.start()
@@ -379,6 +645,173 @@ def _capture_error(errors, invoke):
         invoke()
     except Exception as error:
         errors.append(error)
+
+
+@pytest.mark.unit
+def test_native_callback_scope_rejects_lifecycle_and_execution_on_any_same_thread_instance(monkeypatch):
+    guarded = native.NativeRuntime.__new__(native.NativeRuntime)
+    guarded.initialized = True
+    guarded._operation_lock = Condition(Lock())
+    guarded._operation_active = False
+    guarded._execution_owner = None
+    other = native.NativeRuntime.__new__(native.NativeRuntime)
+    other._init_lock = Lock()
+    other._operation_lock = Condition(Lock())
+    other._operation_active = False
+    other._execution_owner = None
+    monkeypatch.setattr(
+        native,
+        "_acquire_isolate",
+        lambda _path: (_ for _ in ()).throw(AssertionError("native isolate acquired")),
+    )
+    monkeypatch.setattr(
+        native,
+        "_release_isolate",
+        lambda: (_ for _ in ()).throw(AssertionError("native isolate released")),
+    )
+
+    with native._native_callback_scope():
+        assert native._isolate_lock.acquire(blocking=False)
+        native._isolate_lock.release()
+        assert native._resolver_lock_global.acquire(blocking=False)
+        native._resolver_lock_global.release()
+        assert guarded._operation_lock.acquire(blocking=False)
+        guarded._operation_lock.release()
+        assert other._init_lock.acquire(blocking=False)
+        other._init_lock.release()
+        for invoke in (
+            guarded.capture_operation,
+            other.initialize,
+            guarded.cleanup,
+        ):
+            with pytest.raises(
+                dataweave.DataWeaveError,
+                match="DataWeave lifecycle and execution are not allowed from a native callback on the same thread\\.",
+            ):
+                invoke()
+
+
+@pytest.mark.unit
+def test_native_callback_scope_is_thread_local():
+    errors = []
+    outcomes = []
+    runtime = native.NativeRuntime.__new__(native.NativeRuntime)
+    runtime.initialized = True
+    runtime._engine_operation = native._EngineOperation(1, 1)
+    runtime._operation_lock = Condition(Lock())
+
+    with native._native_callback_scope():
+        worker = Thread(
+            target=lambda: _capture_error(
+                errors, lambda: outcomes.append(runtime.capture_operation())
+            )
+        )
+        worker.start()
+        worker.join(1)
+
+        assert not worker.is_alive()
+        assert errors == []
+        assert outcomes == [native._EngineOperation(1, 1)]
+        with pytest.raises(dataweave.DataWeaveError, match="native callback"):
+            native._raise_if_native_callback_active()
+
+
+@pytest.mark.unit
+def test_native_callback_scope_rejects_direct_thread_attachment():
+    runtime = native.NativeRuntime.__new__(native.NativeRuntime)
+    runtime.lib = type(
+        "Native",
+        (),
+        {
+            "graal_attach_thread": lambda _self, _isolate, _thread: (_ for _ in ()).throw(
+                AssertionError("native attach called")
+            ),
+            "graal_detach_thread": lambda _self, _thread: (_ for _ in ()).throw(
+                AssertionError("native detach called")
+            ),
+        },
+    )()
+    runtime.isolate = object()
+
+    with native._native_callback_scope():
+        for invoke in (runtime.attach_thread, lambda: runtime.detach_thread(object())):
+            with pytest.raises(dataweave.DataWeaveError, match="native callback"):
+                invoke()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("failure_depth", [1, 2])
+def test_native_callback_scope_restores_depth_after_success_error_and_nesting(failure_depth):
+    assert not hasattr(native._native_callback_state, "depth")
+
+    with pytest.raises(RuntimeError, match="callback failed"):
+        with native._native_callback_scope():
+            assert native._native_callback_state.depth == 1
+            if failure_depth == 1:
+                raise RuntimeError("callback failed")
+            with native._native_callback_scope():
+                assert native._native_callback_state.depth == 2
+                raise RuntimeError("callback failed")
+
+    assert not hasattr(native._native_callback_state, "depth")
+    native._raise_if_native_callback_active()
+
+    with native._native_callback_scope():
+        assert native._native_callback_state.depth == 1
+    assert not hasattr(native._native_callback_state, "depth")
+
+
+@pytest.mark.unit
+def test_resolver_callback_contains_base_exception_and_restores_native_callback_depth(monkeypatch, capsys):
+    library = FakeLibrary()
+    monkeypatch.setattr(native.ctypes, "CDLL", lambda _path: library)
+    runtime = native.NativeRuntime("/tmp/dwlib")
+    runtime.install_resolver(
+        lambda _path: (_ for _ in ()).throw(CallbackBaseException("resolver failed"))
+    )
+    runtime.initialize()
+    _handle, callback, context = library.created_engines[0]
+
+    with runtime._resolver_scope():
+        assert callback(None, context, b"org/test/lib.dwl") is None
+
+    assert not hasattr(native._native_callback_state, "depth")
+    native._raise_if_native_callback_active()
+    assert capsys.readouterr().err == "DataWeave module resolver callback failed.\n"
+    runtime.cleanup()
+
+
+@pytest.mark.unit
+def test_resolver_callback_runs_without_the_instance_operation_lock(monkeypatch):
+    library = FakeLibrary()
+    result_buffer = ctypes.create_string_buffer(b"result")
+    lock_available = []
+    monkeypatch.setattr(native.ctypes, "CDLL", lambda _path: library)
+    runtime = native.NativeRuntime("/tmp/dwlib")
+
+    def resolver(_path):
+        acquired = runtime._operation_lock.acquire(blocking=False)
+        lock_available.append(acquired)
+        if acquired:
+            runtime._operation_lock.release()
+        return "source"
+
+    runtime.install_resolver(resolver)
+    runtime.initialize()
+    _handle, callback, context = library.created_engines[0]
+
+    def run_script(_thread, _handle, _script, _inputs):
+        source = callback(None, context, b"org/test/lib.dwl")
+        assert ctypes.string_at(source) == b"source"
+        return ctypes.addressof(result_buffer)
+
+    library.run_script_engine = CallableFunction(run_script)
+    library.free_cstring = CallableFunction(lambda _thread, _ptr: None)
+
+    assert runtime.run_engine_and_decode(b"script", b"{}", operation=runtime.capture_operation()) == "result"
+    assert lock_available == [True]
+
+    runtime.cleanup()
 
 
 @pytest.mark.unit

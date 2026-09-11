@@ -222,6 +222,23 @@ callback until its engine is destroyed, then releases callback references
 during `cleanup()`. Different live instances can therefore use different
 resolvers.
 
+### Callback and stream lifecycle
+
+Resolver, read, and write callbacks must not call DataWeave lifecycle or
+execution APIs on the same thread. The binding rejects that reentry with the
+public `DataWeaveError` message `DataWeave lifecycle and execution are not
+allowed from a native callback on the same thread.` rather than recursively
+entering the native runtime.
+
+Streaming and transform work captures its initialized `{handle, generation}`
+operation identity. Cleanup or reinitialization before a captured operation is
+consumed or registered rejects it with `DataWeaveError: DataWeave operation
+belongs to a stale engine generation.`; it never runs on the replacement
+engine. Cleanup differs from Node: it refuses with `DataWeaveError` while an
+active streaming worker is attached. Safe worker registration validates the
+captured operation while holding the worker registry lock, so cleanup cannot
+admit work for an old generation.
+
 ### Custom module resolution scope
 
 - A `resolve_module` you configure applies to `run()`.
@@ -274,9 +291,9 @@ print(f"\nDone: {metadata.mime_type}, {metadata.charset}")
 
 Call `stream.close()` when stopping consumption early. `Stream` also supports a
 context manager, as above. Closing requests cancellation and waits only briefly
-for the native worker. A native call cannot be forcibly cancelled by Python, so
-an unresponsive call is left to finish in a daemon worker rather than delaying
-application shutdown or raising during finalization.
+for the daemon worker. A native call cannot be forcibly cancelled by Python;
+`DataWeave.cleanup()` instead refuses while an active streaming worker remains
+attached, preventing destruction of its engine until the worker unregisters.
 
 Or with explicit context:
 

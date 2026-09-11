@@ -308,12 +308,10 @@ describe('DataWeave with resolver', () => {
       ])
     ).resolves.toBeUndefined();
 
-    // Drain whatever remains; the stream itself must also settle, not hang.
-    let result = await firstNext;
-    while (!result.done) {
-      result = await gen.next();
-    }
-    expect(result.value).toBeDefined();
+    // cleanup cancels the iterator; Task 8 defines cancellation as a terminal
+    // undefined return rather than native metadata from the abandoned run.
+    await firstNext;
+    await expect(gen.next()).resolves.toEqual({ done: true, value: undefined });
   }, 15000);
 
   // Same deadlock regression as above, for runTransform() -- the design doc
@@ -338,16 +336,11 @@ describe('DataWeave with resolver', () => {
 
     const firstNext = gen.next();
 
-    // Unlike runStreaming (whose native call is synchronous up to its first
-    // await), runTransform's generator body awaits createChunkReader(input)
-    // -- itself a microtask, not real async work for a sync-iterable input --
-    // before reaching the native runScriptTransformEngine call. A single
-    // un-awaited .next() only advances the generator to that intermediate
-    // await, not past it, so the native op would not yet be dispatched
-    // (g_active_ops still 0) when cleanup() below fires. One extra microtask
-    // tick lets that internal await settle so the native call is actually
-    // in flight, which is what this test needs to race against.
-    await Promise.resolve();
+    // Wait until the native transform is admitted, not merely one microtask.
+    // Input preparation has multiple async boundaries and cleanup before the
+    // admission boundary correctly invalidates the operation generation.
+    const firstChunk = await firstNext;
+    expect(firstChunk.done).toBe(false);
 
     const cleanupPromise = dw.cleanup();
 
@@ -358,11 +351,7 @@ describe('DataWeave with resolver', () => {
       ])
     ).resolves.toBeUndefined();
 
-    let result = await firstNext;
-    while (!result.done) {
-      result = await gen.next();
-    }
-    expect(result.value).toBeDefined();
+    await expect(gen.next()).resolves.toEqual({ done: true, value: undefined });
   }, 15000);
 
   // Fast-path regression guard: cleanup() called once a stream has already

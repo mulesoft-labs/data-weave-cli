@@ -322,6 +322,62 @@ print(json.dumps({{
 
 
 @pytest.mark.integration
+def test_cross_engine_resolver_reentry_is_rejected_without_terminating_process():
+    source_dir = Path(__file__).resolve().parents[2] / "src"
+    code = f"""
+import json
+
+import dataweave
+
+script = {IMPORT_LIB_SCRIPT!r}
+nested = {{}}
+inner = dataweave.DataWeave()
+
+def resolver(_module_path):
+    try:
+        inner.run("40 + 2")
+    except dataweave.DataWeaveError as error:
+        nested["type"] = type(error).__name__
+        nested["error"] = str(error)
+    return "%dw 2.0\\nfun answer() = 42"
+
+outer = dataweave.DataWeave(resolve_module=resolver)
+inner.initialize()
+outer.initialize()
+try:
+    result = outer.run(script)
+    response = {{
+        "nested_type": nested.get("type"),
+        "nested_error": nested.get("error"),
+        "outer": {{"success": result.success, "value": result.get_string()}},
+    }}
+finally:
+    outer.cleanup()
+    inner.cleanup()
+
+print(json.dumps(response))
+"""
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(source_dir) + os.pathsep + environment.get("PYTHONPATH", "")
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    response = json.loads(completed.stdout)
+    assert response["nested_type"] == "DataWeaveError"
+    assert "native callback" in response["nested_error"].lower()
+    assert response["outer"] == {"success": True, "value": "42"}
+    assert "Fatal error" not in completed.stderr
+
+
+@pytest.mark.integration
 def test_shared_isolate_survives_until_the_last_instance_cleans_up():
     from dataweave import native
 

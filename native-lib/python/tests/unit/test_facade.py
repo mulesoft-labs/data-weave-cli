@@ -13,10 +13,16 @@ class FakeNativeRuntime:
     def __init__(self):
         self.initialized = True
         self.thread = "thread"
+        self.operation = native._EngineOperation(handle=7, generation=1)
         self.calls = []
 
-    def run_engine_and_decode(self, *args):
-        self.calls.append(("run_engine_and_decode", args))
+    def capture_operation(self):
+        return self.operation
+
+    def run_engine_and_decode(self, script, inputs, *, operation):
+        assert operation is self.operation
+        assert operation.handle == 7
+        self.calls.append(("run_engine_and_decode", script, inputs, operation))
         return self._result()
 
     @staticmethod
@@ -102,10 +108,9 @@ def test_run_uses_engine_execution_regardless_of_resolver():
     assert instance._native.calls == [
         (
             "run_engine_and_decode",
-            (
-                b"payload",
-                b'{"value": {"content": "MQ==", "mimeType": "application/json", "charset": "utf-8"}}',
-            ),
+            b"payload",
+            b'{"value": {"content": "MQ==", "mimeType": "application/json", "charset": "utf-8"}}',
+            instance._native.operation,
         )
     ]
 
@@ -120,7 +125,12 @@ def test_run_without_resolver_routes_through_engine():
         True, "SGVsbG8=", None, False, "text/plain", "utf-8"
     )
     assert instance._native.calls == [
-        ("run_engine_and_decode", (b"payload", b"{}"))
+        (
+            "run_engine_and_decode",
+            b"payload",
+            b"{}",
+            instance._native.operation,
+        )
     ]
 
 
@@ -157,6 +167,45 @@ def test_global_facade_initializes_once_and_cleanup_allows_recreation(monkeypatc
     assert first.cleaned is True
     assert third is not first
     assert registered == [dataweave.cleanup, dataweave.cleanup]
+
+
+@pytest.mark.unit
+def test_module_cleanup_from_native_callback_preserves_published_instance(monkeypatch):
+    instance = configured_runtime()
+    cleanup_calls = []
+    instance.cleanup = lambda: cleanup_calls.append(True)
+    monkeypatch.setattr(dataweave, "_global_instance", instance)
+
+    with native._native_callback_scope(), pytest.raises(dataweave.DataWeaveError, match="native callback"):
+        dataweave.cleanup()
+
+    assert dataweave._global_instance is instance
+    assert cleanup_calls == []
+    assert dataweave.run("payload").get_string() == "Hello"
+
+
+@pytest.mark.unit
+def test_module_execution_from_native_callback_rejects_before_global_lock_or_native_run(monkeypatch):
+    instance = configured_runtime()
+    monkeypatch.setattr(dataweave, "_global_instance", instance)
+    lock_calls = []
+
+    class UnexpectedLock:
+        def __enter__(self):
+            lock_calls.append("enter")
+            raise AssertionError("global lock acquired")
+
+        def __exit__(self, _exc_type, _exc_value, _traceback):
+            pass
+
+    monkeypatch.setattr(dataweave, "_global_lock", UnexpectedLock())
+
+    with native._native_callback_scope():
+        with pytest.raises(dataweave.DataWeaveError, match="native callback"):
+            dataweave.run("payload")
+
+    assert lock_calls == []
+    assert instance._native.calls == []
 
 
 @pytest.mark.unit

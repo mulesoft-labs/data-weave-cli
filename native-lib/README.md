@@ -68,6 +68,24 @@ isolate for the process lifetime, and lets a future initialization build a fresh
 isolate. This ref-counting and teardown policy lives in the binding code, not in
 the dwlib engine ABI.
 
+## Raw engine ABI contract
+
+The exported engine entrypoints are `create_engine`,
+`create_engine_with_resolver`, `destroy_engine`, `run_script_engine`,
+`run_script_callback_engine`, and `run_script_input_output_callback_engine`.
+`create_engine` and `create_engine_with_resolver` return `0` when their Java C
+entrypoint fails. The three `run_*_engine` entrypoints return `NULL` when their
+Java C entrypoint fails; callers must not pass `NULL` to `free_cstring`. Those
+sentinels are distinct from normal DataWeave failures: a script error is a
+non-`NULL` JSON envelope with `success:false`, and that allocated result must be
+freed normally.
+
+`destroy_engine` closes admission for the handle and blocks until operations
+already admitted to that engine drain. Resolver, read, and write callback
+contexts must remain valid until `destroy_engine` returns. A callback must not
+call `destroy_engine` synchronously for the engine invoking it: that operation
+holds an admitted lease and would wait for itself to finish.
+
 ## Building with Gradle
 
 ### Prerequisites

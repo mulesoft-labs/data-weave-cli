@@ -16,7 +16,7 @@ from .models import (
     StreamingResult,
     WriteCallback,
 )
-from .native import NativeRuntime
+from .native import _native_callback_scope, _raise_if_native_callback_active, NativeRuntime
 from .resolver import ModuleResolver
 
 
@@ -42,6 +42,7 @@ class DataWeave:
         self._lifecycle_lock = Lock()
 
     def initialize(self):
+        _raise_if_native_callback_active()
         # Holds the lock across the whole install-resolver + native-init
         # transition so two concurrent initialize() calls on this instance
         # cannot both pass the `initialized` guard and both call
@@ -58,6 +59,7 @@ class DataWeave:
             self._native.initialize()
 
     def cleanup(self):
+        _raise_if_native_callback_active()
         # Symmetric with initialize(): install_resolver() and
         # NativeRuntime.cleanup() both mutate the module-global resolver
         # registry, so cleanup() takes the same instance-level lock.
@@ -84,11 +86,12 @@ class DataWeave:
             self._stream_workers_lock = Lock()
         return self._stream_workers, self._stream_workers_lock
 
-    def _register_stream_worker(self, worker: Thread) -> None:
+    def _register_stream_worker(self, worker: Thread, operation) -> None:
         workers, lock = self._worker_registry()
         with lock:
             if getattr(self, "_cleaning_up", False):
                 raise DataWeaveError("Cannot start a streaming worker while the DataWeave runtime is being cleaned up.")
+            self._native.validate_operation(operation)
             workers.add(worker)
 
     def _unregister_stream_worker(self, worker: Optional[Thread] = None) -> None:
@@ -96,21 +99,22 @@ class DataWeave:
         with lock:
             workers.discard(worker or current_thread())
 
-    def _require_initialized(self, supported: bool, api_name: str) -> None:
-        if not self._native.initialized:
-            raise DataWeaveError("DataWeave runtime not initialized. Call initialize() first.")
+    def _require_initialized(self, supported: bool, api_name: str):
+        _raise_if_native_callback_active()
+        operation = self._native.capture_operation()
         if not supported:
             raise DataWeaveError(f"Native library does not support {api_name}.")
+        return operation
 
     @staticmethod
     def _inputs_json(inputs: Optional[Dict[str, Any]]) -> bytes:
         return json.dumps({key: normalize_input_value(value) for key, value in (inputs or {}).items()}).encode("utf-8")
 
     def run(self, script: str, inputs: Optional[Dict[str, Any]] = None, raise_on_error: bool = False) -> ExecutionResult:
-        self._require_initialized(True, "script execution")
+        operation = self._require_initialized(True, "script execution")
         try:
             raw = self._native.run_engine_and_decode(
-                script.encode("utf-8"), self._inputs_json(inputs)
+                script.encode("utf-8"), self._inputs_json(inputs), operation=operation
             )
             result = parse_native_encoded_response(raw)
         except Exception as error:
@@ -120,20 +124,23 @@ class DataWeave:
         return result
 
     def run_callback(self, script: str, write_callback: WriteCallback, inputs: Optional[Dict[str, Any]] = None) -> StreamingResult:
-        self._require_initialized(self._native.has_callback_streaming, "callback streaming API (run_script_callback not found)")
+        operation = self._require_initialized(self._native.has_callback_streaming, "callback streaming API (run_script_callback not found)")
         @WRITE_CALLBACK
         def write_cb(_context, buffer, length):
             try:
-                return write_callback(ctypes.string_at(buffer, length))
-            except Exception:
+                data = ctypes.string_at(buffer, length)
+                with _native_callback_scope():
+                    return ctypes.c_int(write_callback(data)).value
+            except BaseException:
                 return -1
         try:
-            raw = self._native.run_callback_engine_and_decode(self._native.thread, script.encode("utf-8"), self._inputs_json(inputs), write_cb)
+            raw = self._native.run_callback_engine_and_decode(self._native.thread, script.encode("utf-8"), self._inputs_json(inputs), write_cb, operation=operation)
             return parse_streaming_result(json.loads(raw) if raw else {"success": False, "error": "Empty response"})
         except Exception as error:
             raise DataWeaveError(f"Failed to execute callback streaming: {error}")
 
-    def _stream_worker(self, invoke, cancelled: Event) -> Generator[bytes, None, StreamingResult]:
+    def _stream_worker(self, operation, invoke, cancelled: Event) -> Generator[bytes, None, StreamingResult]:
+        _raise_if_native_callback_active()
         sentinel = object()
         queue: Queue = Queue(maxsize=_OUTPUT_QUEUE_MAXSIZE)
 
@@ -156,7 +163,7 @@ class DataWeave:
                     return -1
                 queue.put(ctypes.string_at(buffer, length), timeout=_WORKER_TIMEOUT_SECONDS)
                 return 0
-            except Exception:
+            except BaseException:
                 return -1
 
         def worker_main():
@@ -185,7 +192,7 @@ class DataWeave:
         # Python cannot cancel a native call. Daemon workers keep an abandoned
         # call from extending interpreter lifetime after bounded cancellation.
         worker = Thread(target=worker_main, name="dw-streaming-worker", daemon=True)
-        self._register_stream_worker(worker)
+        self._register_stream_worker(worker, operation)
         try:
             worker.start()
         except Exception:
@@ -214,10 +221,10 @@ class DataWeave:
         return parse_streaming_result(metadata or {"success": False, "error": "No metadata received from native call"})
 
     def run_streaming(self, script: str, inputs: Optional[Dict[str, Any]] = None) -> Stream:
-        self._require_initialized(self._native.has_callback_streaming, "callback streaming API (run_script_callback not found)")
+        operation = self._require_initialized(self._native.has_callback_streaming, "callback streaming API (run_script_callback not found)")
         cancelled = Event()
         encoded_inputs = self._inputs_json(inputs)
-        stream = Stream(self._stream_worker(lambda thread, write_cb: self._native.run_callback_engine_and_decode(thread, script.encode("utf-8"), encoded_inputs, write_cb), cancelled))
+        stream = Stream(self._stream_worker(operation, lambda thread, write_cb: self._native.run_callback_engine_and_decode(thread, script.encode("utf-8"), encoded_inputs, write_cb, operation=operation), cancelled))
         stream._on_close = cancelled.set
         stream._cancelled = cancelled
         return stream
@@ -238,50 +245,54 @@ class DataWeave:
                         return size
                     if state["done"]:
                         return 0
-                    chunk = next(iterator, None)
+                    with _native_callback_scope():
+                        chunk = next(iterator, None)
                     if not chunk:
                         state["done"] = True
                         return 0
                     state["chunk"] = chunk
                     state["offset"] = 0
-            except Exception:
+            except BaseException:
                 return -1
         return read_cb
 
     def run_transform(self, script: str, input_stream: Iterable[bytes], input_name: str = "payload", input_mime_type: str = "application/json", input_charset: Optional[str] = None, inputs: Optional[Dict[str, Any]] = None) -> Stream:
-        self._require_initialized(self._native.has_callback_input_output, "callback input/output API (run_script_input_output_callback not found)")
+        operation = self._require_initialized(self._native.has_callback_input_output, "callback input/output API (run_script_input_output_callback not found)")
         cancelled = Event()
         read_cb = self._chunk_reader(input_stream)
         encoded_inputs = self._inputs_json(inputs)
         def invoke(thread, write_cb):
-            return self._native.run_input_output_callback_engine_and_decode(thread, script.encode("utf-8"), encoded_inputs, input_name.encode("utf-8"), input_mime_type.encode("utf-8"), input_charset.encode("utf-8") if input_charset else None, read_cb, write_cb)
-        stream = Stream(self._stream_worker(invoke, cancelled))
+            return self._native.run_input_output_callback_engine_and_decode(thread, script.encode("utf-8"), encoded_inputs, input_name.encode("utf-8"), input_mime_type.encode("utf-8"), input_charset.encode("utf-8") if input_charset else None, read_cb, write_cb, operation=operation)
+        stream = Stream(self._stream_worker(operation, invoke, cancelled))
         stream._on_close = cancelled.set
         stream._cancelled = cancelled
         return stream
 
     def run_input_output_callback(self, script: str, input_name: str, input_mime_type: str, read_callback: ReadCallback, write_callback: WriteCallback, input_charset: Optional[str] = None, inputs: Optional[Dict[str, Any]] = None) -> StreamingResult:
-        self._require_initialized(self._native.has_callback_input_output, "callback input/output API (run_script_input_output_callback not found)")
+        operation = self._require_initialized(self._native.has_callback_input_output, "callback input/output API (run_script_input_output_callback not found)")
         @READ_CALLBACK
         def read_cb(_context, buffer, buffer_size):
             try:
-                data = read_callback(buffer_size)
+                with _native_callback_scope():
+                    data = read_callback(buffer_size)
                 if not data:
                     return 0
                 if len(data) > buffer_size:
                     return -1
                 ctypes.memmove(buffer, data, len(data))
                 return len(data)
-            except Exception:
+            except BaseException:
                 return -1
         @WRITE_CALLBACK
         def write_cb(_context, buffer, length):
             try:
-                return write_callback(ctypes.string_at(buffer, length))
-            except Exception:
+                data = ctypes.string_at(buffer, length)
+                with _native_callback_scope():
+                    return ctypes.c_int(write_callback(data)).value
+            except BaseException:
                 return -1
         try:
-            raw = self._native.run_input_output_callback_engine_and_decode(self._native.thread, script.encode("utf-8"), self._inputs_json(inputs), input_name.encode("utf-8"), input_mime_type.encode("utf-8"), input_charset.encode("utf-8") if input_charset else None, read_cb, write_cb)
+            raw = self._native.run_input_output_callback_engine_and_decode(self._native.thread, script.encode("utf-8"), self._inputs_json(inputs), input_name.encode("utf-8"), input_mime_type.encode("utf-8"), input_charset.encode("utf-8") if input_charset else None, read_cb, write_cb, operation=operation)
             return parse_streaming_result(json.loads(raw) if raw else {"success": False, "error": "Empty response"})
         except Exception as error:
             raise DataWeaveError(f"Failed to execute callback input/output streaming: {error}")
