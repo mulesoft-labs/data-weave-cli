@@ -2,13 +2,16 @@ package org.mule.weave.dwnative.cli.utils
 
 import org.mule.weave.dwnative.cli.Console
 import org.mule.weave.dwnative.cli.utils.SpellsUtils.DATA_WEAVE_GRIMOIRE_FOLDER
+import org.mule.weave.dwnative.cli.utils.SpellsUtils.MILLIS_PER_DAY
 import org.mule.weave.dwnative.utils
 
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.TimeUnit
 
 object SpellsUtils {
   val DATA_WEAVE_GRIMOIRE_FOLDER = "data-weave-grimoire"
+  private val MILLIS_PER_DAY: Long = TimeUnit.DAYS.toMillis(1)
 }
 
 class SpellsUtils(console: Console) {
@@ -38,7 +41,7 @@ class SpellsUtils(console: Console) {
   def daysSinceLastUpdate(): Int = {
     val lastModified = lastUpdatedMarkFile().lastModified()
     val millis = System.currentTimeMillis() - lastModified
-    (millis / (1000 * 60 * 20 * 24)).asInstanceOf[Int]
+    (millis / MILLIS_PER_DAY).asInstanceOf[Int]
   }
 
   def grimoireFolder(wizard: String): File = {
