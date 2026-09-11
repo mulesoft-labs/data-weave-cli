@@ -1,7 +1,7 @@
 # Design: External DataWeave Module Support in Node.js Binding
 
-**Date:** 2026-08-04  
-**Status:** Superseded  
+**Date:** 2026-08-04
+**Status:** Superseded
 **Related Proposal:** [docs/proposals/nodejs-external-modules.md](../../proposals/nodejs-external-modules.md)
 
 > **⚠️ Superseded (2026-08-31).** This document describes the original
@@ -366,20 +366,20 @@ public interface ResolveModuleCallback extends CFunctionPointer {
 ```java
 public class CallbackWeaveResourceResolver implements WeaveResourceResolver {
     private final ResolveModuleCallback callback;
-    
+
     public CallbackWeaveResourceResolver(ResolveModuleCallback callback) {
         this.callback = callback;
     }
-    
+
     @Override
     public Option<WeaveResource> resolve(ResourceDescriptor descriptor) {
         CCharPointer pathPtr = CTypeConversion.toCString(descriptor.path()).get();
         CCharPointer resultPtr = callback.invoke(CurrentIsolate.getCurrentThread(), pathPtr);
-        
+
         if (resultPtr.isNull()) {
             return Option.empty();  // Resolver returned null
         }
-        
+
         String source = CTypeConversion.toJavaString(resultPtr);
         // Note: host must free resultPtr after this returns
         return Option.apply(new StringWeaveResource(descriptor.path(), source));
@@ -462,7 +462,7 @@ static char* resolve_module_callback(void* thread, const char* module_path) {
     // Return result_source (or NULL)
 }
 
-static void resolver_js_callback(napi_env env, napi_value js_callback, 
+static void resolver_js_callback(napi_env env, napi_value js_callback,
                                   void* context, void* data) {
     // Call JS: result = resolveModule(modulePath)
     // Extract result string or null

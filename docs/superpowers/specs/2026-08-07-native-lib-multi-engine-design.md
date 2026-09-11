@@ -493,17 +493,17 @@ regardless of which OS thread performs the last release.
 - **`run` / `run_streaming` / `run_callback` / `run_transform`** — route through the `*_engine`
   entrypoints with the instance's `handle`, per §7.2's attachment rules. Per-instance execution is
   serialized (`_serialized_native_operation`); different instances run concurrently.
-- **`cleanup()`** — drain *this instance's* stream workers (signal cancel + **join** the threads;
-  synchronous, Python owns them, so no event loop and no deadlock); `destroy_engine(handle)`; remove
-  the resolver-map entry; clear the instance handle; then release the isolate ref (`-= 1`), tearing
-  the isolate down on the last release. `cleanup()` on an uninitialized/already-cleaned instance is a
-  no-op; double-`cleanup()` releases the ref only once (guarded by the instance handle being
-  cleared). If `destroy_engine` throws, the isolate ref is still released so a throwing destroy
-  cannot strand the isolate; the error is re-raised after the release.
+- **`cleanup()`** — refuses while this instance has an active registered stream worker; it does not
+  use Node's cancel-and-wait cleanup protocol. Once no worker is active it destroys the engine,
+  removes the resolver-map entry, clears the operation token, and releases the isolate ref. Worker
+  registration validates its captured `{handle, generation}` token while holding the registry lock,
+  so cleanup/reinitialize cannot admit stale work. Cleanup on an uninitialized/already-cleaned
+  instance is a no-op; double cleanup releases the ref only once. If `destroy_engine` throws, the
+  isolate ref is still released and the error is re-raised.
 
-**Why this stays simple:** teardown happens only on the *last* release, by which point every
-instance has already joined its own workers, so the isolate has no attached worker threads when
-`graal_tear_down_isolate` runs.
+**Why this stays simple:** teardown happens only on the *last* release after each instance has no
+registered active worker. A still-running daemon worker prevents its instance's cleanup, rather than
+allowing teardown to race an attached worker thread.
 
 ### 7.4 Resolver dispatch and the streaming/resolver hazard
 
@@ -532,12 +532,12 @@ instance has already joined its own workers, so the isolate has no attached work
 
 ### Layer 1 — Java (`native-lib/src/main/java/org/mule/weave/lib/`) — shared by both bindings
 
-- **`ScriptRuntime.java`** — from static singleton to per-instance + a
-  `ConcurrentHashMap<Long, ScriptRuntime>` registry with `register`/`get`/`destroy` and an
-  `AtomicLong` handle allocator. The resolver is bound once at construction (immutable for the
-  instance's lifetime); the `static setResolver` write-once mutation is removed.
-  `compositeResolver()` / `createModuleComponentsFactory()` become instance methods.
-  `getInstance()` / `defaultInstance` are **removed** — `ScriptRuntime` is purely handle-addressed.
+- **`ScriptRuntime.java`** — a handle-keyed registry of lifecycle records, each retaining its
+  `ScriptRuntime` plus `LIVE`, `CLOSING`, or `DESTROYED` state and a count of admitted operation
+  leases. `acquire(handle)` admits only `LIVE` records and returns a lease; `destroy(handle)` closes
+  admission, waits for admitted leases to drain, then removes the record. The resolver is bound at
+  construction for the runtime lifetime; the former write-once static resolver and `getInstance()`
+  / `defaultInstance` are removed.
 - **`CallbackWeaveResourceResolver.java`** — stores a `PointerBase ctx` alongside the callback,
   forwarded on every `callback.invoke(...)`; constructor `(ResolveModuleCallback, PointerBase ctx)`.
 - **`NativeCallbacks.java`** — `ResolveModuleCallback` is the 3-arg ctx form
@@ -546,8 +546,10 @@ instance has already joined its own workers, so the isolate has no attached work
   to the correct per-handle resolver on the C/Python side. The old 2-arg form is gone.
 - **`NativeLib.java`** — exposes only the handle-based lifecycle + execution entrypoints
   (`create_engine`, `create_engine_with_resolver`, `destroy_engine`, `run_script_engine`,
-  `run_script_callback_engine`, `run_script_input_output_callback_engine`) resolving via
-  `ScriptRuntime.get(handle)`. The three legacy singleton entrypoints (`run_script`,
+  `run_script_callback_engine`, `run_script_input_output_callback_engine`). Java entrypoint
+  exceptions return ABI sentinels: create returns `0`, and run entrypoints return `NULL`.
+  Normal script failures remain allocated non-`NULL` JSON envelopes with `success:false`.
+  The three legacy singleton entrypoints (`run_script`,
   `run_script_callback`, `run_script_input_output_callback`) and the old `*_with_resolver`
   entrypoints are **removed** (see §10).
 
@@ -583,12 +585,14 @@ instance has already joined its own workers, so the isolate has no attached work
 ### Layer 4 — Python (`native-lib/python/src/dataweave/`)
 
 - **`native.py` (`NativeRuntime`)** — the shared-model glue (§7): module-level refcounted isolate,
-  attach-on-demand thread handling, the 3-arg ctx resolver trampoline + `_resolver_registry`, and
-  the `*_engine` + `create_engine[_with_resolver]` + `destroy_engine` symbol bindings.
+  attach-on-demand thread handling, the 3-arg ctx resolver trampoline + `_resolver_registry`,
+  generation-bound `{handle, generation}` operation tokens, same-thread callback reentrancy guard,
+  and the `*_engine` + `create_engine[_with_resolver]` + `destroy_engine` symbol bindings.
 - **`runtime.py` (`DataWeave`)** — `initialize()` acquires an isolate ref + creates one engine and
-  stores its `handle`; run methods route through the `*_engine` entrypoints with that handle;
-  `cleanup()` drains this instance's stream workers, `destroy_engine(handle)`, releases the ref.
-  The public API surface is unchanged.
+  stores its generation-bound operation token; run methods route through the `*_engine` entrypoints.
+  Cleanup refuses while an active stream worker is registered; registration validates the token so
+  stale work cannot be admitted. It then destroys the engine and releases the ref. The public API
+  surface is unchanged.
 - **`models.py`** — `RESOLVE_MODULE_CALLBACK` ctypes signature carries the `ctx` argument.
 
 ## 9. Data Flow
@@ -606,7 +610,7 @@ new DataWeave({ resolveModule: A }).initialize()
 dwA.run(script importing "custom/lib.dwl")
   → ffi.runScriptEngine(handle_A, script, inputs)
   → addon.c: admission (g_active_ops++, in_flight++ on bridge_A) → attach → fn_run_script_engine
-  → Java: ScriptRuntime.get(handle_A).run(...)
+  → Java: ScriptRuntime.acquire(handle_A) → admitted lease → runtime.run(...)
       composite resolver: ClassLoader miss → callback.invoke(thread, ctx=&bridge_A, "custom/lib.dwl")
   → C: resolve_module_callback casts ctx→bridge_A; thread==owner? yes → call resolver A synchronously
   → result flows back, script compiles; on completion: in_flight--, g_active_ops--
@@ -641,9 +645,9 @@ dwB.cleanup()  → join workers; destroy_engine(handleB); ref 1→0 → attach f
   per-handle).
 - **Wrong-thread resolver invocation:** per-handle/per-token `owner` check fails closed to "not
   found" rather than touching the host callback cross-thread — identical in both bindings.
-- **Invalid/unknown/destroyed handle:** `ScriptRuntime.get(handle)` returns null → the entrypoint
-  returns `{"success":false,"error":"Unknown engine handle"}` (resolved for async ops, returned as
-  the JSON string for sync `run()`), never an NPE/crash.
+- **Invalid/unknown/destroyed handle:** `ScriptRuntime.acquire(handle)` returns no lease → the
+  entrypoint returns `{"success":false,"error":"Unknown engine handle"}` (resolved for async ops,
+  returned as the JSON string for sync `run()`), never an NPE/crash.
 - **Node admission / argument / allocation failures:** synchronous `napi_throw_error` (generic
   Error); worker-thread OOM → terminal error JSON. Never `napi_reject_deferred` (absent from
   `addon.c`).
@@ -735,6 +739,30 @@ uphold all six:
    custom-module resolution fails closed off the engine's owner thread.
 6. A failed engine-create rolls back the isolate ref; a throwing `destroy_engine` still releases
    the ref.
+
+## 12.1 Final hardening contract
+
+This section records final behavior that is intentionally narrower than a public API guarantee.
+Both bindings use callback thread-local state to reject same-thread resolver/read/write callback
+reentry into lifecycle or execution APIs with their public `DataWeaveError`. Both generation-bind
+lazy stream and transform work; cleanup or reinitialization before consumption or admission rejects
+the stale work rather than allowing it to execute on a replacement engine.
+
+Node's native output bridge bounds its own outstanding bytes and chunks and uses a finite TSFN
+queue. Buffers retained by user code after yield are outside that bound. Controller and sequence
+credit values are internal correctness machinery, not a public BigInt sequence contract. Node
+cleanup cancels and waits for abandoned active streams/transforms before engine destruction.
+
+Python deliberately differs: it cannot force-cancel an active native call, so cleanup refuses while
+an active streaming worker is attached. Its registration validation is generation-safe; it does not
+adopt Node's cancellation behavior.
+
+**Test-only detach hooks.** The addon enables fault injection only when `DATAWEAVE_TEST_HOOKS` is
+non-empty. A detach hook always performs a real detach first and can synthesize a failure only after
+that detach succeeds; it does not model a physically stuck Graal thread. A real detach failure
+poisons admission fail-closed. Cleanup abandons the old published generation, and a later fresh
+initialization can recover with a new isolate. These hooks and their names are implementation/test
+details, not stable APIs.
 
 ## 13. Follow-Up Work
 

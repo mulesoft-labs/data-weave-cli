@@ -493,7 +493,6 @@ class NativeRuntime:
             except Exception:
                 if primary_error is None:
                     raise
-
     def run_engine_and_decode(self, script: bytes, inputs: bytes, operation: _EngineOperation) -> str:
         with self._serialized_native_operation(operation) as operation_lock:
             with self._current_thread_attachment(self.thread) as thread:

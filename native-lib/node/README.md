@@ -232,6 +232,26 @@ import { cleanup } from 'dataweave-native';
 await cleanup();
 ```
 
+### Callback and stream lifecycle
+
+Resolver, read, and write callbacks must not call DataWeave lifecycle or
+execution APIs on the same thread. The binding rejects that reentry with a
+public `DataWeaveError` instead of recursively entering the native runtime.
+Native addon callers receive the message `DataWeave native methods cannot be
+called from a native callback` and code `ERR_DATAWEAVE_CALLBACK_REENTRANCY`.
+
+Streaming and transform work captures the initialized engine generation. If
+cleanup or reinitialization happens before it is consumed or admitted, it fails
+with `DataWeaveError: DataWeave operation belongs to a stale engine generation.`
+and never runs against the replacement engine. Cleanup cancels and waits for
+abandoned active streams and transforms before destroying their engine.
+
+The addon uses bounded native output buffering. Its byte and chunk watermarks,
+finite thread-safe-function queue, and controller/sequence credit bookkeeping
+are implementation details, not public configuration or a BigInt sequence API.
+The bound excludes `Buffer` objects retained by application code after a chunk
+is yielded.
+
 ### Class-Based API
 
 For more control, use the `DataWeave` class directly:
@@ -411,8 +431,9 @@ console.log(result.getString());  // "300"
 ### Streaming Large Files
 
 ```javascript
-import { runTransform } from 'dataweave-native';
-import { readFileSync, createWriteStream } from 'fs';
+import { once } from "node:events";
+import { readFileSync, createWriteStream } from "node:fs";
+import { runTransform } from "dataweave-native";
 
 const script = `
 %dw 2.0
@@ -439,7 +460,9 @@ const generator = runTransform(
 const output = createWriteStream('filtered.json');
 
 for await (const chunk of generator) {
-  output.write(chunk);
+  if (!output.write(chunk)) {
+    await once(output, "drain");
+  }
 }
 
 output.end();
