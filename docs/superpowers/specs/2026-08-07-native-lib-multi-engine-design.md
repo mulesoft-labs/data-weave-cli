@@ -351,13 +351,12 @@ because a boolean cannot represent the window during which `cleanup()` has start
   concurrent `initialize()` is deterministically rejected instead of racing a fresh isolate
   against the in-flight release. `initialize()` and `run()` stay **synchronous** (an async
   signature would be an API break).
-- **`run()` / `runStreaming()` / `runTransform()`** — gated by `ensureReady()`: throw
-  `DataWeaveError` unless `state === "ready"`, so the internal `engineHandle === null` cleanup
-  window is unreachable by any public method (defense-in-depth behind the C admission check).
-  `runTransform` additionally re-checks `ensureReady()` **after** `await createChunkReader(input)`
-  (async input pre-buffering can span arbitrary time; the instance may be cleaned up during it) so
-  a misused instance gets a synchronous `DataWeaveError` rather than a resolved `Unknown engine
-  handle` envelope.
+- **`run()` / `runStreaming()` / `runTransform()`** — `captureOperationToken()` initially checks
+  readiness and captures `{handle, generation}`. `runTransform` calls
+  `assertCurrentOperation(token)` both after `await createChunkReader(input)` and immediately at
+  native admission. Async input pre-buffering can span arbitrary time; cleanup or reinitialization
+  during it therefore raises the public stale-generation `DataWeaveError` instead of admitting work
+  to a replacement engine or returning an `Unknown engine handle` envelope.
 - **`cleanup()` / `doCleanup()`** — set `state = "cleaning-up"` synchronously *before*
   `ffi.destroyEngine` / `ffi.cleanup` (the key ordering). It always runs `await ffi.cleanup()`
   even if `destroyEngine()` throws (a real path — wrong-thread destruction throws synchronously),
@@ -634,8 +633,12 @@ dwA.run("... import custom/lib ...")
   → Java engine A: ClassLoader miss → callback(thread, ctx=tokenA, "custom/lib")
   → trampoline: registry[tokenA] → resolver A → source; A's cache used, B untouched
 
-dwA.cleanup()  → join dwA workers; destroy_engine(handleA); ref 2→1 (isolate stays)
-dwB.cleanup()  → join workers; destroy_engine(handleB); ref 1→0 → attach fresh thread + graal_tear_down_isolate(); _isolate=None
+dwA.cleanup()  → verify no active registered worker; destroy_engine(handleA); ref 2→1 (isolate stays)
+dwB.cleanup()  → verify no active registered worker; destroy_engine(handleB); ref 1→0
+                 → attach fresh thread + graal_tear_down_isolate(); _isolate=None
+
+active worker at cleanup → reject without joining or cancelling the worker; its generation-safe
+                           registration prevents stale work from being admitted after lifecycle changes
 ```
 
 ## 10. Error Handling & Backward Compatibility
@@ -711,12 +714,13 @@ dwB.cleanup()  → join workers; destroy_engine(handleB); ref 1→0 → attach f
   modules; streaming/transform still stream; streaming custom-module resolution fails closed
   (parity); a **foreign-thread last-release no-hang** regression (init on a worker thread, last
   release/cleanup on a different thread, bounded timeout); TCK conformance stays green.
-- **Documented posture on non-forceable paths (Node).** Allocator/N-API fault injection and exact
-  cross-thread teardown interleavings are **not deterministically forceable** from JS/vitest (no
-  addon-boundary fault-injection hook — deliberately not added, YAGNI/test-only surface). Their
-  correctness rests on the C-level invariants in §6, verified by code reasoning and adversarial
-  review; the Worker tests are best-effort probabilistic guards. This is a standing, documented
-  decision.
+- **Test-only addon hook posture (Node).** With non-empty `DATAWEAVE_TEST_HOOKS`, internal,
+  non-public `__test_*` exports deterministically cover selected detach failures, engine-record
+  allocation failure, engine generation and handle boundaries, output settlement/status failures,
+  output-credit accounting, and scheduling/output-flow delivery paths. The hooks are intentionally
+  limited: unhooked native and N-API failure branches and arbitrary cross-thread interleavings retain
+  static or probabilistic Worker-test coverage. Detach injection runs only after a real detach has
+  succeeded, so it cannot safely reproduce a physically stuck attached Graal thread.
 - **Native image build** (`native-lib:nativeCompile`) stays green with the legacy entrypoints
   removed (confirms no SPI/reflection config referenced them).
 
