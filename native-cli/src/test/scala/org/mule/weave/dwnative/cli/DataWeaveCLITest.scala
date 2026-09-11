@@ -11,6 +11,8 @@ import picocli.CommandLine
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.nio.file.Files
+import java.util.concurrent.TimeUnit
 import scala.io.Source
 
 class DataWeaveCLITest extends AnyFreeSpec with Matchers {
@@ -83,6 +85,44 @@ class DataWeaveCLITest extends AnyFreeSpec with Matchers {
     val source = Source.fromBytes(stream.toByteArray, "UTF-8")
     val result: String = source.mkString
     result.trim shouldBe "\"DW Rules\""
+  }
+
+  "should warn to run `dw spell update` when spells were last updated more than 30 days ago" in {
+    val localSpell: File = TestUtils.getMyLocalSpell
+    val console = new TestConsole(System.in, new ByteArrayOutputStream(), Map(DataWeaveUtils.DW_HOME_VAR -> dwHomeLastUpdatedDaysAgo(31).getAbsolutePath))
+    val dwcli = createCommandLine(console)
+    val exitCode = dwcli.execute("spell", "--local", localSpell.getName, "--spell-home", localSpell.getParentFile.getAbsolutePath)
+    exitCode shouldBe 0
+    console.infoMessages should contain("Your spells are getting old. 31 days since last update. Please run \n dw spell update")
+  }
+
+  "should not warn about old spells when they were last updated less than 30 days ago" in {
+    val localSpell: File = TestUtils.getMyLocalSpell
+    val console = new TestConsole(System.in, new ByteArrayOutputStream(), Map(DataWeaveUtils.DW_HOME_VAR -> dwHomeLastUpdatedDaysAgo(20).getAbsolutePath))
+    val dwcli = createCommandLine(console)
+    val exitCode = dwcli.execute("spell", "--local", localSpell.getName, "--spell-home", localSpell.getParentFile.getAbsolutePath)
+    exitCode shouldBe 0
+    console.infoMessages.filter(_.startsWith("Your spells are getting old")) shouldBe empty
+  }
+
+  "should not warn about old spells when they were last updated exactly 30 days ago" in {
+    val localSpell: File = TestUtils.getMyLocalSpell
+    val console = new TestConsole(System.in, new ByteArrayOutputStream(), Map(DataWeaveUtils.DW_HOME_VAR -> dwHomeLastUpdatedDaysAgo(30).getAbsolutePath))
+    val dwcli = createCommandLine(console)
+    val exitCode = dwcli.execute("spell", "--local", localSpell.getName, "--spell-home", localSpell.getParentFile.getAbsolutePath)
+    exitCode shouldBe 0
+    console.infoMessages.filter(_.startsWith("Your spells are getting old")) shouldBe empty
+  }
+
+  private def dwHomeLastUpdatedDaysAgo(days: Int): File = {
+    val dwHome = Files.createTempDirectory("dw-home").toFile
+    val grimoires = new File(dwHome, "grimoires")
+    grimoires.mkdirs()
+    val lastUpdate = new File(grimoires, "lastUpdate.txt")
+    Files.write(lastUpdate.toPath, "LAST UPDATE".getBytes("UTF-8"))
+    // The extra hour keeps the timestamp well inside the expected day
+    lastUpdate.setLastModified(System.currentTimeMillis() - TimeUnit.DAYS.toMillis(days) - TimeUnit.HOURS.toMillis(1)) shouldBe true
+    dwHome
   }
 
 //  "should be able to run a local spell with a dependency" in {
