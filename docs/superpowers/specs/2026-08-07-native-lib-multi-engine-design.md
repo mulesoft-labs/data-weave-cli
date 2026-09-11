@@ -1,18 +1,20 @@
 # Design: Multiple Isolated DataWeave Engines per Process (native-lib — Node & Python)
 
-**Date:** 2026-08-07 (consolidated 2026-08-25; unified Node + Python 2026-08-26)
-**Status:** Approved and implemented on `w-23692110-multi-engine-design` (PR #157)
+**Date:** 2026-08-07 (consolidated 2026-08-25; unified Node + Python 2026-08-26; review-22 hardening folded in 2026-09-02)
+**Status:** Approved and implemented on `w-23692110-multi-engine-design` (PR #157), with review-22 hardening finalized on `w-23692110-review-22-fixes`
 **Tracks:** GUS [W-23692110](https://gus.my.salesforce.com/lightning/r/ADM_Work__c/a07EE00002gS7SOYA0/view) — "Native-lib: support multiple DataWeave engine instances with independent module resolvers"
 **Related:** [docs/superpowers/specs/2026-08-04-nodejs-external-modules-design.md](./2026-08-04-nodejs-external-modules-design.md) (the design during which this limitation was discovered)
 
 > **About this document.** This is the single, consolidated design for the multi-engine
 > `native-lib` feature across **both** consumer bindings — Node and Python. It describes the
-> **final state** as shipped on PR #157. The core feature (object-level engines behind opaque
+> **final state** of PR #157 and its review-22 hardening. The core feature (object-level engines behind opaque
 > handles, one shared GraalVM isolate) is common to both bindings and is driven through the
 > identical `*_engine` C ABI. Two substantial bodies of work are folded in here rather than kept
 > as separate documents: the Node **concurrency & lifecycle model** (§6), hardened across a long
 > series of code reviews, and the **Python unification** (§7) that removed the `ScriptRuntime`
-> singleton and moved Python off its former isolate-per-instance model onto the shared model.
+> singleton and moved Python off its former isolate-per-instance model onto the shared model. The
+> subsequent review-22 hardening is folded into the shared Java lifecycle, binding admission, Node
+> output-flow, and detach-recovery contracts below rather than retained as a second specification.
 > A provenance map for git archaeology lives in the [Appendix](#appendix-hardening-provenance).
 > The product-facing `DataWeave` classes are pre-GA, so several internal contracts (async Node
 > `cleanup()`, the removed `*_with_resolver` and legacy-singleton C ABI) changed during this work
@@ -748,27 +750,40 @@ uphold all six:
 
 ## 12.1 Final hardening contract
 
-This section records final behavior that is intentionally narrower than a public API guarantee.
+This section records review-22 hardening folded into this canonical final-state design. The
+implementation details here are intentionally narrower than public API guarantees. Java registry
+records use `LIVE`, `CLOSING`, and `DESTROYED` lifecycle states plus admitted-operation leases:
+`acquire(handle)` admits only a live record, and `destroy(handle)` closes admission and waits for
+existing leases before removal. Every exported Java C entrypoint has an explicit, allocation-free
+exception sentinel: engine creation returns `0`, run entrypoints return `NULL`, and void entrypoints
+return normally. Those sentinels are distinct from normal script or unknown-handle failures, which
+remain allocated, non-`NULL` `success:false` JSON envelopes.
+
 Both bindings use callback thread-local state to reject same-thread resolver/read/write callback
-reentry into lifecycle or execution APIs with their public `DataWeaveError`. Both generation-bind
-lazy stream and transform work; cleanup or reinitialization before consumption or admission rejects
-the stale work rather than allowing it to execute on a replacement engine.
+reentry into lifecycle or execution APIs with their public `DataWeaveError`. Both bind operations
+to immutable `{handle, generation}` tokens, validate that token immediately at native admission,
+and reject stale work after cleanup or reinitialization rather than allowing it to execute on a
+replacement engine. Java leases independently preserve raw-ABI engine and callback-context lifetime
+after binding admission succeeds.
 
 Node's native output bridge bounds its own outstanding bytes and chunks and uses a finite TSFN
-queue. Buffers retained by user code after yield are outside that bound. Controller and sequence
-credit values are internal correctness machinery, not a public BigInt sequence contract. Node
-cleanup cancels and waits for abandoned active streams/transforms before engine destruction.
+queue. Each output flow tracks private sequence-bound credits from native enqueue until the consumer
+dequeues the chunk; cancellation releases outstanding credits and unblocks a producer. Buffers
+retained by user code after yield are outside that bound. Controller and sequence credit values are
+internal correctness machinery, not a public BigInt sequence contract. Node cleanup cancels and
+waits for abandoned active streams/transforms before engine destruction.
 
 Python deliberately differs: it cannot force-cancel an active native call, so cleanup refuses while
 an active streaming worker is attached. Its registration validation is generation-safe; it does not
 adopt Node's cancellation behavior.
 
 **Test-only detach hooks.** The addon enables fault injection only when `DATAWEAVE_TEST_HOOKS` is
-non-empty. A detach hook always performs a real detach first and can synthesize a failure only after
-that detach succeeds; it does not model a physically stuck Graal thread. A real detach failure
-poisons admission fail-closed. Cleanup abandons the old published generation, and a later fresh
-initialization can recover with a new isolate. These hooks and their names are implementation/test
-details, not stable APIs.
+non-empty. Ordinary operation detaches pass through centralized status handling. A detach hook
+always performs a real detach first and can synthesize a failure only after that detach succeeds; it
+therefore does not model a physically stuck Graal thread. A nonzero ordinary detach status poisons
+the published isolate generation and makes new admission fail closed. Cleanup abandons that
+generation safely, and a later initialization can recover with a new isolate. These hooks are
+internal, non-public test details, not stable APIs.
 
 ## 13. Follow-Up Work
 
@@ -795,10 +810,11 @@ details, not stable APIs.
 
 ## Appendix: Hardening provenance
 
-The Node concurrency & lifecycle model (§6) converged over a series of code-review rounds, and the
-Python unification (§7) was implemented and reviewed task-by-task; each round's decisions are folded
-into the sections above. This map exists only for git archaeology — the per-round and Python
-unification design documents were consolidated into this file.
+The Node concurrency & lifecycle model (§6) converged over a series of code-review rounds, the
+Python unification (§7) was implemented and reviewed task-by-task, and review-22 hardening was
+subsequently folded into the same final-state contracts. This map exists only for git archaeology;
+the per-round, Python-unification, and review-22 remediation designs were consolidated into this
+file.
 
 | Round(s) | Area folded into | Decision |
 |----------|------------------|----------|
@@ -818,3 +834,4 @@ unification design documents were consolidated into this file.
 | Python unification (08-26) | §2, §5, §7, §8 (Layer 1/4), §10–§12 | Remove `ScriptRuntime` singleton + 3 legacy C entrypoints; Python onto shared refcounted isolate + handle engines via `*_engine` ABI; 3-arg ctx resolver trampoline. |
 | PR157 review 10 (08-27) | §6.3, §6.5, §7.2, §7.4 | Python `_release_isolate`/`_acquire_isolate` retryable-teardown model brought to parity with Node's `g_teardown_needed` (retains the live isolate on failed teardown instead of nulling globals); Node streaming/transform completion sentinel pre-allocated in synchronous setup (worker terminal path now allocation-free, closing a stranded-hang window); stranded-bridge free confirmed conditional on registry removal, with the non-`in_flight`-pinned residual window documented as reachable only via unsupported cross-Worker handle sharing / API misuse; raw `napi_initialize` validates its library-path argument synchronously; user-facing custom-module resolution scope (`run()`-only) documented in both READMEs, cross-referencing the existing streaming-resolver-guard tests. |
 | Python final review (08-26) | §7.2, §10 | Detach isolate bootstrap thread at create + attach-on-demand so cross-thread last-release teardown cannot hang; unregister resolver token on failed init. |
+| PR157 review 22 (09-02) | §8, §10, §11, §12.1 | Java lifecycle records and leases; explicit C-entrypoint exception sentinels distinct from normal JSON errors; Node/Python same-thread callback TLS rejection and generation-safe immediate admission; Node finite-queue, sequence-credit output bounds with cancellation cleanup; Python active-worker cleanup refusal; centralized ordinary-detach poison handling, fail-closed admission, generation-safe abandonment/recovery, and internal real-detach-first fault injection. |
