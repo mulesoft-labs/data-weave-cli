@@ -116,8 +116,9 @@ no change to isolate lifecycle management for the *feature*. Node requires the c
 reference-and-teardown coordination in §6 because the isolate is shared by independently created and
 destroyed engines across threads. **Python can adopt the same model trivially**: its ctypes calls
 are synchronous and it owns its stream-worker threads directly, so it needs none of Node's
-*asynchronous* `PENDING_WAIT`/waiter-thread/adoption machinery — a reference count, a
-synchronous drain-before-teardown, and a simpler *synchronous* teardown retry suffice (§7).
+*asynchronous* `PENDING_WAIT`/waiter-thread/adoption machinery — a reference count, synchronous
+refusal while an active registered worker exists, normal teardown once no worker is registered, and
+a simpler *synchronous* teardown retry (§7).
 
 **Accepted trade-off (Python).** Python instances in one process now share one isolate's heap
 instead of having separate heaps. This is weaker memory isolation, relevant only if
@@ -423,9 +424,10 @@ Python drives the **same** shared Java engine layer and the **same** `*_engine` 
 its isolate/thread glue (`native-lib/python/src/dataweave/native.py`) is much simpler than §6:
 ctypes calls are synchronous and Python owns its stream-worker threads directly, so it needs none
 of Node's *asynchronous* `PENDING_WAIT`/waiter-thread/adoption machinery. It still needs a
-reference count, a synchronous drain-before-teardown, and a simpler *synchronous* teardown retry
-(`_teardown_needed`, retried on the next `initialize()` — see §7.2). The **public Python API is
-unchanged** by the unification.
+reference count, synchronous refusal while an active registered worker exists, normal teardown
+after that worker unregisters, and a simpler *synchronous* teardown retry (`_teardown_needed`,
+retried on the next `initialize()` — see §7.2). Unlike Node (§6), Python cleanup does not cancel or
+wait for an active worker. The **public Python API is unchanged** by the unification.
 
 ### 7.1 Shared state and the reference-count invariant
 
